@@ -23,14 +23,18 @@ Usage:
 """
 
 def _host_cpus_impl(repository_ctx):
-    nproc = repository_ctx.which("nproc")
+    # macOS ships no `nproc`; `getconf _NPROCESSORS_ONLN` works there and on
+    # Linux. Fall back to 4 only if neither is available.
     cpus = 4
-    if nproc:
-        result = repository_ctx.execute([nproc])
-        if result.return_code == 0:
-            stripped = result.stdout.strip()
-            if stripped.isdigit():
-                cpus = int(stripped)
+    for tool, args in [("nproc", []), ("getconf", ["_NPROCESSORS_ONLN"])]:
+        path = repository_ctx.which(tool)
+        if not path:
+            continue
+        result = repository_ctx.execute([path] + args)
+        stripped = result.stdout.strip()
+        if result.return_code == 0 and stripped.isdigit() and int(stripped) > 0:
+            cpus = int(stripped)
+            break
 
     # Verilator past ~8 threads tends to hit scheduling overhead more than
     # it gains speedup on typical designs; cap to keep runtime sane even
