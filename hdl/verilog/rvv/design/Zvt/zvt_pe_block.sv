@@ -87,7 +87,8 @@ module zvt_pe_block (
 `ifdef TB_SUPPORT
   assign mulbulkTagIn.uop_pc     = blkCmd.vaInfo.uop_pc;
 `endif    
-  assign mulbulkTagIn.rndMode    = blkCmd.vaInfo.rndMode;
+  assign mulbulkTagIn.rndMode    = (blkCmd.vaInfo.op==FPMUL)&&(blkCmd.vaInfo.fsrcFmt!=fpnew_pkg::FP32) ? fpnew_pkg::ROD 
+                                                                                                       : blkCmd.vaInfo.rndMode;
   assign mulbulkTagIn.op         = blkCmd.vaInfo.op;
   assign mulbulkTagIn.fdstFmt    = blkCmd.vaInfo.fdstFmt;
   assign mulbulkTagIn.idstFmt    = blkCmd.vaInfo.idstFmt;
@@ -209,10 +210,12 @@ module zvt_pe_block (
   end
 
   // output tag for RAW check
+`ifndef FPGA_XILINX
   for(genvar i=1; i<=ADDERPIPENUM; i++) begin
     assign mulbulkTagOutVld[i] = mulbulkOutVld[0][0][i];
     assign mulbulkTagOut[i]    = mulbulkTagPipe[i];
   end
+`endif
 
   // mulbulk result buffer
   logic        mulbulkCmdVld;
@@ -249,6 +252,9 @@ module zvt_pe_block (
   assign mulbulkCmdRdy = adderRdy;
 
   // read the operands from MT
+`ifdef FPGA_XILINX
+  zvt_pe_block_fpga #(.BLKID(BLKID)) u_pe_blk_fpga (.*);
+`else
 `ifdef TB_SUPPORT
   assign readPc = mulbulkCmd.tag.uop_pc;
 `endif
@@ -268,6 +274,7 @@ module zvt_pe_block (
       readSubIdx = 'b0;
     end
   end
+`endif
 
   // reorder the operands
   logic [`TE/2*`COMPRATIO-1:0][`TE/2-1:0][`WORD_WIDTH-1:0]  operands;

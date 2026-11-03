@@ -41,8 +41,7 @@ VERILATOR_BUILD_ARGS = [
 ]
 
 # Note: SRAM backdoor compilation arguments (-CFLAGS, -I../hdl/verilog, and sram_backdoor.cc)
-# are dynamically injected in cocotb_test_suite (rules/coco_tb.bzl) for targets
-# whose hdl_toplevel is listed in rules/sram_backdoor.bzl.
+# are automatically injected by simulator model rules in rules/coco_tb.bzl.
 # Note: To enable FSDB wave dumping in VCS RTL simulations, add "+vcs+fsdbon" to VCS_BUILD_ARGS and VCS_TEST_ARGS.
 VCS_BUILD_ARGS = [
     "-timescale=1ns/1ps",
@@ -115,6 +114,7 @@ def rvv_core_mini_axi_netlist_test_suite(
         "test_module": ["@coralnpu_hw//tests/cocotb:core_mini_axi_sim.py"],
         "deps": [
             "@coralnpu_hw//coralnpu_test_utils:core_mini_axi_sim_interface",
+            "@coralnpu_hw//coralnpu_test_utils/coralflow",
             "@coralnpu_hw//coralnpu_test_utils/sim_backends:verilator_test_fixture",
             requirement("tqdm"),
             "@bazel_tools//tools/python/runfiles",

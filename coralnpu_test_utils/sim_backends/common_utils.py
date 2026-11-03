@@ -18,7 +18,12 @@ from __future__ import annotations
 import os
 import struct
 from typing import Any
-from bazel_tools.tools.python.runfiles import runfiles
+try:
+    from bazel_tools.tools.python.runfiles import runfiles
+except ImportError:
+    runfiles = None
+from elftools.common.exceptions import ELFError
+from elftools.elf.constants import P_FLAGS
 from elftools.elf.elffile import ELFFile
 import numpy as np
 
@@ -38,7 +43,7 @@ _RUNFILES_INSTANCE = None
 def get_runfiles():
     """Returns a cached Bazel runfiles instance if available."""
     global _RUNFILES_INSTANCE
-    if _RUNFILES_INSTANCE is None:
+    if _RUNFILES_INSTANCE is None and runfiles is not None:
         try:
             _RUNFILES_INSTANCE = runfiles.Create()
         except Exception:  # noqa: BLE001
@@ -57,14 +62,17 @@ def resolve_runfile_path(path: str | os.PathLike) -> str:
     def _try_resolve(p: str) -> str | None:
         if os.path.exists(p):
             return p
-        if r:
+        if r and not os.path.isabs(p):
             for candidate in (
                     p if p.startswith("coralnpu_hw/") else f"coralnpu_hw/{p}",
                     p,
             ):
-                loc = r.Rlocation(candidate)
-                if loc and os.path.exists(loc):
-                    return loc
+                try:
+                    loc = r.Rlocation(candidate)
+                    if loc and os.path.exists(loc):
+                        return loc
+                except (ValueError, TypeError):
+                    continue
         return None
 
     if xlen == "64":
@@ -78,11 +86,47 @@ def resolve_runfile_path(path: str | os.PathLike) -> str:
     if resolved:
         return resolved
 
-    if r:
-        loc = r.Rlocation(path_str)
-        if loc:
-            return loc
+    if r and not os.path.isabs(path_str):
+        for candidate in (
+                path_str if path_str.startswith("coralnpu_hw/") else
+                f"coralnpu_hw/{path_str}",
+                path_str,
+        ):
+            try:
+                loc = r.Rlocation(candidate)
+                if loc:
+                    return loc
+            except (ValueError, TypeError):
+                continue
     return path_str
+
+
+def get_elf_dtcm_origin(elf_path: str | os.PathLike) -> int | None:
+    """Returns the base virtual address of the ELF's DTCM/data segment, or None if not determinable."""
+    resolved = resolve_runfile_path(elf_path)
+    if not resolved or not os.path.exists(resolved):
+        return None
+
+    try:
+        with open(resolved, "rb") as f:
+            elf = ELFFile(f)
+            # 1. Search for a non-empty writable LOAD segment (standard for DTCM data/bss)
+            for seg in elf.iter_segments():
+                if (seg["p_type"] == "PT_LOAD"
+                        and (seg["p_flags"] & P_FLAGS.PF_W)
+                        and seg["p_memsz"] > 0):
+                    return int(seg["p_vaddr"])
+
+            # 2. Check standard DTCM section headers (.data, .bss, .sdata, .sbss)
+            for sec_name in (".data", ".bss", ".sdata", ".sbss"):
+                sec = elf.get_section_by_name(sec_name)
+                if (sec is not None and sec["sh_size"] > 0
+                        and sec["sh_addr"] > 0):
+                    return int(sec["sh_addr"])
+    except (OSError, ELFError):
+        return None
+
+    return None
 
 
 def parse_elf_symbols(
@@ -118,11 +162,13 @@ def parse_elf_symbols(
     resolved_addrs: dict[str, int] = {}
     resolved_sizes: dict[str, int] = {}
 
+    optional_set = set(optional_symbols or [])
+
     # Tier 1: Requested workload symbols
     for sym in symbols or []:
         if sym in all_syms:
             resolved_addrs[sym], resolved_sizes[sym] = all_syms[sym]
-        elif strict:
+        elif strict and sym not in optional_set:
             raise ValueError(
                 f"Required symbol '{sym}' not found in {elf_path}. "
                 f"Pass optional=True or optional_symbols=['{sym}'] if simulator-specific."
@@ -173,14 +219,12 @@ def infer_read_size_bytes(
     symbol: int | str,
     symbol_sizes: dict[str, int],
     size: int | None = None,
-    size_bytes: int | None = None,
     dtype: Any = None,
     shape: tuple[int, ...] | None = None,
 ) -> int:
     """Infers byte length to read from explicit size, (dtype, shape), or ELF st_size."""
-    actual = size if size is not None else size_bytes
-    if actual is not None:
-        return int(actual)
+    if size is not None:
+        return int(size)
     if dtype is not None and shape is not None:
         return int(np.prod(shape)) * np.dtype(dtype).itemsize
     if (isinstance(symbol, str) and symbol in symbol_sizes
@@ -189,7 +233,7 @@ def infer_read_size_bytes(
     if dtype is not None:
         return np.dtype(dtype).itemsize
     raise ValueError(
-        f"Cannot infer read size for '{symbol}'. Specify size, size_bytes, or (dtype and shape)."
+        f"Cannot infer read size for '{symbol}'. Specify size or (dtype and shape)."
     )
 
 
@@ -209,26 +253,3 @@ def reconstruct_read_data(
     if shape is not None:
         arr = arr.reshape(shape)
     return arr
-
-
-class WordResult(int):
-    """32-bit unsigned int return type for read_word() that also supports legacy .view() and .tobytes()."""
-
-    def tobytes(self) -> bytes:
-        return struct.pack("<I", int(self) & 0xFFFFFFFF)
-
-    def view(self, dtype: Any = np.uint32) -> np.ndarray:
-        return np.frombuffer(self.tobytes(), dtype=dtype)
-
-    def __bytes__(self) -> bytes:
-        return self.tobytes()
-
-
-class BytesResult(bytes):
-    """Bytes return type for read(dtype=None) that also supports .view() and .tobytes()."""
-
-    def tobytes(self) -> bytes:
-        return bytes(self)
-
-    def view(self, dtype: Any = np.uint8) -> np.ndarray:
-        return np.frombuffer(self, dtype=dtype)

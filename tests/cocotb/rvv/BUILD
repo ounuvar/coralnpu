@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("//rules:coralnpu_v2.bzl", "collect_coralnpu_elfs", "coralnpu_v2_binary")
+load("//rules:coralnpu_v2.bzl", "coralnpu_v2_binary")
 load("//rules:utils.bzl", "template_rule")
 
 package(default_visibility = ["//visibility:public"])
@@ -116,6 +116,18 @@ template_rule(
         "rvv_vstart_pipeline_test": {
             "srcs": ["rvv_vstart_pipeline_test.S"],
         },
+        "rvv_vstart_dual_dispatch_lsu_test": {
+            "srcs": ["rvv_vstart_dual_dispatch_lsu_test.cc"],
+        },
+        "rvv_vstart_forwarding_debug_test": {
+            "srcs": ["rvv_vstart_forwarding_debug_test.cc"],
+        },
+        "rvv_vstart_forwarding_squash_test": {
+            "srcs": ["rvv_vstart_forwarding_squash_test.cc"],
+        },
+        "rvv_vill_trap_squashed_load_test": {
+            "srcs": ["rvv_vill_trap_squashed_load_test.cc"],
+        },
         "vwredsumu_test": {
             "srcs": ["vwredsumu_test.cc"],
         },
@@ -132,8 +144,12 @@ filegroup(
         "rvv_small_loop_test.elf",
         "rvv_vfrdiv_test.elf",
         "rvv_vill_loop_trap_test.elf",
+        "rvv_vill_trap_squashed_load_test.elf",
         "rvv_vl0_v0_corruption_test.elf",
         "rvv_vleff_test.elf",
+        "rvv_vstart_dual_dispatch_lsu_test.elf",
+        "rvv_vstart_forwarding_debug_test.elf",
+        "rvv_vstart_forwarding_squash_test.elf",
         "rvv_vstart_pipeline_test.elf",
         "rvv_vstart_rob_test.elf",
         "rvv_vstart_trap_flush_test.elf",
@@ -160,5 +176,3 @@ filegroup(
         "vwredsumu_test.elf",
     ],
 )
-
-collect_coralnpu_elfs()

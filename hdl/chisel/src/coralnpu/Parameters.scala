@@ -105,9 +105,16 @@ class Parameters(var m: Seq[MemoryRegion] = Seq(), val hartId: Int = 0, var xlen
   def rvvRetireLanes: Int = instructionLanes + 2
 
   // Enable VME (Zvt) non-tile state and mset* instructions. Requires enableRvv.
-  var enableVme  = false
-  val vmeTeRatio = 8
-  def vmeTe: Int = { rvvVlen / vmeTeRatio }
+  var enableVme           = false
+  val vmeTeRatio          = 8
+  def vmeTe: Int          = { rvvVlen / vmeTeRatio }
+  val vmeSubtileBytes     = 16
+  def vmeSubtileBits: Int = { vmeSubtileBytes * 8 }
+  def vmeNumSubtiles: Int = { (vmeTe * vmeTe) / vmeSubtileBytes }
+  def vmeTileBits: Int    = { vmeNumSubtiles * vmeSubtileBits }
+  // Maximum number of destination tiles written by a single VME instruction
+  // (determined by the maximum tile widening factor mtwiden = 4).
+  val vmeMaxTileWrites = 4
 
   def useRetirementBuffer: Boolean = { enableVerification }
 
@@ -115,6 +122,8 @@ class Parameters(var m: Seq[MemoryRegion] = Seq(), val hartId: Int = 0, var xlen
   var enableFloat      = false
   var enableZfbfmin    = false
   var enableVectorBf16 = false
+  // Pipeline stages for FPU (default 4 stages; set to 5 for ultra-high-frequency/1GHz targets)
+  var fpuPipeRegs: Int = 4
   // Use the Div/Sqrt module from PULP instead of E906.
   // It is smaller, but has small rounding errors.
   val floatPulpDivsqrt = 0
@@ -127,6 +136,8 @@ class Parameters(var m: Seq[MemoryRegion] = Seq(), val hartId: Int = 0, var xlen
   val rvvRegfileBaseAddr            = 64
   val rvvRegCount                   = 32
   val rvvRegCountWidth              = log2Ceil(rvvRegCount)
+  val vmeRegCount                   = 16
+  val vmeRegCountWidth              = log2Ceil(vmeRegCount)
   val retirementBufferSize          = 16
   val retirementLanes               = 8
   def retirementBufferIdxWidth: Int = {
@@ -135,10 +146,6 @@ class Parameters(var m: Seq[MemoryRegion] = Seq(), val hartId: Int = 0, var xlen
     // +2 is for the "no write" and "store" dummy registers.
     log2Ceil(scalarRegCount + activeFloatRegCount + rvvRegCount + 2)
   }
-
-  // L0ICache Fetch unit.
-  var enableFetchL0   = true
-  val fetchCacheBytes = 1024
 
   // Enable instruction fetch via AXI master port (fallback for execution outside ITCM)
   var enableAxiInstructionFetch = true
@@ -158,28 +165,16 @@ class Parameters(var m: Seq[MemoryRegion] = Seq(), val hartId: Int = 0, var xlen
   var lsuDataBits       = 256
   def lsuDataBytes: Int = { lsuDataBits / 8 }
   // When increasing bus width, this can be limited to improve timing.
-  val lsuStrictWindowBytes = lsuDataBytes
-  def dbusSize             = log2Ceil(lsuDataBytes + 1)
-  def dbusOffsetBits       = log2Ceil(lsuDataBytes)
-  def dbusRowAddrBits      = lsuAddrBits - dbusOffsetBits
+  val lsuStrictWindowBytes    = lsuDataBytes
+  def dbusSize                = log2Ceil(lsuDataBytes + 1)
+  def dbusOffsetBits          = log2Ceil(lsuDataBytes)
+  def dbusRowAddrBits         = lsuAddrBits - dbusOffsetBits
+  val lsuSlotTxidEntries: Int = 8
+  def lsuSlotTxidWidth: Int   = log2Ceil(lsuSlotTxidEntries)
 
   // TCM Size Configuration
   var itcmSizeKBytes = Parameters.itcmSizeKBytesDefault
   var dtcmSizeKBytes = Parameters.dtcmSizeKBytesDefault
-
-  // [Internal] L1ICache interface.
-  val l1islots          = 256
-  val l1iassoc          = 4
-  val axi0IdBits        = 4 // (1x banks, 4 bits unused)
-  def axi0AddrBits      = xlen
-  def axi0DataBits: Int = { fetchDataBits }
-
-  // [Internal] L1DCache interface.
-  val l1dslots          = 256 // (x2 banks)
-  val l1dassoc          = 4
-  val axi1IdBits        = 4   // (x2 banks, 3 bits unused)
-  def axi1AddrBits      = xlen
-  def axi1DataBits: Int = { lsuDataBits }
 
   // [Internal] TCM[Vector,Scalar] interface.
   var axi2IdBits         = 6
@@ -193,6 +188,9 @@ class Parameters(var m: Seq[MemoryRegion] = Seq(), val hartId: Int = 0, var xlen
 
   val csrInCount  = 13
   val csrOutCount = 9
+
+  val tlul2AxiMaxReadTx: Int  = lsuSlotTxidEntries
+  val tlul2AxiMaxWriteTx: Int = lsuSlotTxidEntries
 
   def toTLUL(): TLULParameters = {
     new TLULParameters(
@@ -210,7 +208,6 @@ class Parameters(var m: Seq[MemoryRegion] = Seq(), val hartId: Int = 0, var xlen
     newP.enableFloat = this.enableFloat
     newP.enableZfbfmin = this.enableZfbfmin
     newP.enableVectorBf16 = this.enableVectorBf16
-    newP.enableFetchL0 = this.enableFetchL0
     newP.enableAxiInstructionFetch = this.enableAxiInstructionFetch
     newP.fetchDataBits = this.fetchDataBits
     newP.lsuDataBits = this.lsuDataBits
@@ -255,8 +252,6 @@ object EmitParametersHeader {
       ("programCounterBits", p.programCounterBits),
       ("fetchAddrBits", p.fetchAddrBits),
       ("lsuAddrBits", p.lsuAddrBits),
-      ("axi0AddrBits", p.axi0AddrBits),
-      ("axi1AddrBits", p.axi1AddrBits),
       ("axi2AddrBits", p.axi2AddrBits),
       ("dbusSize", p.dbusSize),
       ("useRetirementBuffer", p.useRetirementBuffer),

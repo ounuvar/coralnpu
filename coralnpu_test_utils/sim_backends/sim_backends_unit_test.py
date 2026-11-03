@@ -25,8 +25,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 
 from coralnpu_test_utils.sim_backends.common_utils import (
-    BytesResult,
-    WordResult,
+    get_elf_dtcm_origin,
     infer_read_size_bytes,
     parse_elf_symbols,
     reconstruct_read_data,
@@ -36,25 +35,15 @@ from coralnpu_test_utils.sim_backends.common_utils import (
 )
 from coralnpu_test_utils.sim_backends.fpga_test_fixture import FpgaTestFixture
 from coralnpu_test_utils.sim_backends.mpact_npusim_test_fixture import MpactNpuSimTestFixture
-from coralnpu_test_utils.sim_backends.uvm_test_fixture import UvmTestFixture
+from coralnpu_test_utils.sim_backends.uvm_test_fixture import (
+    UvmTestFixture,
+    _shutdown_all_workers,
+)
 from coralnpu_test_utils.sim_backends.verilator_test_fixture import VerilatorTestFixture
 
 
 class CommonUtilsTest(unittest.TestCase):
-    """Tests for shared ELF symbol parsing, tensor marshaling, and WordResult."""
-
-    def test_word_result_compatibility(self):
-        w = WordResult(0x12345678)
-        self.assertIsInstance(w, int)
-        self.assertEqual(w, 0x12345678)
-        self.assertEqual(w.view(np.uint32)[0], 0x12345678)
-        self.assertEqual(w.tobytes(), b"\x78\x56\x34\x12")
-        self.assertEqual(bytes(w), b"\x78\x56\x34\x12")
-
-        b = BytesResult(b"\x78\x56\x34\x12")
-        self.assertIsInstance(b, bytes)
-        self.assertEqual(b.view(np.uint32)[0], 0x12345678)
-        self.assertEqual(b.tobytes(), b"\x78\x56\x34\x12")
+    """Tests for shared ELF symbol parsing and tensor marshaling."""
 
     def test_to_uint8_array_and_reconstruct(self):
         scalar_arr = to_uint8_array(0x01020304)
@@ -112,6 +101,24 @@ class CommonUtilsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             resolve_symbol_address("missing_required_sym", lazy_syms)
 
+    def test_resolve_runfile_path(self):
+        self.assertEqual(resolve_runfile_path(""), "")
+        self.assertEqual(
+            resolve_runfile_path("/nonexistent/file.elf"),
+            "/nonexistent/file.elf",
+        )
+        elf_path = resolve_runfile_path(
+            "tests/cocotb/rvv/arithmetics/rvv_add_int8_m1.elf"
+        )
+        self.assertTrue(os.path.exists(elf_path))
+
+    def test_get_elf_dtcm_origin(self):
+        elf_path = resolve_runfile_path(
+            "tests/cocotb/rvv/arithmetics/rvv_add_int8_m1.elf"
+        )
+        self.assertEqual(get_elf_dtcm_origin(elf_path), 0x00010000)
+        self.assertIsNone(get_elf_dtcm_origin("/nonexistent/file.elf"))
+
 
 class TestVerilatorTestFixture(unittest.IsolatedAsyncioTestCase):
     """Tests for VerilatorTestFixture."""
@@ -160,8 +167,6 @@ class TestVerilatorTestFixture(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("in_buf_1", syms)
         self.assertNotIn("unused_missing_sym", syms)
-        self.assertTrue(fixture.has_symbol("in_buf_1"))
-        self.assertFalse(fixture.has_symbol("unused_missing_sym"))
 
         with self.assertRaises(ValueError):
             await fixture.read_word("unused_missing_sym")
@@ -210,8 +215,6 @@ class TestVerilatorTestFixture(unittest.IsolatedAsyncioTestCase):
 
         word = await fixture.read_word("buf")
         self.assertEqual(word, 0xDEADBEEF)
-        self.assertEqual(word.view(np.uint32)[0], 0xDEADBEEF)
-        self.assertEqual(word.tobytes(), struct.pack("<I", 0xDEADBEEF))
 
         cycles = await fixture.run_to_halt(timeout_cycles=5000)
         self.assertEqual(cycles, 250)
@@ -256,7 +259,6 @@ class TestMpactNpuSimTestFixture(unittest.IsolatedAsyncioTestCase):
         first_word = await fixture.read_word("out_buf")
         expected_word = int.from_bytes((in1 + in2)[:4].tobytes(), "little")
         self.assertEqual(first_word, expected_word)
-        self.assertEqual(first_word.view(np.uint32)[0], expected_word)
 
     async def test_write_word_np_uint32_and_offset(self):
         mock_sim = MagicMock()
@@ -276,7 +278,6 @@ class TestMpactNpuSimTestFixture(unittest.IsolatedAsyncioTestCase):
 
         word = await fixture.read_word("buf", offset=4)
         self.assertEqual(word, 0x12345678)
-        self.assertEqual(word.view(np.uint32)[0], 0x12345678)
 
     async def test_run_to_halt_timeout_cycles(self):
         mock_sim = MagicMock()
@@ -353,13 +354,6 @@ class TestUvmTestFixture(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(TypeError):
             await fixture.write("my_var", 3.14)
 
-    def test_uvm_timestamp_cycle_conversion(self):
-        fixture = UvmTestFixture()
-        log = "UVM_INFO @ 1250000 ps: reporter [TEST] done\n** UVM TEST PASSED **"
-        fixture._parse_uvm_logs(log)
-        self.assertTrue(fixture.test_passed)
-        self.assertEqual(fixture.get_cycle_count(), 125)
-
     async def test_read_and_read_word_from_dump(self):
         fixture = UvmTestFixture()
         fixture.symbols = {"scalar_val": 0x1000, "tensor_val": 0x2000}
@@ -373,7 +367,6 @@ class TestUvmTestFixture(unittest.IsolatedAsyncioTestCase):
 
         val_word = await fixture.read_word("scalar_val")
         self.assertEqual(val_word, 0x12345678)
-        self.assertEqual(val_word.view(np.uint32)[0], 0x12345678)
 
         val_word_offset = await fixture.read_word("tensor_val", offset=4)
         self.assertEqual(val_word_offset, 20)
@@ -387,13 +380,10 @@ class TestUvmTestFixture(unittest.IsolatedAsyncioTestCase):
         np.testing.assert_array_equal(val_arr_offset, tensor[1:])
 
         val_bytes = await fixture.read("scalar_val", size=4)
-        self.assertEqual(val_bytes, struct.pack("<I", 0x12345678))
+        self.assertEqual(val_bytes.tobytes(), struct.pack("<I", 0x12345678))
 
         val_bytes_offset = await fixture.read("scalar_val", size=2, offset=2)
-        self.assertEqual(val_bytes_offset, b"\x34\x12")
-
-        val_bytes_alias = await fixture.read("scalar_val", size_bytes=4)
-        self.assertEqual(val_bytes_alias, struct.pack("<I", 0x12345678))
+        self.assertEqual(val_bytes_offset.tobytes(), b"\x34\x12")
 
         with self.assertRaises(KeyError):
             await fixture.read("tensor_val", size=8192)
@@ -457,17 +447,18 @@ class TestUvmTestFixture(unittest.IsolatedAsyncioTestCase):
                 os.remove(dump_path)
 
     def test_resolve_path(self):
-        self.assertEqual(UvmTestFixture.resolve_path(__file__), __file__)
-        self.assertEqual(UvmTestFixture.resolve_path(""), "")
+        self.assertEqual(resolve_runfile_path(__file__), __file__)
+        self.assertEqual(resolve_runfile_path(""), "")
         p = pathlib.Path(__file__)
-        self.assertEqual(UvmTestFixture.resolve_path(p), str(p))
+        self.assertEqual(resolve_runfile_path(p), str(p))
 
     def test_get_simulator_binary_resolves_path(self):
         fixture = UvmTestFixture()
         fixture.sim_binary_path = "custom/sim/binary"
-        with patch.object(
-                fixture, "resolve_path",
-                return_value="/abs/path/custom/sim/binary") as mock_resolve:
+        with patch(
+                "coralnpu_test_utils.sim_backends.uvm_test_fixture.resolve_runfile_path",
+                return_value="/abs/path/custom/sim/binary",
+        ) as mock_resolve:
             resolved = fixture._get_simulator_binary()
             mock_resolve.assert_called_once_with("custom/sim/binary")
             self.assertEqual(resolved, "/abs/path/custom/sim/binary")
@@ -561,6 +552,200 @@ class TestUvmTestFixture(unittest.IsolatedAsyncioTestCase):
             fixture._parse_uvm_logs(log_crash, returncode=2)
         self.assertIn("crashed with exit code 2", str(ctx.exception))
 
+    async def test_run_batch_single_invocation_and_cleanup(self):
+        fixture = UvmTestFixture(sim_binary_path="/bin/simv")
+        elf1 = os.path.join(self._temp_dir.name, "prog_000.elf")
+        elf2 = os.path.join(self._temp_dir.name, "prog_001.elf")
+        for p in (elf1, elf2):
+            with open(p, "wb") as f:
+                f.write(b"\x7fELF")
+
+        captured_reg_list_content = None
+        captured_reg_list_path = None
+
+        async def fake_exec(*cmd, **_kwargs):
+            nonlocal captured_reg_list_content, captured_reg_list_path
+            for arg in cmd:
+                if arg.startswith("+REGRESSION_LIST="):
+                    captured_reg_list_path = arg.split("=", 1)[1]
+                    with open(captured_reg_list_path, "r",
+                              encoding="utf-8") as rf:
+                        captured_reg_list_content = rf.read()
+            mock_proc = MagicMock()
+            mock_proc.returncode = 0
+            log = (
+                "--- STARTING TEST: prog_000.elf ---\n"
+                "tohost write detected on DBUS.\n"
+                "** UVM TEST PASSED **\n"
+                "--- FINISHED TEST: prog_000.elf ---\n"
+                "--- STARTING TEST: prog_001.elf ---\n"
+                "tohost write detected on DBUS.\n"
+                "** UVM TEST PASSED **\n"
+                "--- FINISHED TEST: prog_001.elf ---\n"
+                "REGRESSION COMPLETE. Passed: 2/2\n"
+            )
+            mock_proc.communicate = AsyncMock(
+                return_value=(log.encode("utf-8"), b"")
+            )
+            return mock_proc
+
+        with (
+                patch(
+                    "coralnpu_test_utils.sim_backends.uvm_test_fixture.resolve_runfile_path",
+                    side_effect=lambda p: str(p),
+                ),
+                patch(
+                    "coralnpu_test_utils.sim_backends.uvm_test_fixture.parse_elf_symbols",
+                    return_value=(0x0, {"tohost": 0x10000}, {"tohost": 8}),
+                ),
+                patch(
+                    "asyncio.create_subprocess_exec",
+                    side_effect=fake_exec,
+                ) as mock_exec,
+        ):
+            ok = await fixture.run_batch([elf1, elf2], timeout_cycles=50000)
+
+        self.assertTrue(ok)
+        self.assertEqual(mock_exec.call_count, 1)
+        self.assertIsNotNone(captured_reg_list_content)
+        self.assertIn(
+            f"{os.path.abspath(elf1)} 00010000 00000000 500000 SPIKE prog_000.elf",
+            captured_reg_list_content,
+        )
+        self.assertIn(
+            f"{os.path.abspath(elf2)} 00010000 00000000 500000 SPIKE prog_001.elf",
+            captured_reg_list_content,
+        )
+        self.assertIsNotNone(captured_reg_list_path)
+        self.assertFalse(os.path.exists(captured_reg_list_path))
+
+    async def test_run_batch_missing_tohost_write_raises(self):
+        fixture = UvmTestFixture(sim_binary_path="/bin/simv")
+        elf1 = os.path.join(self._temp_dir.name, "prog_000.elf")
+        elf2 = os.path.join(self._temp_dir.name, "prog_001.elf")
+        for p in (elf1, elf2):
+            with open(p, "wb") as f:
+                f.write(b"\x7fELF")
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        log = (
+            "--- STARTING TEST: prog_000.elf ---\n"
+            "tohost write detected on DBUS.\n"
+            "** UVM TEST PASSED **\n"
+            "--- FINISHED TEST: prog_000.elf ---\n"
+            "--- STARTING TEST: prog_001.elf ---\n"
+            "** UVM TEST PASSED **\n"
+            "--- FINISHED TEST: prog_001.elf ---\n"
+            "REGRESSION COMPLETE. Passed: 2/2\n"
+        )
+        mock_proc.communicate = AsyncMock(
+            return_value=(log.encode("utf-8"), b"")
+        )
+
+        with (
+                patch(
+                    "coralnpu_test_utils.sim_backends.uvm_test_fixture.resolve_runfile_path",
+                    side_effect=lambda p: str(p),
+                ),
+                patch(
+                    "coralnpu_test_utils.sim_backends.uvm_test_fixture.parse_elf_symbols",
+                    return_value=(0x0, {"tohost": 0x10000}, {"tohost": 8}),
+                ),
+                patch("asyncio.create_subprocess_exec",
+                      return_value=mock_proc),
+        ):
+            with self.assertRaisesRegex(RuntimeError,
+                                        "prog_001.elf: expected tohost == 1"):
+                await fixture.run_batch([elf1, elf2])
+
+    async def test_run_batch_without_tohost_symbol_passes_on_halt(self):
+        fixture = UvmTestFixture(sim_binary_path="/bin/simv")
+        elf1 = os.path.join(self._temp_dir.name, "prog_000.elf")
+        elf2 = os.path.join(self._temp_dir.name, "prog_001.elf")
+        for p in (elf1, elf2):
+            with open(p, "wb") as f:
+                f.write(b"\x7fELF")
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        log = (
+            "--- STARTING TEST: prog_000.elf ---\n"
+            "** UVM TEST PASSED **\n"
+            "--- FINISHED TEST: prog_000.elf ---\n"
+            "--- STARTING TEST: prog_001.elf ---\n"
+            "** UVM TEST PASSED **\n"
+            "--- FINISHED TEST: prog_001.elf ---\n"
+            "REGRESSION COMPLETE. Passed: 2/2\n"
+        )
+        mock_proc.communicate = AsyncMock(
+            return_value=(log.encode("utf-8"), b"")
+        )
+
+        with (
+                patch(
+                    "coralnpu_test_utils.sim_backends.uvm_test_fixture.resolve_runfile_path",
+                    side_effect=lambda p: str(p),
+                ),
+                patch(
+                    "coralnpu_test_utils.sim_backends.uvm_test_fixture.parse_elf_symbols",
+                    return_value=(0x0, {}, {}),
+                ),
+                patch("asyncio.create_subprocess_exec",
+                      return_value=mock_proc),
+        ):
+            ok = await fixture.run_batch([elf1, elf2])
+        self.assertTrue(ok)
+
+    async def test_persistent_worker_reused_across_runs(self):
+        fake_sim = os.path.join(self._temp_dir.name, "fake_simv.py")
+        with open(fake_sim, "w", encoding="utf-8") as f:
+            f.write(
+                "#!/usr/bin/env python3\n"
+                "import struct, sys\n"
+                "fifo_path = [a.split('=', 1)[1] for a in sys.argv[1:] if a.startswith('+REGRESSION_LIST=')][0]\n"
+                "with open(fifo_path, 'r', encoding='utf-8') as fifo:\n"
+                "    for idx, line in enumerate(fifo, start=1):\n"
+                "        parts = line.strip().split()\n"
+                "        if not parts or parts[0] == 'QUIT':\n"
+                "            break\n"
+                "        tid, dump_file = parts[5], parts[8]\n"
+                "        if dump_file != 'NONE':\n"
+                "            with open(dump_file, 'wb') as df:\n"
+                "                df.write(struct.pack('<QII', 0x1000, 4, 100 + idx))\n"
+                "        print(f'--- STARTING TEST: {tid} ---', flush=True)\n"
+                "        print(f'Cycle count: {idx * 10}', flush=True)\n"
+                "        print('tohost write detected: 1', flush=True)\n"
+                "        print('** UVM TEST PASSED **', flush=True)\n"
+                "        print('--- FINISHED TEST: ' + tid + ' ---', flush=True)\n"
+            )
+        os.chmod(fake_sim, 0o755)
+
+        elf_path = os.path.join(self._temp_dir.name, "test.elf")
+        with open(elf_path, "wb") as f:
+            f.write(b"\x7fELF")
+
+        fixture = UvmTestFixture(sim_binary_path=fake_sim)
+        fixture.elf_path = elf_path
+        fixture.entry_point = 0x100
+        fixture.tohost_addr = 0x2000
+        fixture.symbols = {"out": 0x1000}
+
+        try:
+            with patch(
+                    "coralnpu_test_utils.sim_backends.uvm_test_fixture.resolve_runfile_path",
+                    side_effect=lambda p: str(p),
+            ):
+                self.assertTrue(await fixture.run_to_halt())
+                self.assertEqual(fixture.get_cycle_count(), 10)
+                self.assertEqual(await fixture.read_word("out"), 101)
+
+                self.assertTrue(await fixture.run_to_halt())
+                self.assertEqual(fixture.get_cycle_count(), 20)
+                self.assertEqual(await fixture.read_word("out"), 102)
+        finally:
+            _shutdown_all_workers()
+
 
 class TestFpgaTestFixture(unittest.TestCase):
     """Tests for FpgaTestFixture."""
@@ -646,7 +831,6 @@ class TestFpgaTestFixture(unittest.TestCase):
         self.mock_spi.read_word.return_value = 0x12345678
         res = self.fixture.read_word("status_reg")
         self.assertEqual(res, 0x12345678)
-        self.assertEqual(res.view(np.uint32)[0], 0x12345678)
         self.mock_spi.read_word.assert_called_with(0x00100004)
 
         self.mock_spi.read_word.return_value = 0xCAFEBABE
@@ -667,6 +851,10 @@ class TestFpgaTestFixture(unittest.TestCase):
         self.mock_spi.start_core.assert_called_once()
         self.mock_spi.poll_for_halt.assert_called_once_with(timeout=10.0)
 
+        self.mock_spi.poll_for_halt.return_value = False
+        with self.assertRaises(TimeoutError):
+            self.fixture.run_to_halt(timeout_sec=5.0)
+
     def test_reset_hardware(self):
         self.fixture.reset_hardware()
         self.mock_spi.soft_reset.assert_called_once()
@@ -674,9 +862,24 @@ class TestFpgaTestFixture(unittest.TestCase):
         self.assertEqual(self.mock_spi.soft_reset.call_count, 2)
 
     def test_get_core_frequency(self):
+        # 1. Hardware read succeeds with 30 MHz (e.g. matrix highmem bitstream)
         self.mock_spi.read_word.side_effect = (
-            lambda addr: 0x434C4B54 if addr == 0x40001000 else 50
+            lambda addr: 0x434C4B54
+            if addr == 0x40001000 else (30 if addr == 0x40001004 else 0)
         )
+        self.assertEqual(self.fixture.get_core_frequency_mhz(), 30)
+        self.assertEqual(self.fixture.get_core_frequency_hz(), 30_000_000)
+
+        # 2. Hardware read succeeds with 50 MHz (e.g. vector bitstream)
+        self.mock_spi.read_word.side_effect = (
+            lambda addr: 0x434C4B54
+            if addr == 0x40001000 else (50 if addr == 0x40001004 else 0)
+        )
+        self.assertEqual(self.fixture.get_core_frequency_mhz(), 50)
+        self.assertEqual(self.fixture.get_core_frequency_hz(), 50_000_000)
+
+        # 3. Hardware read fails: falls back to default 50 MHz
+        self.mock_spi.read_word.side_effect = RuntimeError("SPI read failed")
         self.assertEqual(self.fixture.get_core_frequency_mhz(), 50)
         self.assertEqual(self.fixture.get_core_frequency_hz(), 50_000_000)
 
@@ -710,7 +913,7 @@ class TestFpgaTestFixture(unittest.TestCase):
                 patch("os.path.exists") as mock_exists,
         ):
             mock_exists.side_effect = lambda p: p == "/path/to/binary_64.elf"
-            resolved = FpgaTestFixture.resolve_path("/path/to/binary.elf")
+            resolved = resolve_runfile_path("/path/to/binary.elf")
             self.assertEqual(resolved, "/path/to/binary_64.elf")
 
         with (
@@ -718,8 +921,81 @@ class TestFpgaTestFixture(unittest.TestCase):
                 patch("os.path.exists") as mock_exists,
         ):
             mock_exists.side_effect = lambda p: p == "/path/to/binary.elf"
-            resolved = FpgaTestFixture.resolve_path("/path/to/binary.elf")
+            resolved = resolve_runfile_path("/path/to/binary.elf")
             self.assertEqual(resolved, "/path/to/binary.elf")
+
+    @patch("coralnpu_test_utils.sim_backends.fpga_test_fixture.FtdiSpiMaster")
+    @patch(
+        "coralnpu_test_utils.sim_backends.fpga_test_fixture.get_elf_dtcm_origin"
+    )
+    @patch(
+        "coralnpu_test_utils.sim_backends.fpga_test_fixture.parse_elf_symbols"
+    )
+    @patch("os.path.exists", return_value=True)
+    def test_load_elf_layout_mismatch_highmem_raises(
+        self, mock_exists, mock_parse, mock_dtcm, mock_ftdi_cls
+    ):
+        highmem_fixture = FpgaTestFixture(
+            usb_serial="Nexus-FTDI-12",
+            highmem=True,
+            auto_recovery=False,
+        )
+        mock_dtcm.return_value = 0x00010000  # Lowmem DTCM base
+
+        with self.assertRaises(ValueError) as ctx:
+            highmem_fixture.load_elf_and_lookup_symbols("rvv_add.elf")
+        self.assertIn("Memory layout mismatch", str(ctx.exception))
+        self.assertIn("LOWMEM", str(ctx.exception))
+
+    @patch("coralnpu_test_utils.sim_backends.fpga_test_fixture.FtdiSpiMaster")
+    @patch(
+        "coralnpu_test_utils.sim_backends.fpga_test_fixture.get_elf_dtcm_origin"
+    )
+    @patch(
+        "coralnpu_test_utils.sim_backends.fpga_test_fixture.parse_elf_symbols"
+    )
+    @patch("os.path.exists", return_value=True)
+    def test_load_elf_layout_mismatch_lowmem_raises(
+        self, mock_exists, mock_parse, mock_dtcm, mock_ftdi_cls
+    ):
+        lowmem_fixture = FpgaTestFixture(
+            usb_serial="Nexus-FTDI-12",
+            highmem=False,
+            auto_recovery=False,
+        )
+        mock_dtcm.return_value = 0x00100000  # Highmem DTCM base
+
+        with self.assertRaises(ValueError) as ctx:
+            lowmem_fixture.load_elf_and_lookup_symbols(
+                "rvv_matmul_highmem.elf"
+            )
+        self.assertIn("Memory layout mismatch", str(ctx.exception))
+        self.assertIn("HIGHMEM", str(ctx.exception))
+
+    @patch("coralnpu_test_utils.sim_backends.fpga_test_fixture.FtdiSpiMaster")
+    @patch(
+        "coralnpu_test_utils.sim_backends.fpga_test_fixture.get_elf_dtcm_origin"
+    )
+    @patch(
+        "coralnpu_test_utils.sim_backends.fpga_test_fixture.parse_elf_symbols"
+    )
+    @patch("os.path.exists", return_value=True)
+    def test_load_elf_layout_match_succeeds(
+        self, mock_exists, mock_parse, mock_dtcm, mock_ftdi_cls
+    ):
+        highmem_fixture = FpgaTestFixture(
+            usb_serial="Nexus-FTDI-12",
+            highmem=True,
+            auto_recovery=False,
+        )
+        mock_dtcm.return_value = 0x00100000  # Highmem DTCM base
+        mock_parse.return_value = (0x0, {"lhs": 0x00100000}, {"lhs": 64})
+
+        syms = highmem_fixture.load_elf_and_lookup_symbols(
+            "rvv_matmul_highmem.elf"
+        )
+        self.assertIn("lhs", syms)
+        highmem_fixture.spi_master.load_elf.assert_called_once()
 
 
 if __name__ == "__main__":

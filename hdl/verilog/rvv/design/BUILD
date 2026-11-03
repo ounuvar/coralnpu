@@ -63,6 +63,7 @@ exports_files(
         "Zvt/zvt.sv",
         "Zvt/zvt_ctrl.sv",
         "Zvt/zvt_mt.sv",
+        "Zvt/zvt_mt_fpga.sv",
         "Zvt/zvt_mt_reg.sv",
         "Zvt/zvt_pe_adder.sv",
         "Zvt/zvt_pe_adder_fp_lane.sv",
@@ -75,6 +76,9 @@ exports_files(
         "rvv.svh",
         "rvv_backend.sv",
         "rvv_backend_alu.sv",
+        "rvv_backend_alu_addsub_p0_datapath.sv",
+        "rvv_backend_alu_addsub_p1_datapath.sv",
+        "rvv_backend_alu_shift_datapath.sv",
         "rvv_backend_alu_unit.sv",
         "rvv_backend_alu_unit_addsub.sv",
         "rvv_backend_alu_unit_execution_p1.sv",
@@ -108,7 +112,9 @@ exports_files(
         "rvv_backend_fdiv_wrapper.sv",  # New
         "rvv_backend_freduction.sv",  # New
         "rvv_backend_lsu_remap.sv",
+        "rvv_backend_mac_eew32_datapath.sv",
         "rvv_backend_mac_unit.sv",
+        "rvv_backend_mul_eew32_datapath.sv",
         "rvv_backend_mul_unit.sv",
         "rvv_backend_mul_unit_mul8.sv",
         "rvv_backend_mulmac.sv",

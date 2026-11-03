@@ -48,9 +48,17 @@ cc_toolchain_config(
     # The compiler itself finds headers via its own discovery — we just
     # need to cover the roots that host GCC / Clang actually use.
     cxx_builtin_include_directories = [
+        "/include",
+        "/lib",
+        "/lib64",
         "/usr/include",
         "/usr/local/include",
         "/usr/lib",
+        "/usr/lib64",
+        "/usr/local/lib",
+        "/usr/local/lib64",
+        "/opt",
+        "/opt/rh",
     ],
     cxx_flags = ["-std=c++17"],
     dbg_compile_flags = ["-g"],
@@ -59,8 +67,10 @@ cc_toolchain_config(
         "-fuse-ld=lld",
         "-Wl,-no-as-needed",
         "-Wl,-z,relro,-z,now",
-        "-lm",
+    ],
+    link_libs = [
         "-lstdc++",
+        "-lm",
     ],
     opt_compile_flags = [
         "-g0",

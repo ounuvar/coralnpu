@@ -15,6 +15,7 @@
 package dma
 
 import bus._
+import common._
 
 import chisel3._
 import chisel3.util._
@@ -24,10 +25,10 @@ class DmaFillEngine(p: TLULParameters) extends Module {
   val eMax   = DmaGeometry.eMax(p)
   val eWidth = DmaGeometry.eWidth(p)
   val sWidth = DmaGeometry.sWidth(p)
+  val pWidth = DmaGeometry.pWidth(p)
 
   val io = IO(new Bundle {
     val descriptor = Flipped(Decoupled(new FillDescriptor(p)))
-    val drainDesc  = Decoupled(new DrainDescriptor(p))
     val tl         = new TLULHost2Device[NoUser, NoUser](p)
     val cfg        = Decoupled(new Bundle { // -> io.cfg
       val stride      = UInt(sWidth.W)
@@ -37,8 +38,10 @@ class DmaFillEngine(p: TLULParameters) extends Module {
       val row  = UInt(sWidth.W)
       val data = Vec(N, UInt(8.W))
     }) // -> io.in
-    val busy  = Output(Bool())
-    val error = Output(Bool())
+    val passRemaining = Output(UInt(pWidth.W))
+    val abort         = Input(Bool())
+    val busy          = Output(Bool())
+    val error         = Output(Bool())
   })
 
 // ==========================================
@@ -51,67 +54,93 @@ class DmaFillEngine(p: TLULParameters) extends Module {
   val config  = active.valid && !status.cfgDone
   val issuing = active.valid && status.cfgDone
 
-  val moreToIssue = status.issued < active.bits.stride // stride = buffer depth for memcopy
-  val allReceived = status.received === active.bits.stride
+  val lastPass      = status.passRemaining === 1.U
+  val beatsThisPass = Mux(lastPass, active.bits.lastPassBeats, active.bits.stride)
 
-  val loaded = Wire(Valid(new FillDescriptor(p)))
-  loaded.valid := true.B
-  loaded.bits  := io.descriptor.bits
+  val moreToIssue = status.issued < beatsThisPass
+  val allReceived = status.received === beatsThisPass
+  val passEnd     = issuing && allReceived
 
-  val cleared = Wire(Valid(new FillDescriptor(p)))
-  cleared.valid := false.B
-  cleared.bits  := active.bits
+  val loaded  = MakeValid(io.descriptor.bits)
+  val cleared = MakeValid(false.B, active.bits)
 
-  active := Mux(
-    io.descriptor.fire,
-    loaded,
-    Mux(io.drainDesc.fire, cleared, active)
+  // Three ways a job ends:
+  // 1. Normal completion : passEnd && lastPass : jobEnd
+  // 2. Abort arrived mid pass, fill finishes the pass it is fetching and then stops: passEnd && io.abort
+  // 3. Aborted while fill was in config state: abortConfig
+  val jobEnd      = passEnd && lastPass
+  val abortConfig = config && io.abort
+  val clearNow    = jobEnd || (passEnd && io.abort) || abortConfig
+
+  active := MuxUpTo1H(
+    active,
+    Seq(
+      io.descriptor.fire -> loaded, // new job
+      clearNow           -> cleared // job ended
+    )
   )
+
+  val jobStart = Wire(new FillStatus(p))
+  jobStart.cfgDone       := false.B
+  jobStart.issued        := 0.U
+  jobStart.received      := 0.U
+  jobStart.errSticky     := false.B
+  jobStart.passRemaining := io.descriptor.bits.passes
+  jobStart.srcBase       := io.descriptor.bits.srcAddr
+
+  val nextPass = Wire(new FillStatus(p))
+  nextPass.cfgDone       := false.B
+  nextPass.issued        := 0.U
+  nextPass.received      := 0.U
+  nextPass.errSticky     := status.errSticky
+  nextPass.passRemaining := status.passRemaining - 1.U
+  nextPass.srcBase       := status.srcBase + (active.bits.stride << p.z)
 
   val advanced = Wire(new FillStatus(p))
-  advanced.cfgDone   := status.cfgDone || io.cfg.fire
-  advanced.issued    := Mux(io.tl.a.fire, status.issued + 1.U, status.issued)
-  advanced.received  := Mux(io.tl.d.fire, status.received + 1.U, status.received)
-  advanced.errSticky := status.errSticky || (io.tl.d.fire && io.tl.d.bits.error)
+  advanced.cfgDone       := status.cfgDone || io.cfg.fire
+  advanced.issued        := Mux(io.tl.a.fire, status.issued + 1.U, status.issued)
+  advanced.received      := Mux(io.tl.d.fire, status.received + 1.U, status.received)
+  advanced.errSticky     := status.errSticky || (io.tl.d.fire && io.tl.d.bits.error)
+  advanced.passRemaining := status.passRemaining
+  advanced.srcBase       := status.srcBase
 
-  status := Mux(io.descriptor.fire, 0.U.asTypeOf(new FillStatus(p)), advanced)
-
-  assert(
-    !io.descriptor.fire || ((io.descriptor.bits.stride =/= 0.U) && (io.descriptor.bits.stride <= N.U)),
-    "Stride must be non-zero and less than or equal to N"
+  status := MuxUpTo1H(
+    advanced,
+    Seq(
+      io.descriptor.fire -> jobStart, // new job
+      passEnd            -> nextPass  // pass boundary
+    )
   )
+
+  val d = io.descriptor.bits
+  DmaChecks.passGeometry(p, io.descriptor.fire, d.stride, d.passes, d.lastPassBeats)
+  DmaChecks.aligned(p, io.descriptor.fire, d.srcAddr, "srcAddr")
   assert(
-    !io.descriptor.fire || (io.descriptor.bits.logElemSize <= eMax.U),
+    !io.descriptor.fire || (d.logElemSize <= eMax.U),
     s"logElemSize must be less than or equal to $eMax"
   )
-  assert(
-    !io.descriptor.fire || (io.descriptor.bits.srcAddr(p.z - 1, 0) === 0.U),
-    s"srcAddr must be aligned to $N bytes"
-  )
   assert(!io.tl.d.fire || issuing, "Response outside a fill")
-  assert(!io.drainDesc.fire || allReceived, "Handoff before fill complete")
 
   io.descriptor.ready     := idle && io.cfg.ready
   io.busy                 := active.valid
   io.cfg.valid            := config
-  io.cfg.bits.stride      := active.bits.stride
+  io.cfg.bits.stride      := beatsThisPass
   io.cfg.bits.logElemSize := active.bits.logElemSize
-
-  // drain Handoff
-  io.drainDesc.valid         := allReceived && issuing
-  io.drainDesc.bits.dstAddr  := active.bits.dstAddr
-  io.drainDesc.bits.stride   := active.bits.stride
-  io.drainDesc.bits.lastMask := active.bits.lastMask
+  io.passRemaining        := status.passRemaining
 
 // ==========================================
 // A-CHANNEL — GET ISSUE
 // ==========================================
-  io.tl.a.valid        := issuing && moreToIssue
-  io.tl.a.bits.opcode  := TLULOpcodesA.Get.asUInt
-  io.tl.a.bits.param   := 0.U
-  io.tl.a.bits.size    := p.z.U
-  io.tl.a.bits.source  := status.issued
-  io.tl.a.bits.address := active.bits.srcAddr + (status.issued << p.z)
+  io.tl.a.valid       := issuing && moreToIssue
+  io.tl.a.bits.opcode := TLULOpcodesA.Get.asUInt
+  io.tl.a.bits.param  := 0.U
+  io.tl.a.bits.size   := p.z.U
+  io.tl.a.bits.source := status.issued
+  // The last pass always fetches a full stride × N bytes even when less is real.
+  // Software must allocate the source rounded up to the next multiple of
+  // n_areas × N; the padding need only be readable, not initialised, since the
+  // drain masks it off.
+  io.tl.a.bits.address := status.srcBase + (status.issued << p.z)
   io.tl.a.bits.mask    := Fill(N, 1.U)
   io.tl.a.bits.data    := DontCare
 

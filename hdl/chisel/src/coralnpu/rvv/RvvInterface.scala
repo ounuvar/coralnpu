@@ -16,7 +16,13 @@ package coralnpu.rvv
 
 import chisel3._
 import chisel3.util._
-import coralnpu.{Parameters, RegfileReadDataIO, RegfileWriteDataIO, TileWriteDataIO}
+import coralnpu.{
+  MtypeWriteDataIO,
+  Parameters,
+  RegfileReadDataIO,
+  RegfileWriteDataIO,
+  TileWriteDataIO
+}
 
 class RvvConfigState(p: Parameters) extends Bundle {
   val vl     = Output(UInt(log2Ceil(p.rvvVlen + 1).W))
@@ -30,24 +36,22 @@ class RvvConfigState(p: Parameters) extends Bundle {
   // This is the original one set in vset(i)vl(i)
   val lmul_orig = Output(UInt(3.W))
   val vill      = Output(Bool())
+  val altfmt    = Option.when(p.enableVme)(Output(Bool()))
   // VME (Zvt) non-tile state. Packed mtype view assembled from {tm, tk,
-  // mtwiden} per §15.1.1.2.
-  // Note: The spec (v0.3) has a discrepancy: it defines tk as tk[2:0] (3 bits,
-  // values 0-4) but allocates it to bits 6:5 (2 bits). We assume tk is 3 bits
-  // and occupies bits 7:5, which shifts the reserved bits above it to 9:8.
+  // mtwiden} per §12.1.1.2.
+  // Note: The spec defines tk as tk[2:0] (3 bits, values 0-4) in bits 7:5.
   // tm is in [23:10] (14 bits), mtwiden is in [1:0] (2 bits).
   val mtype   = Option.when(p.enableVme)(Output(UInt(p.xlen.W)))
   val mtwiden = Option.when(p.enableVme)(Output(UInt(2.W)))
   val tm      = Option.when(p.enableVme)(Output(UInt(14.W)))
   val tk      = Option.when(p.enableVme)(Output(UInt(3.W)))
-  val altfmt  = Option.when(p.enableVme)(Output(Bool()))
 
-  /** Construct the vtype CSR value. See section 3.4 of the RISC-V Vector Specification v1.0. Bit 8
-    * is altfmt when VME is enabled (Zvt §1.2).
+  /** Construct the vtype CSR value. See section 3.4 of the RISC-V Vector Specification v1.0, and
+    * section 12.1.1.4 of the Zvt Specification (bit 8 = altfmt).
     */
   def vtype: UInt = {
     if (p.enableVme) {
-      Cat(vill, 0.U((p.xlen - 10).W), altfmt.get, ma, ta, sew, lmul_orig)
+      Cat(vill, 0.U((p.xlen - 10).W), altfmt.getOrElse(false.B), ma, ta, sew, lmul_orig)
     } else {
       Cat(vill, 0.U((p.xlen - 9).W), ma, ta, sew, lmul_orig)
     }
@@ -97,8 +101,7 @@ class RvvCoreIO(p: Parameters) extends Bundle {
   val lsu2vme = Option.when(p.enableVme)(Flipped(Decoupled(new Lsu2Vme(p))))
 
   // Config state.
-  val configState     = Output(Valid(new RvvConfigState(p)))
-  val nextConfigMtype = Option.when(p.enableVme)(Output(UInt(32.W)))
+  val configState = Output(Valid(new RvvConfigState(p)))
 
   // Async scalar regfile writes.
   val async_rd  = Decoupled(new RegfileWriteDataIO(p))
@@ -119,22 +122,25 @@ class RvvCoreIO(p: Parameters) extends Bundle {
   val rd_rob2rt_o = Vec(p.rvvRetireLanes, new Rob2Rt(p))
 
   // VME matrix tile retirement
-  val vmeRt = Option.when(p.enableVme)(Valid(new TileWriteDataIO(p)))
+  val vmeRt      = Option.when(p.enableVme)(Valid(new TileWriteDataIO(p)))
+  val vmeMtypeWb = Option.when(p.enableVme)(
+    Vec(p.instructionLanes, Valid(new MtypeWriteDataIO(p)))
+  )
 }
 
 class Rob2Rt(p: Parameters) extends Bundle {
   val valid          = Bool()
   val w_valid        = Bool()
-  val w_index        = UInt(5.W)
+  val w_index        = UInt(p.rvvRegCountWidth.W)
   val w_data         = Option.when(p.enableVerification)(UInt(p.rvvVlen.W))
   val w_type         = UInt(2.W)                // W_DATA_TYPE_e: 0=NOWRITE, 1=VRF, 2=XRF, 3=FRF
   val vd_type        = UInt((p.rvvVlenb * 2).W) // BYTE_TYPE_t: 2 bits per byte
   val trap_flag      = Bool()
   val vector_csr     = new RvvConfigState(p)
   val vxsaturate     = UInt(p.rvvVlenb.W)
-  val uop_pc         = Option.when(p.enableVerification)(UInt(32.W))
+  val uop_pc         = Option.when(p.enableVerification)(UInt(p.programCounterBits.W))
   val last_uop_valid = Bool()
-  val rob_tag        = UInt(4.W)
+  val rob_tag        = UInt(log2Ceil(p.retirementBufferSize).W)
 }
 
 class RvvCsrIO(p: Parameters) extends Bundle {

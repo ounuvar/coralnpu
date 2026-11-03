@@ -15,10 +15,10 @@
 """Convenience wrapper for Verilator driven cocotb."""
 
 load("@coralnpu_host_cpus//:defs.bzl", "MAKE_JOBS")
-load("@coralnpu_hw//rules:sram_backdoor.bzl", "SRAM_BACKDOOR_TOPLEVELS")
 load("@coralnpu_hw//rules:verilog.bzl", "VerilogInfo", "collect_verilog_files")
 load("@coralnpu_hw//third_party/python:requirements.bzl", "requirement")
 load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain")
+load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("@rules_python//python:defs.bzl", "PyInfo", "py_binary", "py_library")
 
 # Number of CPUs reserved per Verilate action in Bazel's local scheduler.
@@ -42,9 +42,16 @@ def verilator_resource_estimator(os, input_size):
     # to use more threads if the scheduler hands them over.
     return {"cpu": min(verilator_make_parallelism, 4), "memory": 4096}
 
+def vcs_resource_estimator(os, input_size):
+    # VCS elaboration with -kdb and +acc+3 on full CoralNPU SoC/RVV/VME
+    # designs peaks at 6-10 GB RAM per action. Reserve 8 GB and 2 CPUs so
+    # Bazel's local scheduler bounds concurrent VCS compilations instead of
+    # assuming the 250 MB / 1 CPU default and OOM-killing CI containers.
+    return {"cpu": min(verilator_make_parallelism, 2), "memory": 8192}
+
 def _verilator_cocotb_model_impl(ctx):
     hdl_toplevel = ctx.attr.hdl_toplevel
-    outdir_name = hdl_toplevel + "_build"
+    outdir_name = ctx.attr.name + "_build"
 
     cc_toolchain = find_cc_toolchain(ctx)
     compiler_executable = cc_toolchain.compiler_executable
@@ -67,7 +74,17 @@ def _verilator_cocotb_model_impl(ctx):
             dpi_files_dict[f.path] = f
 
     # We need to collect CC sources transitively
-    for dep in ctx.attr.deps:
+    all_deps = list(ctx.attr.deps)
+    if ctx.attr._sram_backdoor:
+        has_sram_backdoor = False
+        for d in all_deps:
+            if d.label == ctx.attr._sram_backdoor.label:
+                has_sram_backdoor = True
+                break
+        if not has_sram_backdoor:
+            all_deps.append(ctx.attr._sram_backdoor)
+
+    for dep in all_deps:
         if CcInfo in dep:
             cc_info = dep[CcInfo]
 
@@ -138,7 +155,7 @@ def _verilator_cocotb_model_impl(ctx):
         add_input(f)
         verilog_paths.append(f.path)
 
-    vlt_file = ctx.actions.declare_file(hdl_toplevel + ".vlt")
+    vlt_file = ctx.actions.declare_file(ctx.attr.name + ".vlt")
     ctx.actions.expand_template(
         output = vlt_file,
         template = ctx.file.vlt_tpl,
@@ -172,7 +189,7 @@ def _verilator_cocotb_model_impl(ctx):
             --vpi \
             --prefix Vtop \
             -o {hdl_toplevel} \
-            -LDFLAGS "-Wl,-rpath {cocotb_lib_path} -L{cocotb_lib_path} -lcocotbvpi_verilator" \
+            -LDFLAGS "-rdynamic -Wl,-rpath {cocotb_lib_path} -L{cocotb_lib_path} -lcocotbvpi_verilator -ldl" \
             {trace} \
             {cflags} \
             -I. -Ihdl/verilog {dpi_includes} \
@@ -261,6 +278,15 @@ def _vcs_cocotb_model_impl(ctx):
 
     # Expand location in build_args
     expanded_build_args = [ctx.expand_location(arg, ctx.attr.data) for arg in ctx.attr.build_args]
+    if "-I../hdl/verilog" not in expanded_build_args:
+        expanded_build_args.extend(["-CFLAGS", "-I../hdl/verilog"])
+    if "../hdl/verilog/sram_backdoor.cc" not in expanded_build_args:
+        expanded_build_args.append("../hdl/verilog/sram_backdoor.cc")
+    if not any([arg.startswith("-debug_access") for arg in expanded_build_args]):
+        # Cocotb VPI requires read/write/force/value-change-callback access;
+        # +vpi+1 without -debug_access+...+cbk disables VPI callbacks and hangs
+        # signal edge triggers (RisingEdge/FallingEdge) in VCS.
+        expanded_build_args.append("-debug_access+r+w+wn+f+fn+cbk")
 
     # We need absolute paths for files we pass explicitly (sources, includes, libs)
     # because we will CD into a subdirectory.
@@ -303,7 +329,7 @@ def _vcs_cocotb_model_impl(ctx):
         },
     )
 
-    inputs = verilog_files + ctx.files._vcs_libs + ctx.files.data + [wrapper]
+    inputs = verilog_files + ctx.files._vcs_libs + ctx.files.data + ctx.files._sram_backdoor_files + [wrapper]
 
     # Note: VCS compilation (VcsCompile) requires access to cell libraries on autofs
     # mounts when building netlist models. On host machines, sandboxed actions
@@ -330,6 +356,7 @@ def _vcs_cocotb_model_impl(ctx):
         inputs = depset(inputs),
         command = "bash {}".format(wrapper.path),
         mnemonic = "VcsCompile",
+        resource_set = vcs_resource_estimator,
         use_default_shell_env = True,
     )
 
@@ -360,6 +387,10 @@ vcs_cocotb_model = rule(
         "_template": attr.label(
             default = Label("@coralnpu_hw//rules:vcs_model_wrapper.sh.template"),
             allow_single_file = True,
+        ),
+        "_sram_backdoor_files": attr.label(
+            default = Label("//hdl/verilog:dpi_files"),
+            allow_files = True,
         ),
     },
     executable = True,
@@ -409,6 +440,9 @@ verilator_cocotb_model = rule(
         "_cocotb_verilator_cpp": attr.label(
             default = "@coralnpu_pip_deps_cocotb//:verilator_srcs",
             allow_files = True,
+        ),
+        "_sram_backdoor": attr.label(
+            default = Label("//hdl/verilog:sram_backdoor"),
         ),
     },
     executable = True,
@@ -493,7 +527,9 @@ def _collect_transitive_runfiles(ctx):
     return ctx.runfiles(files = ctx.files.data).merge_all(
         [dep.default_runfiles for dep in ctx.attr.deps] +
         [dep.default_runfiles for dep in ctx.attr.sim] +
-        [dep.default_runfiles for dep in ctx.attr.data],
+        [dep.default_runfiles for dep in ctx.attr.data] +
+        ([ctx.attr.model[DefaultInfo].default_runfiles] if ctx.attr.model else []) +
+        [ctx.attr.cocotb_wrapper[DefaultInfo].default_runfiles],
     )
 
 def _get_pythonpath_to_set(ctx):
@@ -1277,8 +1313,10 @@ def vcs_cocotb_test(
     kwargs["build_args"] = build_args
 
     if model:
+        # Pass model only via the `model` attribute (cfg = "exec"). Adding it
+        # to `data` (cfg = "target") forces Bazel to compile every Chisel RTL
+        # target and VCS model twice across both configurations.
         kwargs["model"] = model
-        data = data + [model]
         kwargs.pop("verilog_sources", None)
 
     cocotb_test(
@@ -1565,27 +1603,6 @@ def cocotb_test_suite(name, testcases, simulators = ["verilator"], coverage = Fa
             verilog_sources = sim_kwargs.pop("verilog_sources", [])
             if not verilog_sources:
                 fail("vcs_verilog_sources must be specified for vcs tests")
-
-            # CoreMiniAxi and Chisel Subsystem tests require sram_backdoor compilation
-            hdl_toplevel = sim_tests_kwargs.get("hdl_toplevel", sim_kwargs.get("hdl_toplevel", ""))
-            if hdl_toplevel in SRAM_BACKDOOR_TOPLEVELS:
-                build_args = list(sim_kwargs.pop("build_args", []))
-                if "-I../hdl/verilog" not in build_args:
-                    build_args.extend(["-CFLAGS", "-I../hdl/verilog"])
-
-                if "../hdl/verilog/sram_backdoor.cc" not in build_args:
-                    build_args.append("../hdl/verilog/sram_backdoor.cc")
-                sim_kwargs["build_args"] = build_args
-
-                data = list(sim_kwargs.pop("data", []))
-                has_dpi_files = False
-                for item in data:
-                    if str(item).endswith("hdl/verilog:dpi_files"):
-                        has_dpi_files = True
-                        break
-                if not has_dpi_files:
-                    data.append("@coralnpu_hw//hdl/verilog:dpi_files")
-                sim_kwargs["data"] = data
 
             _vcs_cocotb_test_suite(
                 name = "{}_{}".format(sim, name),

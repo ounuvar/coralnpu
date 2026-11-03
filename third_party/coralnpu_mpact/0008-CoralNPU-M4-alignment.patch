@@ -1,0 +1,1541 @@
+diff --git a/sim/coralnpu_m4_instructions.cc b/sim/coralnpu_m4_instructions.cc
+index 8127db3..d6255c1 100755
+--- a/sim/coralnpu_m4_instructions.cc
++++ b/sim/coralnpu_m4_instructions.cc
+@@ -52,16 +52,37 @@ void CoralNPUM4Vtle(int eew_bits,
+   auto* state = static_cast<::coralnpu::sim::CoralNPUM4State*>(
+       matrix_state->riscv_state());
+   auto* vector_state = state->rv_vector();
++  if (eew_bits > vector_state->max_elen() || vector_state->is_vill() ||
++      (state->mstatus() != nullptr &&
++       state->mstatus()->vs() == ::mpact::sim::riscv::RiscVMStatus::kStatusOff) ||
++      state->IsMatrixStatusOff() || !matrix_state->configured()) {
++    ::mpact::sim::riscv::RiscVZvtVtle(eew_bits, inst);
++    return;
++  }
+   const uint64_t kBase =
+       ::mpact::sim::generic::GetInstructionSource<uint64_t>(inst, 0);
+   const int kElementSize = eew_bits / 8;
+   const int kCount = TileSubsetCount(matrix_state, vector_state, eew_bits);
+-  if (!state->HasPermission(kBase, kCount * kElementSize,
+-                            ::coralnpu::sim::MemoryPermission::kRead)) {
+-    state->Trap(/*is_interrupt=*/false, kBase,
+-                *::mpact::sim::riscv::ExceptionCode::kLoadAccessFault,
+-                inst->address(), inst);
+-    return;
++  const int kVstart = vector_state->vstart();
++  for (int i = kVstart; i < kCount; ++i) {
++    const uint64_t kAddr =
++        kBase + static_cast<uint64_t>(i) * kElementSize;
++    if (!state->HasPermission(kAddr, kElementSize,
++                              ::coralnpu::sim::MemoryPermission::kRead)) {
++      uint64_t fault_addr = kAddr;
++      for (int b = 0; b < kElementSize; ++b) {
++        if (!state->HasPermission(kAddr + b, 1,
++                                  ::coralnpu::sim::MemoryPermission::kRead)) {
++          fault_addr = kAddr + b;
++          break;
++        }
++      }
++      vector_state->set_vstart(i);
++      state->Trap(/*is_interrupt=*/false, fault_addr & ~0xFULL,
++                  *::mpact::sim::riscv::ExceptionCode::kLoadAccessFault,
++                  inst->address(), inst);
++      return;
++    }
+   }
+ 
+   ::mpact::sim::riscv::RiscVZvtVtle(eew_bits, inst);
+@@ -75,16 +96,37 @@ void CoralNPUM4Vtse(int eew_bits,
+   auto* state = static_cast<::coralnpu::sim::CoralNPUM4State*>(
+       matrix_state->riscv_state());
+   auto* vector_state = state->rv_vector();
++  if (eew_bits > vector_state->max_elen() || vector_state->is_vill() ||
++      (state->mstatus() != nullptr &&
++       state->mstatus()->vs() == ::mpact::sim::riscv::RiscVMStatus::kStatusOff) ||
++      state->IsMatrixStatusOff() || !matrix_state->configured()) {
++    ::mpact::sim::riscv::RiscVZvtVtse(eew_bits, inst);
++    return;
++  }
+   const uint64_t kBase =
+       ::mpact::sim::generic::GetInstructionSource<uint64_t>(inst, 0);
+   const int kElementSize = eew_bits / 8;
+   const int kCount = TileSubsetCount(matrix_state, vector_state, eew_bits);
+-  if (!state->HasPermission(kBase, kCount * kElementSize,
+-                            ::coralnpu::sim::MemoryPermission::kWrite)) {
+-    state->Trap(/*is_interrupt=*/false, kBase,
+-                *::mpact::sim::riscv::ExceptionCode::kStoreAccessFault,
+-                inst->address(), inst);
+-    return;
++  const int kVstart = vector_state->vstart();
++  for (int i = kVstart; i < kCount; ++i) {
++    const uint64_t kAddr =
++        kBase + static_cast<uint64_t>(i) * kElementSize;
++    if (!state->HasPermission(kAddr, kElementSize,
++                              ::coralnpu::sim::MemoryPermission::kWrite)) {
++      uint64_t fault_addr = kAddr;
++      for (int b = 0; b < kElementSize; ++b) {
++        if (!state->HasPermission(kAddr + b, 1,
++                                  ::coralnpu::sim::MemoryPermission::kWrite)) {
++          fault_addr = kAddr + b;
++          break;
++        }
++      }
++      vector_state->set_vstart(i);
++      state->Trap(/*is_interrupt=*/false, fault_addr & ~0xFULL,
++                  *::mpact::sim::riscv::ExceptionCode::kStoreAccessFault,
++                  inst->address(), inst);
++      return;
++    }
+   }
+ 
+   ::mpact::sim::riscv::RiscVZvtVtse(eew_bits, inst);
+diff --git a/sim/coralnpu_m4_state.cc b/sim/coralnpu_m4_state.cc
+index 3ba9bbb..7cadb0b 100755
+--- a/sim/coralnpu_m4_state.cc
++++ b/sim/coralnpu_m4_state.cc
+@@ -23,6 +23,7 @@
+ #include "sim/coralnpu_xstatus.h"
+ #include "riscv/riscv_csr.h"
+ #include "riscv/riscv_state.h"
++#include "riscv/riscv_vector_state.h"
+ #include "mpact/sim/util/memory/memory_interface.h"
+ 
+ namespace coralnpu::sim {
+@@ -39,7 +40,11 @@ CoralNPUM4State::CoralNPUM4State(
+           static_cast<uint64_t>(::mpact::sim::riscv::RiscVCsrEnum::kMStatus))
+       .IgnoreError();
+ 
+-  auto* new_mstatus = new CoralNPUMStatus(old_mstatus_val, this, misa());
++  constexpr uint64_t kMsInitial =
++      static_cast<uint64_t>(::mpact::sim::riscv::RiscVMStatus::kStatusInitial)
++      << 29;
++  auto* new_mstatus =
++      new CoralNPUMStatus(old_mstatus_val | kMsInitial, this, misa());
+   csr_set()->AddCsr(new_mstatus).IgnoreError();
+   mstatus_ = new_mstatus;
+ }
+@@ -49,6 +54,34 @@ CoralNPUM4State::~CoralNPUM4State() {
+   delete mstatus_;
+ }
+ 
++void CoralNPUM4State::MarkMatrixDirty() {
++  auto* ms = static_cast<CoralNPUMStatus*>(mstatus());
++  if (ms != nullptr && ms->ms() != ::mpact::sim::riscv::RiscVMStatus::kStatusOff &&
++      ms->ms() != ::mpact::sim::riscv::RiscVMStatus::kStatusDirty) {
++    ms->set_ms(::mpact::sim::riscv::RiscVMStatus::kStatusDirty);
++    ms->Submit();
++  }
++  if (rv_vector() != nullptr) {
++    rv_vector()->MarkDirty();
++  }
++}
++
++void CoralNPUM4State::MarkMatrixInitial() {
++  auto* ms = static_cast<CoralNPUMStatus*>(mstatus());
++  if (ms != nullptr && ms->ms() != ::mpact::sim::riscv::RiscVMStatus::kStatusOff &&
++      ms->ms() != ::mpact::sim::riscv::RiscVMStatus::kStatusInitial) {
++    ms->set_ms(::mpact::sim::riscv::RiscVMStatus::kStatusInitial);
++    ms->Submit();
++  }
++}
++
++bool CoralNPUM4State::IsMatrixStatusOff() const {
++  auto* ms = static_cast<CoralNPUMStatus*>(
++      const_cast<CoralNPUM4State*>(this)->mstatus());
++  return ms != nullptr &&
++         ms->ms() == ::mpact::sim::riscv::RiscVMStatus::kStatusOff;
++}
++
+ namespace {
+ inline uint64_t StretchMisa32(uint32_t value) {
+   uint64_t value64 = static_cast<uint64_t>(value);
+diff --git a/sim/coralnpu_m4_state.h b/sim/coralnpu_m4_state.h
+index b086035..6ff9b92 100755
+--- a/sim/coralnpu_m4_state.h
++++ b/sim/coralnpu_m4_state.h
+@@ -31,6 +31,10 @@ class CoralNPUM4State : public CoralNPUV2State {
+       ::mpact::sim::util::MemoryInterface* memory,
+       ::mpact::sim::util::AtomicMemoryOpInterface* atomic_memory = nullptr);
+   ~CoralNPUM4State() override;
++
++  void MarkMatrixDirty() override;
++  void MarkMatrixInitial() override;
++  bool IsMatrixStatusOff() const override;
+ };
+ 
+ std::unique_ptr<CoralNPUM4State> CreateCoralNPUM4State(
+diff --git a/sim/coralnpu_simulator.cc b/sim/coralnpu_simulator.cc
+index 4fb59c6..6f032e6 100755
+--- a/sim/coralnpu_simulator.cc
++++ b/sim/coralnpu_simulator.cc
+@@ -148,13 +148,20 @@ CoralNPUSimulator::CoralNPUSimulator(const CoralNPUSimulatorOptions& options)
+       std::make_unique<RiscVFPState>(state_->csr_set(), state_.get());
+   state_->set_rv_fp(rv_fp_state_.get());
+   rvv_state_ = std::make_unique<RiscVVectorState>(state_.get(),
+-                                                  kCoralNPUV2VectorByteLength);
++                                                  kCoralNPUV2VectorByteLength,
++                                                  /*max_elen=*/32);
++  rvv_state_->SetVectorType(::mpact::sim::riscv::kVillBitMask);
++  if (state_->mstatus() != nullptr) {
++    state_->mstatus()->set_vs(::mpact::sim::riscv::RiscVMStatus::kStatusInitial);
++    state_->mstatus()->Submit();
++  }
+ 
+   if (options_.architecture == Architecture::kM4) {
+     // The M4 generation adds the matrix tile state (and the mtype CSR, which
+     // the matrix state registers into the CSR set).
+     auto matrix_status =
+-        ::mpact::sim::riscv::RiscVZvtMatrixState::Create(state_.get());
++        ::mpact::sim::riscv::RiscVZvtMatrixState::Create(
++            state_.get(), kCoralNPUV2VectorByteLength);
+     CHECK(matrix_status.ok())
+         << "Failed to create matrix state: " << matrix_status.status();
+     matrix_state_ = std::move(*matrix_status);
+diff --git a/sim/coralnpu_v2_instructions.cc b/sim/coralnpu_v2_instructions.cc
+index 1234567..89abcdef 100755
+--- a/sim/coralnpu_v2_instructions.cc
++++ b/sim/coralnpu_v2_instructions.cc
+@@ -110,10 +110,17 @@ bool CheckVectorAccess(CoralNPUV2State* state,
+                        uint32_t address, int size,
+                        MemoryPermission permission) {
+   if (!state->HasPermission(address, size, permission)) {
++    uint32_t fault_addr = address;
++    for (int b = 0; b < size; ++b) {
++      if (!state->HasPermission(address + b, 1, permission)) {
++        fault_addr = address + b;
++        break;
++      }
++    }
+     ExceptionCode fault_exception_code = (permission == MemoryPermission::kRead)
+                                              ? ExceptionCode::kLoadAccessFault
+                                              : ExceptionCode::kStoreAccessFault;
+-    state->Trap(/*is_interrupt=*/false, /*trap_value=*/address,
++    state->Trap(/*is_interrupt=*/false, /*trap_value=*/fault_addr & ~0xFU,
+                 *fault_exception_code,
+                 /*epc=*/instruction->address(), instruction);
+     return false;
+@@ -172,7 +179,12 @@ bool ValidateVectorAccess(const Instruction* /*absl_nonnull*/ instruction,
+     if (src_masks != nullptr && !CheckVectorMask(src_masks, i)) {
+       continue;
+     }
+-    if (!validator(state, i)) return false;
++    if (!validator(state, i)) {
++      if (!ignore_vstart) {
++        rv_vector->set_vstart(i);
++      }
++      return false;
++    }
+   }
+   return true;
+ }
+diff --git a/sim/coralnpu_v2.bin_fmt b/sim/coralnpu_v2.bin_fmt
+index 45d29f7..9dd2ecc 100755
+--- a/sim/coralnpu_v2.bin_fmt
++++ b/sim/coralnpu_v2.bin_fmt
+@@ -261,6 +261,10 @@ format VConfig[32] : Inst32Format {
+     signed zimm10[10] = top12[9..0];
+     unsigned uimm5[5] = rs1;
+     unsigned rs2[5] = top12[4..0];
++    unsigned mseti_hi[3] = top12[11..9];
++    unsigned mseti_mid[3] = top12[7..5];
++    unsigned subfunc[3] = top12[2..0];
++    unsigned mseti_rs1_hi[3] = rs1[4..2];
+ };
+ 
+ instruction group RiscVIInstBase32[32] : Inst32Format {
+diff --git a/sim/coralnpu_xstatus.h b/sim/coralnpu_xstatus.h
+index 5009c5b..2e3cfad 100755
+--- a/sim/coralnpu_xstatus.h
++++ b/sim/coralnpu_xstatus.h
+@@ -18,6 +18,7 @@
+ #include <cstdint>
+ 
+ #include "riscv/riscv_misa.h"
++#include "riscv/riscv_state.h"
+ #include "riscv/riscv_xstatus.h"
+ #include "mpact/sim/generic/arch_state.h"
+ 
+@@ -44,6 +45,27 @@ class CoralNPUMStatus : public ::mpact::sim::riscv::RiscVMStatus {
+                   ::mpact::sim::riscv::RiscVMIsa* misa);
+   ~CoralNPUMStatus() override = default;
+ 
++  uint32_t GetUint32() override {
++    uint32_t val = RiscVMStatus::GetUint32();
++    if (((val >> 29) & 0b11) == kStatusDirty) {
++      val |= static_cast<uint32_t>(kMstatusSdMaskRv32);
++    }
++    return val;
++  }
++
++  uint64_t GetUint64() override {
++    if (state() != nullptr &&
++        static_cast<::mpact::sim::riscv::RiscVState*>(state())->xlen() ==
++            ::mpact::sim::riscv::RiscVXlen::RV32) {
++      return static_cast<uint64_t>(GetUint32());
++    }
++    uint64_t val = RiscVMStatus::GetUint64();
++    if (((val >> 29) & 0b11) == kStatusDirty) {
++      val |= kMstatusSdMaskRv64;
++    }
++    return val;
++  }
++
+   bool sd() {
+     return RiscVMStatus::sd() || ms() == 0b11 || vs() == 0b11 || fs() == 0b11 ||
+            xs() == 0b11;
+diff --git a/sim/test/coralnpu_m4_config_test.cc b/sim/test/coralnpu_m4_config_test.cc
+index be642b2..9133df8 100755
+--- a/sim/test/coralnpu_m4_config_test.cc
++++ b/sim/test/coralnpu_m4_config_test.cc
+@@ -123,7 +123,7 @@ TEST_F(CoralNPUM4ConfigTest, MsetMtypeInt8ConfigClampsTkTm) {
+   SetXReg(1, kMtype);  // rs1 = mtype
+   SetXReg(2, 0x0);     // rs2 = vtype: SEW=8, LMUL=1.
+ 
+-  Execute(MakeVConfig(0b100'0001, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
++  Execute(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
+ 
+   // vl must be 0 after msetmtype.
+   EXPECT_EQ(rvv_->vector_length(), 0);
+@@ -140,7 +140,7 @@ TEST_F(CoralNPUM4ConfigTest, MsetMtypeInt8ConfigClampsTkTm) {
+ TEST_F(CoralNPUM4ConfigTest, MsetMtypeUnconfiguredZeroesMtype) {
+   SetXReg(1, 0x0);  // mtwiden = 0.
+   SetXReg(2, 0x0);
+-  Execute(MakeVConfig(0b100'0001, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
++  Execute(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
+   EXPECT_EQ(matrix_->mtype(), 0u);
+   EXPECT_FALSE(matrix_->configured());
+ }
+@@ -151,12 +151,12 @@ TEST_F(CoralNPUM4ConfigTest, MsetTnSetsVlAndWritesRd) {
+   const uint32_t kMtype = 0x3 | (4u << 5) | (8u << 10);
+   SetXReg(1, kMtype);
+   SetXReg(2, 0x0);
+-  Execute(MakeVConfig(0b100'0001, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
++  Execute(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
+ 
+   // msettn x3, x4 with x4 = 10. Bound = min(10, VLMAX=16,
+   // EFFECTIVE_TILE_EDGE=32) = 10.
+   SetXReg(4, 10);
+-  Execute(MakeVConfig(0b100'0010, /*rs2=*/0, /*rs1=*/4, 0b111, /*rd=*/3));
++  Execute(MakeVConfig(0b100'0100, /*rs2=*/0, /*rs1=*/4, 0b111, /*rd=*/3));
+   EXPECT_EQ(rvv_->vector_length(), 10u);
+   EXPECT_EQ(GetXReg(3), 10u);
+ }
+@@ -166,11 +166,11 @@ TEST_F(CoralNPUM4ConfigTest, MsetTkClampsToKmax) {
+   const uint32_t kMtype = 0x3 | (1u << 5) | (8u << 10);  // tk starts at 1.
+   SetXReg(1, kMtype);
+   SetXReg(2, 0x0);
+-  Execute(MakeVConfig(0b100'0001, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
++  Execute(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
+ 
+   // msettk x3, x4 with x4 = 7 -> clamped to KMAX = 4.
+   SetXReg(4, 7);
+-  Execute(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/4, 0b111, /*rd=*/3));
++  Execute(MakeVConfig(0b100'0100, /*rs2=*/2, /*rs1=*/4, 0b111, /*rd=*/3));
+   EXPECT_EQ(matrix_->tile_k(), 4);
+   EXPECT_EQ(GetXReg(3), 4u);
+ }
+@@ -178,10 +178,10 @@ TEST_F(CoralNPUM4ConfigTest, MsetTkClampsToKmax) {
+ TEST_F(CoralNPUM4ConfigTest, MsetTnWhenUnconfigured) {
+   SetXReg(1, 0x0);  // mtwiden = 0
+   SetXReg(2, 0x0);
+-  Execute(MakeVConfig(0b100'0001, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
++  Execute(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
+ 
+   SetXReg(4, 10);
+-  Execute(MakeVConfig(0b100'0010, /*rs2=*/0, /*rs1=*/4, 0b111,
++  Execute(MakeVConfig(0b100'0100, /*rs2=*/0, /*rs1=*/4, 0b111,
+                       /*rd=*/3));  // msettn
+   EXPECT_EQ(rvv_->vector_length(), 10u);
+   EXPECT_EQ(GetXReg(3), 10u);
+@@ -190,10 +190,10 @@ TEST_F(CoralNPUM4ConfigTest, MsetTnWhenUnconfigured) {
+ TEST_F(CoralNPUM4ConfigTest, MsetTmWhenUnconfigured) {
+   SetXReg(1, 0x0);  // mtwiden = 0
+   SetXReg(2, 0x0);
+-  Execute(MakeVConfig(0b100'0001, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
++  Execute(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
+ 
+   SetXReg(4, 10);
+-  Execute(MakeVConfig(0b100'0010, /*rs2=*/1, /*rs1=*/4, 0b111,
++  Execute(MakeVConfig(0b100'0100, /*rs2=*/1, /*rs1=*/4, 0b111,
+                       /*rd=*/3));  // msettm
+   EXPECT_EQ(matrix_->tile_m(), 0u);
+   EXPECT_EQ(GetXReg(3), 0u);
+@@ -202,13 +202,108 @@ TEST_F(CoralNPUM4ConfigTest, MsetTmWhenUnconfigured) {
+ TEST_F(CoralNPUM4ConfigTest, MsetTkWhenUnconfigured) {
+   SetXReg(1, 0x0);  // mtwiden = 0
+   SetXReg(2, 0x0);
+-  Execute(MakeVConfig(0b100'0001, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
++  Execute(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
+ 
+   SetXReg(4, 10);
+-  Execute(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/4, 0b111,
++  Execute(MakeVConfig(0b100'0100, /*rs2=*/2, /*rs1=*/4, 0b111,
+                       /*rd=*/3));  // msettk
+   EXPECT_EQ(matrix_->tile_k(), 0u);
+   EXPECT_EQ(GetXReg(3), 0u);
+ }
+ 
++TEST_F(CoralNPUM4ConfigTest, MsetMtypeiDerivesVtypeAndLmul) {
++  state_->mstatus()->set_vs(::mpact::sim::riscv::RiscVMStatus::kStatusInitial);
++  state_->mstatus()->Submit();
++  // Default TE=32, VLEN=128:
++  // msetmtypei with uimm=3 (mtwiden=3), vsew=0 (SEW8) -> LMUL2 (16/8).
++  Execute(0x8841f057);
++  EXPECT_EQ(state_->mstatus()->vs(),
++            ::mpact::sim::riscv::RiscVMStatus::kStatusDirty);
++  EXPECT_EQ(rvv_->vector_length(), 0u);
++  EXPECT_EQ(matrix_->mtwiden(), 3);
++  EXPECT_EQ(rvv_->selected_element_width(), 1);  // 8-bit SEW
++  EXPECT_EQ(rvv_->vector_length_multiplier(), 16);  // LMUL 2 (16/8)
++
++  // msetmtypei with uimm=2 (mtwiden=2), vsew=1 (SEW16) -> LMUL4 (32/8).
++  Execute(0x88c17057);
++  EXPECT_EQ(matrix_->mtwiden(), 2);
++  EXPECT_EQ(rvv_->selected_element_width(), 2);  // 16-bit SEW
++  EXPECT_EQ(rvv_->vector_length_multiplier(), 32);  // LMUL 4 (32/8)
++
++  // msetmtypei with uimm=1 (mtwiden=1), vsew=2 (SEW32) -> LMUL8 (64/8).
++  Execute(0x8940f057);
++  EXPECT_EQ(matrix_->mtwiden(), 1);
++  EXPECT_EQ(rvv_->selected_element_width(), 4);  // 32-bit SEW
++  EXPECT_EQ(rvv_->vector_length_multiplier(), 64);  // LMUL 8 (64/8)
++
++  // msetmtypei with uimm=0 (mtwiden=0, unconfigured) -> mtype=0.
++  Execute(0x88407057);
++  EXPECT_EQ(matrix_->mtype(), 0u);
++  EXPECT_FALSE(matrix_->configured());
++}
++
++TEST_F(CoralNPUM4ConfigTest, MtypeMasksReservedBitsAndValidatesAltfmt) {
++  // Non-zero reserved bits (31:24, 9:8, 4:2) in rs1 when mtwiden != 0
++  // set vtype.vill = 1 and mtype = 0 per Zvt v0.4 §12.1.1.4.
++  const uint32_t kReservedMtype =
++      0xFF00031Cu | 0x3u | (2u << 5) | (4u << 10);
++  SetXReg(1, kReservedMtype);
++  SetXReg(2, 1u << 8);
++  Execute(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
++  EXPECT_TRUE(rvv_->is_vill());
++  EXPECT_EQ(Mtype(), 0u);
++
++  // Valid mtype (mtwiden=3, tk=2, tm=4) with SEW=8 (vsew=0), altfmt=1 -> valid,
++  // and marks mstatus.vs Dirty.
++  state_->mstatus()->set_vs(::mpact::sim::riscv::RiscVMStatus::kStatusInitial);
++  state_->mstatus()->Submit();
++  SetXReg(1, 0x3u | (2u << 5) | (4u << 10));
++  SetXReg(2, 1u << 8);
++  Execute(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
++  EXPECT_FALSE(rvv_->is_vill());
++  EXPECT_EQ(Mtype(), 0x3u | (2u << 5) | (4u << 10));
++  EXPECT_EQ(state_->mstatus()->vs(),
++            ::mpact::sim::riscv::RiscVMStatus::kStatusDirty);
++
++  // Unconfigured (mtwiden=0) ignores upper rs1 bits, zeroes mtype, and
++  // preserves valid altfmt=1 (SEW=16) per v0.4.
++  SetXReg(1, 0xFF00031Cu);
++  SetXReg(2, (1u << 8) | (1u << 3));
++  Execute(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
++  EXPECT_FALSE(rvv_->is_vill());
++  EXPECT_EQ(rvv_->vtype() & (1u << 8), 1u << 8);
++  EXPECT_EQ(Mtype(), 0u);
++
++  // SEW=32 (vsew=2) with altfmt=1 is illegal -> sets vill=1 and mtype=0.
++  SetXReg(1, 0x1u | (1u << 5) | (4u << 10));
++  SetXReg(2, (1u << 8) | (2u << 3));
++  Execute(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
++  EXPECT_TRUE(rvv_->is_vill());
++  EXPECT_EQ(Mtype(), 0u);
++
++  // msettn when vill == 1 writes 0 to vl and rd, and clears vstart.
++  rvv_->set_vstart(5);
++  SetXReg(4, 8);
++  Execute(MakeVConfig(0b100'0100, /*rs2=*/0, /*rs1=*/4, 0b111, /*rd=*/3));
++  EXPECT_EQ(rvv_->vector_length(), 0u);
++  EXPECT_EQ(GetXReg(3), 0u);
++  EXPECT_EQ(rvv_->vstart(), 0u);
++
++  // When mstatus.vs == Off, msetmtype and msetmtypei trap with illegal inst.
++  bool trapped = false;
++  state_->set_on_trap(
++      [&trapped](bool, uint64_t, uint64_t, uint64_t,
++                 const ::mpact::sim::generic::Instruction*) -> bool {
++        trapped = true;
++        return true;
++      });
++  state_->mstatus()->set_vs(::mpact::sim::riscv::RiscVMStatus::kStatusOff);
++  state_->mstatus()->Submit();
++  Execute(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
++  EXPECT_TRUE(trapped);
++  trapped = false;
++  Execute(0x8841f057);
++  EXPECT_TRUE(trapped);
++}
++
+ }  // namespace
+diff --git a/sim/test/coralnpu_m4_encoding_test.cc b/sim/test/coralnpu_m4_encoding_test.cc
+index f84e0f7..0a4a03e 100755
+--- a/sim/test/coralnpu_m4_encoding_test.cc
++++ b/sim/test/coralnpu_m4_encoding_test.cc
+@@ -60,29 +60,29 @@ class CoralNPUM4EncodingTest : public ::testing::Test {
+ };
+ 
+ TEST_F(CoralNPUM4EncodingTest, DecodesMsetmtype) {
+-  // func7 == 0b100'0001, func3 == 0b111.
+-  EXPECT_EQ(Decode(MakeVConfig(0b100'0001, /*rs2=*/2, /*rs1=*/1, 0b111,
++  // func7 == 0b100'0010, func3 == 0b111.
++  EXPECT_EQ(Decode(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/1, 0b111,
+                                /*rd=*/0)),
+             OpcodeEnum::kMsetmtype);
+ }
+ 
+ TEST_F(CoralNPUM4EncodingTest, DecodesMsettn) {
+-  // func7 == 0b100'0010, rs2 == 0.
+-  EXPECT_EQ(Decode(MakeVConfig(0b100'0010, /*rs2=*/0, /*rs1=*/1, 0b111,
++  // func7 == 0b100'0100, rs2 == 0.
++  EXPECT_EQ(Decode(MakeVConfig(0b100'0100, /*rs2=*/0, /*rs1=*/1, 0b111,
+                                /*rd=*/2)),
+             OpcodeEnum::kMsettn);
+ }
+ 
+ TEST_F(CoralNPUM4EncodingTest, DecodesMsettm) {
+-  // func7 == 0b100'0010, rs2 == 1.
+-  EXPECT_EQ(Decode(MakeVConfig(0b100'0010, /*rs2=*/1, /*rs1=*/1, 0b111,
++  // func7 == 0b100'0100, rs2 == 1.
++  EXPECT_EQ(Decode(MakeVConfig(0b100'0100, /*rs2=*/1, /*rs1=*/1, 0b111,
+                                /*rd=*/2)),
+             OpcodeEnum::kMsettm);
+ }
+ 
+ TEST_F(CoralNPUM4EncodingTest, DecodesMsettk) {
+-  // func7 == 0b100'0010, rs2 == 2.
+-  EXPECT_EQ(Decode(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/1, 0b111,
++  // func7 == 0b100'0100, rs2 == 2.
++  EXPECT_EQ(Decode(MakeVConfig(0b100'0100, /*rs2=*/2, /*rs1=*/1, 0b111,
+                                /*rd=*/2)),
+             OpcodeEnum::kMsettk);
+ }
+diff --git a/sim/test/coralnpu_m4_ops_test.cc b/sim/test/coralnpu_m4_ops_test.cc
+index 3a22b12..5ff4789 100755
+--- a/sim/test/coralnpu_m4_ops_test.cc
++++ b/sim/test/coralnpu_m4_ops_test.cc
+@@ -148,7 +148,7 @@ class CoralNPUM4OpsTest : public ::testing::Test {
+   void Configure(uint32_t mtype, uint32_t vtype, int tn) {
+     SetXReg(1, mtype);
+     SetXReg(2, vtype);
+-    Execute(MakeVConfig(0b100'0001, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
++    Execute(MakeVConfig(0b100'0010, /*rs2=*/2, /*rs1=*/1, 0b111, /*rd=*/0));
+     rvv_->set_vector_length(tn);
+   }
+ 
+@@ -206,8 +206,9 @@ TEST_F(CoralNPUM4OpsTest, Vtfmm_Fp32Matmul) {
+ 
+ // bf16 x bf16 -> fp32, K=2.
+ TEST_F(CoralNPUM4OpsTest, VtfmmAlt_Bf16Matmul) {
+-  // mtype: mtwiden=2 (TWIDEN=2), tk=2, tm=2. vtype: SEW=16 (vsew=001).
+-  Configure(/*mtype=*/0x2 | (2u << 5) | (2u << 10), /*vtype=*/(0b001u << 3),
++  // mtype: mtwiden=2 (TWIDEN=2), tk=2, tm=2. vtype: SEW=16 (vsew=001), altfmt=1.
++  Configure(/*mtype=*/0x2 | (2u << 5) | (2u << 10),
++            /*vtype=*/(1u << 8) | (0b001u << 3),
+             /*tn=*/2);
+   ASSERT_EQ(matrix_->tile_k(), 2);
+ 
+@@ -444,4 +445,59 @@ TEST_F(CoralNPUM4OpsTest, VtseVtle64RoundTrip) {
+             static_cast<int64_t>(0x3333333344444444ll));
+ }
+ 
++TEST_F(CoralNPUM4OpsTest, VstartPrestartUndisturbedAndMatmulTraps) {
++  Configure(/*mtype=*/0x3 | (2u << 5) | (2u << 10), /*vtype=*/0, /*tn=*/4);
++  for (int i = 0; i < 4; i++) {
++    matrix_->SetElem<uint8_t>(0, 0, i, 8, static_cast<uint8_t>(100 + i));
++  }
++  SetVreg<uint8_t>(8, {1, 2, 3, 4});
++  SetXReg(3, MakeTss(/*tile=*/0, /*pattern=*/0, /*index=*/0));
++
++  // vtmv.t.v with vstart=2 updates only elements [2, 3] and resets vstart=0.
++  rvv_->set_vstart(2);
++  Execute(MakeVArith(0b010'111, /*vs2=*/8, /*vs1=*/3, 0b110, /*vd=*/0));
++  EXPECT_EQ(rvv_->vstart(), 0u);
++  EXPECT_EQ((matrix_->GetElem<uint8_t>(0, 0, 0, 8)), 100);
++  EXPECT_EQ((matrix_->GetElem<uint8_t>(0, 0, 1, 8)), 101);
++  EXPECT_EQ((matrix_->GetElem<uint8_t>(0, 0, 2, 8)), 3);
++  EXPECT_EQ((matrix_->GetElem<uint8_t>(0, 0, 3, 8)), 4);
++
++  // vtmv.v.t with vstart=2 leaves prestart elements [0, 1] in v24 undisturbed.
++  SetVreg<uint8_t>(24, {55, 66, 77, 88});
++  rvv_->set_vstart(2);
++  Execute(MakeVArith(0b010'000, /*vs2=*/0b11111, /*vs1=*/3, 0b110, /*vd=*/24));
++  EXPECT_EQ(rvv_->vstart(), 0u);
++  auto [reg, unused] = state_->GetRegister<RVVectorRegister>("v24");
++  auto* v24 = reg->data_buffer();
++  EXPECT_EQ(v24->Get<uint8_t>(0), 55);
++  EXPECT_EQ(v24->Get<uint8_t>(1), 66);
++  EXPECT_EQ(v24->Get<uint8_t>(2), 3);
++  EXPECT_EQ(v24->Get<uint8_t>(3), 4);
++
++  // Non-zero vstart on matmul traps.
++  was_trap_handler_called_ = false;
++  rvv_->set_vstart(1);
++  Execute(MakeVMatrix(0b111'100, /*vs2=*/8, /*vs1=*/16, 0b000, /*mtd=*/1));
++  EXPECT_TRUE(was_trap_handler_called_);
++}
++
++TEST_F(CoralNPUM4OpsTest, AlignmentAndModeLegalityChecks) {
++  Configure(/*mtype=*/0x3 | (2u << 5) | (2u << 10), /*vtype=*/0, /*tn=*/2);
++
++  // Unaligned destination tile (mt1 -> mtd = 0b00011) on TEW=32 matmul traps.
++  was_trap_handler_called_ = false;
++  Execute(MakeVMatrix(0b111'100, /*vs2=*/8, /*vs1=*/16, 0b000, /*mtd=*/3));
++  EXPECT_TRUE(was_trap_handler_called_);
++
++  // vs2 % 8 >= 8/KMAX (for SEW=8, KMAX=4, 8/KMAX=2 -> vs2=10 has 10%8=2) traps.
++  was_trap_handler_called_ = false;
++  Execute(MakeVMatrix(0b111'100, /*vs2=*/10, /*vs1=*/16, 0b000, /*mtd=*/1));
++  EXPECT_TRUE(was_trap_handler_called_);
++
++  // Executing vtfmm.tvv when configured for int8 (SEW=8, TWIDEN=4) traps.
++  was_trap_handler_called_ = false;
++  Execute(MakeVMatrix(0b111'100, /*vs2=*/8, /*vs1=*/16, 0b001, /*mtd=*/0));
++  EXPECT_TRUE(was_trap_handler_called_);
++}
++
+ }  // namespace
+diff --git a/sim/test/coralnpu_xstatus_test.cc b/sim/test/coralnpu_xstatus_test.cc
+index 697bd21..198bd14 100755
+--- a/sim/test/coralnpu_xstatus_test.cc
++++ b/sim/test/coralnpu_xstatus_test.cc
+@@ -96,28 +96,29 @@ TEST_F(CoralNPUXStatusTest, UpdateVsUpdatesSd) {
+ }
+ 
+ TEST_F(CoralNPUXStatusTest, WriteMaskHonored) {
+-  // Try writing all 1s via 32-bit Write. Only bits in coralnpu_write_mask_32_
+-  // (0x607fffbb) should stick.
++  // Try writing all 1s via 32-bit Write. Bits in coralnpu_write_mask_32_
++  // stick, and setting VS to dirty dynamically reflects in SD (bit 31).
+   constexpr uint32_t kExpectedWriteMask32 = 0x607fffbbU;
++  constexpr uint32_t kExpectedReadValue32 = kExpectedWriteMask32 | 0x8000'0000U;
+   mstatus_->Write(0xffff'ffffU);
+ 
+   EXPECT_EQ(mstatus_->ms(), kMsDirty);
+-  EXPECT_EQ(mstatus_->GetUint32(), kExpectedWriteMask32);
+-  EXPECT_EQ(mstatus_->AsUint32(), kExpectedWriteMask32);
++  EXPECT_EQ(mstatus_->GetUint32(), kExpectedReadValue32);
++  EXPECT_EQ(mstatus_->AsUint32(), kExpectedReadValue32);
+ }
+ 
+ TEST_F(CoralNPUXStatusTest, BaseSdTrueWhenMsOff) {
+-  // Setting bit 31 via Set(uint32_t) stretches it to bit 63 in the 64-bit
+-  // representation, making RiscVMStatus::sd() true while ms() remains kMsOff.
+-  mstatus_->Set(0x8000'0000U);
++  // Setting VS to dirty makes RiscVMStatus::sd() true while ms() remains kMsOff.
++  mstatus_->set_vs(kMsDirty);
++  mstatus_->Submit();
+   EXPECT_EQ(mstatus_->ms(), kMsOff);
+   EXPECT_TRUE(mstatus_->sd());
+-  EXPECT_EQ(mstatus_->GetUint32(), 0x8000'0000U);
+-  EXPECT_EQ(mstatus_->AsUint32(), 0x8000'0000U);
++  EXPECT_NE(mstatus_->GetUint32() & 0x8000'0000U, 0U);
++  EXPECT_NE(mstatus_->AsUint32() & 0x8000'0000U, 0U);
+ }
+ 
+ TEST_F(CoralNPUXStatusTest, Uint32Constructor) {
+-  constexpr uint32_t kInitialVal = (kMsDirty << 29) | 0x8000'0000U;
++  constexpr uint32_t kInitialVal = (kMsDirty << 29);
+   CoralNPUMStatus mstatus32(kInitialVal, state_.get(), misa_.get());
+   EXPECT_EQ(mstatus32.ms(), kMsDirty);
+   EXPECT_TRUE(mstatus32.sd());
+@@ -129,11 +130,11 @@ TEST_F(CoralNPUXStatusTest, Uint32Constructor) {
+ 
+ TEST_F(CoralNPUXStatusTest, SetAndClearBits32) {
+   constexpr uint32_t kMsMask32 = 0b11U << 29;
+-  // Attempt to set MS bits plus a read-only bit (bit 31). Only MS bits should
+-  // be set because SetBits honors coralnpu_write_mask_32_.
++  // Attempt to set MS bits plus a read-only bit (bit 31). MS=Dirty dynamically
++  // reflects in SD (bit 31), and clearing MS to Clean clears SD.
+   mstatus_->SetBits((kMsDirty << 29) | 0x8000'0000U);
+   EXPECT_EQ(mstatus_->ms(), kMsDirty);
+-  EXPECT_EQ(mstatus_->GetUint32() & 0x8000'0000U, 0U);
++  EXPECT_EQ(mstatus_->GetUint32() & 0x8000'0000U, 0x8000'0000U);
+   EXPECT_EQ(mstatus_->GetUint32() & kMsMask32, kMsDirty << 29);
+   EXPECT_EQ(mstatus_->AsUint32() & kMsMask32, kMsDirty << 29);
+ 
+diff --git a/sim/test/coralnpu_m4_state_test.cc b/sim/test/coralnpu_m4_state_test.cc
+index 1234567..89abcdef 100755
+--- a/sim/test/coralnpu_m4_state_test.cc
++++ b/sim/test/coralnpu_m4_state_test.cc
+@@ -33,7 +33,7 @@ using ::mpact::sim::util::FlatDemandMemory;
+ 
+ // The set of named tiles that exist for each TILE_ELEMENT_WIDTH, and the
+ // effective tile edge (EFFECTIVE_TILE_EDGE) over which row/col indices are
+-// valid. These come straight from the spec's tile-count table (15.1.1.1).
++// valid. These come straight from the spec's tile-count table (12.1.1.1).
+ struct TileElementWidthConfig {
+   int tile_element_width;
+   std::vector<int> tiles;
+diff --git a/sim/BUILD b/sim/BUILD
+index 1234567..89abcdef 100755
+--- a/sim/BUILD
++++ b/sim/BUILD
+@@ -382,6 +382,9 @@ cc_library(
+     deps = [
+         "@abseil-cpp//absl/base",
++        "@abseil-cpp//absl/strings",
++        "@abseil-cpp//absl/types:span",
+         "@com_google_mpact-riscv//riscv:riscv_fp_state",
+         "@com_google_mpact-riscv//riscv:riscv_g",
+         "@com_google_mpact-riscv//riscv:riscv_state",
++        "@com_google_mpact-riscv//riscv:riscv_v",
+         "@mpact-sim//mpact/sim/generic:arch_state",
+@@ -469,6 +472,7 @@ mpact_isa_decoder(
+         "@com_google_mpact-riscv//riscv:riscv_bitmanip_instructions",
+         "@com_google_mpact-riscv//riscv:riscv_g",
+         "@com_google_mpact-riscv//riscv:riscv_v",
++        "@com_google_mpact-riscv//riscv:riscv_zfh_instructions",
+     ],
+ )
+ 
+@@ -556,6 +560,7 @@ mpact_isa_decoder(
+         "@com_google_mpact-riscv//riscv:riscv_bitmanip_instructions",
+         "@com_google_mpact-riscv//riscv:riscv_g",
+         "@com_google_mpact-riscv//riscv:riscv_v",
++        "@com_google_mpact-riscv//riscv:riscv_zfh_instructions",
+         "@com_google_mpact-riscv//riscv:riscv_zvt_instructions",
+     ],
+ )
+diff --git a/sim/coralnpu_m3.bin_fmt b/sim/coralnpu_m3.bin_fmt
+index 1234567..89abcdef 100755
+--- a/sim/coralnpu_m3.bin_fmt
++++ b/sim/coralnpu_m3.bin_fmt
+@@ -160,4 +160,13 @@
+ 
+ instruction group RiscVZvfbfminInst32_M3[32] : Inst32Format {
+   fcvt_bf16_s : RType : func7 == 0b010'0010, rs2 == 0b01000, opcode == 0b101'0011;
++  fcvt_s_bf16 : RType : func7 == 0b010'0000, rs2 == 0b00110, opcode == 0b101'0011;
++  flh         : IType : func3 == 0b001,  opcode == 0b000'0111;
++  fsh         : SType : func3 == 0b001,  opcode == 0b010'0111;
++  fmv_xh      : RType : func7 == 0b1110010, rs2 == 0, func3 == 0b000, opcode == 0b1010011;
++  fmv_hx      : RType : func7 == 0b1111010, rs2 == 0, func3 == 0b000, opcode == 0b1010011;
++  vfwcvtbf16_f_f_v : VArith : func6 == 0b010'010, vs1 == 0b01101, func3 == 0b001, opcode == 0b101'0111;
++  vfncvtbf16_f_f_w : VArith : func6 == 0b010'010, vs1 == 0b11101, func3 == 0b001, opcode == 0b101'0111;
++  vfwmaccbf16_vv   : VArith : func6 == 0b111'011, func3 == 0b001, opcode == 0b101'0111;
++  vfwmaccbf16_vf   : VArith : func6 == 0b111'011, func3 == 0b101, opcode == 0b101'0111;
+ }
+diff --git a/sim/coralnpu_m3.isa b/sim/coralnpu_m3.isa
+index 1234567..89abcdef 100755
+--- a/sim/coralnpu_m3.isa
++++ b/sim/coralnpu_m3.isa
+@@ -13,10 +13,12 @@
+ // limitations under the License.
+ 
+ includes {
++  #include "riscv/riscv_i_instructions.h"
+   #include "riscv/riscv_vector_fp_instructions.h"
+   #include "riscv/riscv_vector_fp_unary_instructions.h"
+   #include "riscv/riscv_vector_fp_reduction_instructions.h"
+   #include "riscv/riscv_vector_fp_compare_instructions.h"
++  #include "riscv/riscv_zfh_instructions.h"
+   #include "sim/coralnpu_m3_instructions.h"
+ }
+ 
+@@ -350,6 +352,33 @@ slot riscv_zvfbfmin {
+   default size = 4;
+   opcodes {
+     fcvt_bf16_s{: frs1, rm : frd, fflags},
+       disasm: "fcvt.bf16.s", "%frd, %frs1",
+       semfunc: "&::coralnpu::sim::CoralNPUFcvtBf16S";
++    fcvt_s_bf16{: frs1, rm : frd, fflags},
++      disasm: "fcvt.s.bf16", "%frd, %frs1",
++      semfunc: "&::coralnpu::sim::CoralNPUFcvtSBf16";
++    flh{(: rs1, I_imm12 : ), (: : frd)},
++      semfunc: "&::mpact::sim::riscv::RV32::RiscVILhu", "&::mpact::sim::riscv::RiscVZfhFlhChild",
++      disasm: "flh", "%frd, %I_imm12(%rs1)";
++    fsh{: rs1, S_imm12, frs2},
++      semfunc: "&::mpact::sim::riscv::RV32::RiscVISh",
++      disasm: "fsh", "%frs2, %S_imm12(%rs1)";
++    fmv_xh{: frs1 : rd},
++      semfunc: "&::coralnpu::sim::CoralNPUFmvXH",
++      disasm: "fmv.x.h", "%rd, %frs1";
++    fmv_hx{: rs1 : frd},
++      semfunc: "&::coralnpu::sim::CoralNPUFmvHX",
++      disasm: "fmv.h.x", "%frd, %rs1";
++    vfwcvtbf16_f_f_v{: vs2, vmask : vd, fflags},
++      disasm: "vfwcvtbf16.f.f.v", "%vd, %vs2, %vmask",
++      semfunc: "&::coralnpu::sim::CoralNPUVfwcvtbf16";
++    vfncvtbf16_f_f_w{: vs2, vmask : vd, fflags},
++      disasm: "vfncvtbf16.f.f.w", "%vd, %vs2, %vmask",
++      semfunc: "&::coralnpu::sim::CoralNPUVfncvtbf16";
++    vfwmaccbf16_vv{: vs2, vs1, vd, vmask : vd, fflags},
++      disasm: "vfwmaccbf16.vv", "%vd, %vs2, %vs1, %vmask",
++      semfunc: "&::coralnpu::sim::CoralNPUVfwmaccbf16vv";
++    vfwmaccbf16_vf{: vs2, frs1, vd, vmask : vd, fflags},
++      disasm: "vfwmaccbf16.vf", "%vd, %vs2, %frs1, %vmask",
++      semfunc: "&::coralnpu::sim::CoralNPUVfwmaccbf16vf";
+   }
+diff --git a/sim/coralnpu_m3_instructions.h b/sim/coralnpu_m3_instructions.h
+index 1234567..89abcdef 100755
+--- a/sim/coralnpu_m3_instructions.h
++++ b/sim/coralnpu_m3_instructions.h
+@@ -33,6 +33,13 @@ using ::mpact::sim::generic::Instruction;
+ // Destination operand 0: floating point destination register.
+ // Destination operand 1: fflags/fcsr destination register.
+ void CoralNPUFcvtBf16S(Instruction* inst);
++void CoralNPUFcvtSBf16(Instruction* inst);
++void CoralNPUFmvXH(Instruction* inst);
++void CoralNPUFmvHX(Instruction* inst);
++void CoralNPUVfwcvtbf16(Instruction* inst);
++void CoralNPUVfncvtbf16(Instruction* inst);
++void CoralNPUVfwmaccbf16vv(Instruction* inst);
++void CoralNPUVfwmaccbf16vf(Instruction* inst);
+ 
+ }  // namespace coralnpu::sim
+ 
+diff --git a/sim/coralnpu_m3_instructions.cc b/sim/coralnpu_m3_instructions.cc
+index 1234567..89abcdef 100755
+--- a/sim/coralnpu_m3_instructions.cc
++++ b/sim/coralnpu_m3_instructions.cc
+@@ -19,11 +19,24 @@
+ #include "sim/coralnpu_m3_instructions.h"
+ 
++#include <algorithm>
++#include <any>
++#include <cfenv>
++#include <cmath>
+ #include <cstdint>
++#include <cstring>
++#include <limits>
++#include <optional>
++#include <string_view>
+ 
+ #include "absl/base/casts.h"
++#include "absl/strings/numbers.h"
++#include "absl/types/span.h"
++#include "riscv/riscv_fp_host.h"
+ #include "riscv/riscv_fp_info.h"
+ #include "riscv/riscv_fp_state.h"
+ #include "riscv/riscv_instruction_helpers.h"
++#include "riscv/riscv_register.h"
+ #include "riscv/riscv_state.h"
++#include "riscv/riscv_vector_state.h"
+ #include "mpact/sim/generic/data_buffer.h"
+@@ -188,6 +201,695 @@ void CoralNPUFcvtBf16S(Instruction* inst) {
+   auto* fflags_db = inst->Destination(1)->AllocateDataBuffer();
+   fflags_db->Set<uint32_t>(0, fflags);
+   fflags_db->Submit();
+ }
+ 
++void CoralNPUFcvtSBf16(Instruction* inst) {
++  auto state = static_cast<::mpact::sim::riscv::RiscVState*>(inst->state());
++  if (state->mstatus()->fs() == 0) {
++    state->Trap(/*is_interrupt=*/false, /*trap_value=*/0,
++                *mpact::sim::riscv::ExceptionCode::kIllegalInstruction,
++                /*epc=*/inst->address(), inst);
++    return;
++  }
++  uint32_t rm_val = inst->Source(1)->AsUint32(0);
++  FPRoundingMode rm = static_cast<FPRoundingMode>(rm_val);
++  switch (rm) {
++    case FPRoundingMode::kRoundToNearest:
++    case FPRoundingMode::kRoundTowardsZero:
++    case FPRoundingMode::kRoundDown:
++    case FPRoundingMode::kRoundUp:
++    case FPRoundingMode::kRoundToNearestTiesToMax:
++      break;
++    case FPRoundingMode::kDynamic:
++      if (!state->rv_fp()->rounding_mode_valid()) {
++        state->Trap(/*is_interrupt=*/false, /*trap_value=*/0,
++                    *mpact::sim::riscv::ExceptionCode::kIllegalInstruction,
++                    /*epc=*/inst->address(), inst);
++        return;
++      }
++      break;
++    default:
++      state->Trap(/*is_interrupt=*/false, /*trap_value=*/0,
++                  *mpact::sim::riscv::ExceptionCode::kIllegalInstruction,
++                  /*epc=*/inst->address(), inst);
++      return;
++  }
++
++  auto* rs1_op = inst->Source(0);
++  uint64_t f64 = rs1_op->AsUint64(0);
++  uint32_t f32 = 0;
++  if ((f64 & 0xFFFFFFFFFFFF0000ULL) == 0xFFFFFFFFFFFF0000ULL) {
++    uint16_t bf16 = f64 & 0xFFFF;
++    f32 = bf16 << 16;
++    if (BF16Info::IsNaN(bf16)) {
++      f32 = FPTypeInfo<float>::kCanonicalNaN;
++      if (BF16Info::IsSNaN(bf16)) {
++        auto* fflags_db = inst->Destination(1)->AllocateDataBuffer();
++        fflags_db->Set<uint32_t>(0, *FPExceptions::kInvalidOp);
++        fflags_db->Submit();
++      }
++    }
++  } else {
++    f32 = FPTypeInfo<float>::kCanonicalNaN;
++  }
++
++  auto* rd_op =
++      static_cast<RegisterDestinationOperand<uint64_t>*>(inst->Destination(0));
++  auto* rd_reg = rd_op->GetRegister();
++  rd_reg->data_buffer()->Set<uint64_t>(
++      0, static_cast<uint64_t>(f32) | (~uint64_t{0} << 32));
++}
++
++void CoralNPUFmvXH(Instruction* inst) {
++  auto state = static_cast<::mpact::sim::riscv::RiscVState*>(inst->state());
++  if (state->mstatus()->fs() == 0) {
++    state->Trap(/*is_interrupt=*/false, /*trap_value=*/0,
++                *mpact::sim::riscv::ExceptionCode::kIllegalInstruction,
++                /*epc=*/inst->address(), inst);
++    return;
++  }
++  uint64_t raw = inst->Source(0)->AsUint64(0);
++  int32_t sext = static_cast<int32_t>(static_cast<int16_t>(raw & 0xFFFFU));
++  auto* rd_op =
++      static_cast<RegisterDestinationOperand<uint32_t>*>(inst->Destination(0));
++  auto* rd_reg = rd_op->GetRegister();
++  rd_reg->data_buffer()->Set<uint32_t>(0, static_cast<uint32_t>(sext));
++}
++
++void CoralNPUFmvHX(Instruction* inst) {
++  auto state = static_cast<::mpact::sim::riscv::RiscVState*>(inst->state());
++  if (state->mstatus()->fs() == 0) {
++    state->Trap(/*is_interrupt=*/false, /*trap_value=*/0,
++                *mpact::sim::riscv::ExceptionCode::kIllegalInstruction,
++                /*epc=*/inst->address(), inst);
++    return;
++  }
++  uint32_t rs1 = inst->Source(0)->AsUint32(0);
++  auto* rd_op =
++      static_cast<RegisterDestinationOperand<uint64_t>*>(inst->Destination(0));
++  auto* rd_reg = rd_op->GetRegister();
++  rd_reg->data_buffer()->Set<uint64_t>(
++      0, static_cast<uint64_t>(rs1 & 0xFFFFU) | kBoxedBf16Mask);
++}
++
++namespace {
++
++constexpr uint32_t kFcsrNV = 0x10;
++constexpr uint32_t kFcsrOF = 0x04;
++constexpr uint32_t kFcsrUF = 0x02;
++constexpr uint32_t kFcsrNX = 0x01;
++
++constexpr uint32_t kF32CanonicalQuietNaN = 0x7FC00000;
++constexpr uint32_t kF32ExponentFractionMask = 0x7FFFFFFF;
++constexpr uint32_t kF32Infinity = 0x7F800000;
++constexpr uint32_t kF32SignalingBit = 0x00400000;
++
++constexpr uint16_t kBf16CanonicalQuietNaN = 0x7FC0;
++constexpr uint16_t kBf16AbsMask = 0x7FFF;
++constexpr uint16_t kBf16Infinity = 0x7F80;
++
++struct Bf16ToF32Result {
++  uint32_t bits;
++  bool has_nv;
++};
++
++Bf16ToF32Result ConvertBf16ToF32Bits(uint16_t bf16) {
++  Bf16ToF32Result result = {static_cast<uint32_t>(bf16) << 16, false};
++  if ((bf16 & kBf16AbsMask) > kBf16Infinity) {
++    result.bits = kF32CanonicalQuietNaN;
++    if (BF16Info::IsSNaN(bf16)) {
++      result.has_nv = true;
++    }
++  }
++  return result;
++}
++
++struct ScopedHostRoundNearest {
++  int saved_round;
++  ScopedHostRoundNearest() : saved_round(std::fegetround()) {
++    if (saved_round != FE_TONEAREST) {
++      std::fesetround(FE_TONEAREST);
++    }
++  }
++  ~ScopedHostRoundNearest() {
++    if (saved_round != FE_TONEAREST) {
++      std::fesetround(saved_round);
++    }
++  }
++};
++
++struct RoundingResult {
++  float value;
++  bool has_nx;
++};
++
++RoundingResult RoundToNearestMaxMagnitude(double exact_res) {
++  ScopedHostRoundNearest round_guard;
++  if (std::isnan(exact_res)) {
++    return {absl::bit_cast<float>(kF32CanonicalQuietNaN), false};
++  }
++  RoundingResult res = {0.0f, false};
++  float f_rne = static_cast<float>(exact_res);
++  if (static_cast<double>(f_rne) != exact_res) {
++    res.has_nx = true;
++  }
++  float rdn;
++  float rup;
++  if (static_cast<double>(f_rne) == exact_res) {
++    rdn = f_rne;
++    rup = f_rne;
++  } else {
++    float other;
++    if (static_cast<double>(f_rne) < exact_res) {
++      other = std::nextafterf(f_rne, std::numeric_limits<float>::infinity());
++    } else {
++      other = std::nextafterf(f_rne, -std::numeric_limits<float>::infinity());
++    }
++    rdn = std::min(f_rne, other);
++    rup = std::max(f_rne, other);
++  }
++  if (rdn == rup) {
++    res.value = rdn;
++    return res;
++  }
++  res.has_nx = true;
++  double d_rdn = exact_res - static_cast<double>(rdn);
++  double d_rup = static_cast<double>(rup) - exact_res;
++  if (d_rdn < d_rup) {
++    res.value = rdn;
++  } else if (d_rdn > d_rup) {
++    res.value = rup;
++  } else {
++    res.value = (exact_res >= 0.0) ? rup : rdn;
++  }
++  return res;
++}
++
++uint32_t GetInstructionWord(::mpact::sim::riscv::RiscVState* state,
++                            const Instruction* inst) {
++  uint64_t address = inst->address();
++  auto* db = state->db_factory()->Allocate<uint32_t>(1);
++  state->LoadMemory(inst, address, db, nullptr, nullptr);
++  uint32_t inst_word = db->Get<uint32_t>(0);
++  db->DecRef();
++  if ((inst_word & 0b11) != 0b11) inst_word &= 0xffff;
++  return inst_word;
++}
++
++std::optional<int> GetRegisterIndex(
++    const ::mpact::sim::generic::RegisterBase* reg) {
++  if (reg == nullptr) return std::nullopt;
++  std::string_view name = reg->name();
++  if (name.empty() || (name[0] != 'v' && name[0] != 'f' && name[0] != 'x')) {
++    return std::nullopt;
++  }
++  int index = 0;
++  if (!absl::SimpleAtoi(name.substr(1), &index)) {
++    return std::nullopt;
++  }
++  return index;
++}
++
++bool IsElementActive(int element_idx, int vstart, int vl, bool masked,
++                     absl::Span<const uint8_t> mask_span) {
++  if (element_idx < vstart || element_idx >= vl) return false;
++  if (!masked || mask_span.empty()) return true;
++  int byte_idx = element_idx / 8;
++  int bit_idx = element_idx % 8;
++  return (mask_span[byte_idx] & (1 << bit_idx)) != 0;
++}
++
++enum class Vfwmaccbf16OperandType {
++  kVector,
++  kScalar,
++};
++
++void CoralNPUVfwmaccbf16(Vfwmaccbf16OperandType operand_type,
++                         Instruction* inst) {
++  auto* state = static_cast<::mpact::sim::riscv::RiscVState*>(inst->state());
++  if (state->mstatus()->fs() == 0) {
++    state->rv_vector()->set_vector_exception();
++    state->Trap(/*is_interrupt=*/false,
++                /*trap_value=*/GetInstructionWord(state, inst),
++                *::mpact::sim::riscv::ExceptionCode::kIllegalInstruction,
++                /*epc=*/inst->address(), inst);
++    return;
++  }
++  auto* vector_state = state->rv_vector();
++  if (vector_state->is_vill()) {
++    vector_state->set_vector_exception();
++    state->Trap(/*is_interrupt=*/false,
++                /*trap_value=*/GetInstructionWord(state, inst),
++                *::mpact::sim::riscv::ExceptionCode::kIllegalInstruction,
++                /*epc=*/inst->address(), inst);
++    return;
++  }
++
++  uint32_t frm_check = static_cast<uint32_t>(state->rv_fp()->GetRoundingMode());
++  if (frm_check == 5 || frm_check == 6 || frm_check > 7) {
++    state->rv_vector()->set_vector_exception();
++    state->Trap(/*is_interrupt=*/false,
++                /*trap_value=*/GetInstructionWord(state, inst),
++                *::mpact::sim::riscv::ExceptionCode::kIllegalInstruction,
++                inst->address(), inst);
++    return;
++  }
++  uint32_t vtype = vector_state->vtype();
++  int vsew = (vtype >> 3) & 0x7;
++  if (!state->rv_fp()->rounding_mode_valid() || vsew != 1) {
++    vector_state->set_vector_exception();
++    return;
++  }
++  uint32_t frm = static_cast<uint32_t>(state->rv_fp()->GetRoundingMode());
++
++  auto* vd_op = static_cast<::mpact::sim::riscv::RV32VectorDestinationOperand*>(
++      inst->Destination(0));
++  auto vd_obj = vd_op->GetObject(0);
++  auto* vd_reg_ptr =
++      std::any_cast<::mpact::sim::generic::RegisterBase*>(&vd_obj);
++
++  auto* vs2_op =
++      static_cast<::mpact::sim::riscv::RV32VectorSourceOperand*>(inst->Source(0));
++  auto* vs2_reg_ptr = vs2_op->GetRegister(0);
++
++  if (!vd_reg_ptr || !vs2_reg_ptr) {
++    vector_state->set_vector_exception();
++    return;
++  }
++
++  int vd = GetRegisterIndex(*vd_reg_ptr).value_or(-1);
++  int vs2 = GetRegisterIndex(vs2_reg_ptr).value_or(-1);
++  int vs1 = -1;
++  if (operand_type == Vfwmaccbf16OperandType::kVector) {
++    auto* vs1_vec_op =
++        static_cast<::mpact::sim::riscv::RV32VectorSourceOperand*>(
++            inst->Source(1));
++    if (!vs1_vec_op) {
++      vector_state->set_vector_exception();
++      return;
++    }
++    auto* vs1_reg_ptr = vs1_vec_op->GetRegister(0);
++    if (!vs1_reg_ptr) {
++      vector_state->set_vector_exception();
++      return;
++    }
++    vs1 = GetRegisterIndex(vs1_reg_ptr).value_or(-1);
++  }
++
++  auto* mask_vec_op =
++      (inst->SourcesSize() > 3 && inst->Source(3) != nullptr)
++          ? static_cast<::mpact::sim::riscv::RV32VectorSourceOperand*>(
++                inst->Source(3))
++          : nullptr;
++  bool masked =
++      (mask_vec_op != nullptr && mask_vec_op->GetRegister(0) != nullptr &&
++       mask_vec_op->GetRegister(0)->name() == "v0");
++
++  int vlmul = vector_state->vector_length_multiplier();
++  int lmul = std::max(1, vlmul / 8);
++  int emul = std::max(1, (vlmul * 2) / 8);
++
++  bool illegal_overlap_vs1 =
++      (vd < vs1 + lmul && vs1 < vd + emul) && (vs1 != vd + lmul);
++  bool illegal_overlap_vs2 =
++      (vd < vs2 + lmul && vs2 < vd + emul) && (vs2 != vd + lmul);
++
++  bool vs1_illegal = (operand_type == Vfwmaccbf16OperandType::kVector) &&
++                     (vs1 % lmul != 0 || illegal_overlap_vs1);
++
++  if (vlmul > 32 || vd % emul != 0 || vs1_illegal || vs2 % lmul != 0 ||
++      illegal_overlap_vs2 || (masked && vd == 0)) {
++    vector_state->set_vector_exception();
++    return;
++  }
++
++  auto* vs1_op = inst->Source(1);
++  auto* vd_src_op = inst->Source(2);
++
++  absl::Span<const uint8_t> mask_span;
++  if (masked && mask_vec_op != nullptr && mask_vec_op->GetRegister(0)) {
++    mask_span = mask_vec_op->GetRegister(0)->data_buffer()->Get<uint8_t>();
++  }
++
++  int vl = vector_state->vector_length();
++  int vstart = vector_state->vstart();
++
++  bool has_nv = false;
++  bool has_nx = false;
++  auto* host_fp = state->rv_fp()->host_fp_interface();
++  uint32_t old_fcsr = host_fp->GetRiscVFcsr();
++  host_fp->SetRiscVFcsr(old_fcsr & ~0x1F);
++
++  int num_vd_regs = std::min<int>(vd_op->size(), emul);
++  {
++    ::mpact::sim::riscv::ScopedFPStatus scoped_fp(host_fp);
++    ::mpact::sim::riscv::ScopedFPRoundingMode scoped_rm(host_fp, frm);
++
++    for (int reg_idx = 0; reg_idx < num_vd_regs; ++reg_idx) {
++      auto* vd_db = vd_op->AllocateDataBuffer(reg_idx);
++      auto vd_span = vd_db->template Get<uint32_t>();
++      for (int i = 0; i < vd_span.size(); ++i) {
++        int idx = reg_idx * vd_span.size() + i;
++        bool mask_val = true;
++        if (masked && !mask_span.empty()) {
++          mask_val = (mask_span[idx >> 3] & (1 << (idx & 7))) != 0;
++        }
++        bool active = (idx >= vstart && idx < vl) && mask_val;
++        uint32_t vd_val = vd_src_op->AsUint32(idx);
++        if (!active) {
++          vd_span[i] = vd_val;
++          continue;
++        }
++        uint16_t vs2_val = vs2_op->AsUint16(idx);
++        uint16_t vs1_val = 0;
++        if (operand_type == Vfwmaccbf16OperandType::kScalar) {
++          uint64_t f64 = vs1_op->AsUint64(0);
++          if ((f64 & kBoxedBf16Mask) != kBoxedBf16Mask) {
++            vs1_val = kBf16CanonicalQuietNaN;
++          } else {
++            vs1_val = static_cast<uint16_t>(f64);
++          }
++        } else {
++          vs1_val = vs1_op->AsUint16(idx);
++        }
++
++        Bf16ToF32Result vs1_conv = ConvertBf16ToF32Bits(vs1_val);
++        Bf16ToF32Result vs2_conv = ConvertBf16ToF32Bits(vs2_val);
++        uint32_t vs1_w = vs1_conv.bits;
++        uint32_t vs2_w = vs2_conv.bits;
++        if (vs1_conv.has_nv || vs2_conv.has_nv) has_nv = true;
++
++        bool vd_is_nan = (vd_val & kF32ExponentFractionMask) > kF32Infinity;
++        bool vd_is_snan = vd_is_nan && ((vd_val & kF32SignalingBit) == 0);
++        if (vd_is_snan) has_nv = true;
++
++        if (FPTypeInfo<float>::IsNaN(absl::bit_cast<float>(vs1_w)) ||
++            FPTypeInfo<float>::IsNaN(absl::bit_cast<float>(vs2_w)) ||
++            vd_is_nan) {
++          vd_span[i] = kF32CanonicalQuietNaN;
++          continue;
++        }
++
++        float vd_f;
++        float vs1_f;
++        float vs2_f;
++        std::memcpy(&vd_f, &vd_val, sizeof(float));
++        std::memcpy(&vs1_f, &vs1_w, sizeof(float));
++        std::memcpy(&vs2_f, &vs2_w, sizeof(float));
++
++        float res;
++        double exact_res =
++            static_cast<double>(vd_f) +
++            static_cast<double>(vs1_f) * static_cast<double>(vs2_f);
++        if (frm == 4) {
++          auto rounding_res = RoundToNearestMaxMagnitude(exact_res);
++          res = rounding_res.value;
++          if (rounding_res.has_nx) has_nx = true;
++        } else {
++          res = std::fma(vs1_f, vs2_f, vd_f);
++          if (static_cast<double>(res) != exact_res) {
++            has_nx = true;
++          }
++        }
++
++        uint32_t res_val;
++        std::memcpy(&res_val, &res, sizeof(float));
++        vd_span[i] = res_val;
++      }
++      vd_db->Submit(inst->Destination(0)->latency());
++    }
++  }
++
++  uint32_t new_fcsr = host_fp->GetRiscVFcsr();
++  uint32_t generated_flags = new_fcsr & 0x1F;
++  host_fp->SetRiscVFcsr(old_fcsr);
++
++  if (has_nv) generated_flags |= kFcsrNV;
++  if (has_nx) generated_flags |= kFcsrNX;
++
++  auto* fflags_dest = inst->Destination(1);
++  if (fflags_dest != nullptr) {
++    auto* fflags_db = fflags_dest->AllocateDataBuffer();
++    fflags_db->Set<uint32_t>(0, generated_flags);
++    fflags_db->Submit(inst->Destination(1)->latency());
++  }
++
++  vector_state->clear_vstart();
++}
++
++}  // namespace
++
++void CoralNPUVfwcvtbf16(Instruction* inst) {
++  auto state = static_cast<::mpact::sim::riscv::RiscVState*>(inst->state());
++  if (state->mstatus()->fs() == 0) {
++    state->rv_vector()->set_vector_exception();
++    state->Trap(/*is_interrupt=*/false,
++                /*trap_value=*/GetInstructionWord(state, inst),
++                *::mpact::sim::riscv::ExceptionCode::kIllegalInstruction,
++                /*epc=*/inst->address(), inst);
++    return;
++  }
++  auto* vector_state = state->rv_vector();
++  if (vector_state->is_vill()) {
++    vector_state->set_vector_exception();
++    state->Trap(/*is_interrupt=*/false,
++                /*trap_value=*/GetInstructionWord(state, inst),
++                *::mpact::sim::riscv::ExceptionCode::kIllegalInstruction,
++                /*epc=*/inst->address(), inst);
++    return;
++  }
++
++  auto* vs2_op = inst->Source(0);
++  auto* mask_op = inst->Source(1);
++  auto* vd_op = static_cast<::mpact::sim::riscv::RV32VectorDestinationOperand*>(
++      inst->Destination(0));
++
++  auto vd_obj = vd_op->GetObject();
++  auto* vd_reg_ptr =
++      std::any_cast<::mpact::sim::generic::RegisterBase*>(&vd_obj);
++
++  auto* vs2_vec_op =
++      static_cast<::mpact::sim::riscv::RV32VectorSourceOperand*>(vs2_op);
++  auto* mask_vec_op =
++      (mask_op != nullptr)
++          ? static_cast<::mpact::sim::riscv::RV32VectorSourceOperand*>(mask_op)
++          : nullptr;
++
++  int vd = (vd_reg_ptr && *vd_reg_ptr)
++               ? GetRegisterIndex(*vd_reg_ptr).value_or(-1)
++               : -1;
++  int vs2 = (vs2_vec_op && vs2_vec_op->GetRegister(0))
++                ? GetRegisterIndex(vs2_vec_op->GetRegister(0)).value_or(-1)
++                : -1;
++  bool masked =
++      (mask_vec_op != nullptr && mask_vec_op->GetRegister(0) != nullptr &&
++       mask_vec_op->GetRegister(0)->name() == "v0");
++
++  int vlmul = vector_state->vector_length_multiplier();
++  int lmul = std::max(1, vlmul / 8);
++  int emul = std::max(1, (vlmul * 2) / 8);
++  bool illegal_overlap =
++      (vd < vs2 + lmul && vs2 < vd + emul) && (vs2 != vd + lmul);
++
++  if (vlmul > 32 || vd % emul != 0 || vs2 % lmul != 0 || illegal_overlap ||
++      (masked && vd == 0)) {
++    vector_state->set_vector_exception();
++    return;
++  }
++
++  int vector_length_in_bytes = vector_state->vector_register_byte_length();
++  int elements_per_register = vector_length_in_bytes / sizeof(float);
++
++  absl::Span<const uint8_t> mask_span;
++  if (masked && mask_vec_op != nullptr && mask_vec_op->GetRegister(0)) {
++    mask_span = mask_vec_op->GetRegister(0)->data_buffer()->Get<uint8_t>();
++  }
++
++  int vl = vector_state->vector_length();
++  int vstart = vector_state->vstart();
++
++  bool has_nv = false;
++  auto* host_fp = state->rv_fp()->host_fp_interface();
++  uint32_t old_fcsr = host_fp->GetRiscVFcsr();
++  host_fp->SetRiscVFcsr(old_fcsr & ~0x1F);
++
++  int num_vd_regs = std::min<int>(vd_op->size(), emul);
++  {
++    ::mpact::sim::riscv::ScopedFPStatus scoped_fp(host_fp);
++
++    for (int reg_idx = 0; reg_idx < num_vd_regs; ++reg_idx) {
++      auto* vd_db = vd_op->CopyDataBuffer(reg_idx);
++      auto vd_span = vd_db->template Get<uint32_t>();
++      for (int i = 0; i < vd_span.size(); ++i) {
++        int element_idx = reg_idx * elements_per_register + i;
++        if (!IsElementActive(element_idx, vstart, vl, masked, mask_span)) {
++          continue;
++        }
++
++        uint16_t vs2_val = vs2_op->AsUint16(element_idx);
++        auto [f32_bits, nv_flag] = ConvertBf16ToF32Bits(vs2_val);
++        vd_span[i] = f32_bits;
++        if (nv_flag) has_nv = true;
++      }
++      vd_db->Submit(inst->Destination(0)->latency());
++    }
++  }
++
++  uint32_t new_fcsr = host_fp->GetRiscVFcsr();
++  uint32_t generated_flags = new_fcsr & 0x1F;
++  host_fp->SetRiscVFcsr(old_fcsr);
++
++  if (has_nv) generated_flags |= kFcsrNV;
++
++  auto* fflags_dest = inst->Destination(1);
++  if (fflags_dest != nullptr) {
++    auto* fflags_db = fflags_dest->AllocateDataBuffer();
++    fflags_db->Set<uint32_t>(0, generated_flags);
++    fflags_db->Submit(inst->Destination(1)->latency());
++  }
++
++  vector_state->clear_vstart();
++}
++
++void CoralNPUVfncvtbf16(Instruction* inst) {
++  auto state = static_cast<::mpact::sim::riscv::RiscVState*>(inst->state());
++  auto* vector_state = state->rv_vector();
++  if (state->mstatus()->fs() == 0) {
++    state->rv_vector()->set_vector_exception();
++    state->Trap(/*is_interrupt=*/false,
++                /*trap_value=*/GetInstructionWord(state, inst),
++                *::mpact::sim::riscv::ExceptionCode::kIllegalInstruction,
++                /*epc=*/inst->address(), inst);
++    return;
++  }
++  if (vector_state->is_vill()) {
++    vector_state->set_vector_exception();
++    state->Trap(/*is_interrupt=*/false,
++                /*trap_value=*/GetInstructionWord(state, inst),
++                *::mpact::sim::riscv::ExceptionCode::kIllegalInstruction,
++                /*epc=*/inst->address(), inst);
++    return;
++  }
++
++  if (!state->rv_fp()->rounding_mode_valid()) {
++    vector_state->set_vector_exception();
++    state->Trap(/*is_interrupt=*/false,
++                /*trap_value=*/GetInstructionWord(state, inst),
++                *::mpact::sim::riscv::ExceptionCode::kIllegalInstruction,
++                /*epc=*/inst->address(), inst);
++    return;
++  }
++  uint32_t frm = static_cast<uint32_t>(state->rv_fp()->GetRoundingMode());
++
++  auto* vs2_op = inst->Source(0);
++  auto* mask_op = inst->Source(1);
++  auto* vd_op = static_cast<::mpact::sim::riscv::RV32VectorDestinationOperand*>(
++      inst->Destination(0));
++
++  auto vd_obj = vd_op->GetObject();
++  auto* vd_reg_ptr =
++      std::any_cast<::mpact::sim::generic::RegisterBase*>(&vd_obj);
++
++  auto* vs2_vec_op =
++      static_cast<::mpact::sim::riscv::RV32VectorSourceOperand*>(vs2_op);
++  auto* mask_vec_op =
++      (mask_op != nullptr)
++          ? static_cast<::mpact::sim::riscv::RV32VectorSourceOperand*>(mask_op)
++          : nullptr;
++
++  int vd = (vd_reg_ptr && *vd_reg_ptr)
++               ? GetRegisterIndex(*vd_reg_ptr).value_or(-1)
++               : -1;
++  int vs2 = (vs2_vec_op && vs2_vec_op->GetRegister(0))
++                ? GetRegisterIndex(vs2_vec_op->GetRegister(0)).value_or(-1)
++                : -1;
++  bool masked =
++      (mask_vec_op != nullptr && mask_vec_op->GetRegister(0) != nullptr &&
++       mask_vec_op->GetRegister(0)->name() == "v0");
++
++  int vlmul = vector_state->vector_length_multiplier();
++  int lmul = std::max(1, vlmul / 8);
++  int emul = std::max(1, (vlmul * 2) / 8);
++  bool illegal_overlap = (vd < vs2 + emul && vs2 < vd + lmul) && (vd != vs2);
++
++  if (vlmul > 32 || vs2 % emul != 0 || vd % lmul != 0 || illegal_overlap ||
++      (masked && vd == 0)) {
++    vector_state->set_vector_exception();
++    return;
++  }
++
++  int vl = vector_state->vector_length();
++  int vstart = vector_state->vstart();
++  int vector_length_in_bytes = vector_state->vector_register_byte_length();
++  int elements_per_register = vector_length_in_bytes / sizeof(uint16_t);
++
++  absl::Span<const uint8_t> mask_span;
++  if (masked && mask_vec_op != nullptr && mask_vec_op->GetRegister(0)) {
++    mask_span = mask_vec_op->GetRegister(0)->data_buffer()->Get<uint8_t>();
++  }
++
++  bool has_nx = false;
++  bool has_uf = false;
++  bool has_of = false;
++  bool has_nv = false;
++
++  auto* host_fp = state->rv_fp()->host_fp_interface();
++  uint32_t old_fcsr = host_fp->GetRiscVFcsr();
++  host_fp->SetRiscVFcsr(old_fcsr & ~0x1F);
++
++  int num_vd_regs = std::min<int>(vd_op->size(), lmul);
++  {
++    ::mpact::sim::riscv::ScopedFPStatus scoped_fp(host_fp);
++
++    for (int reg_idx = 0; reg_idx < num_vd_regs; ++reg_idx) {
++      auto* vd_db = vd_op->CopyDataBuffer(reg_idx);
++      auto vd_span = vd_db->template Get<uint16_t>();
++
++      for (int i = 0; i < vd_span.size(); ++i) {
++        int element_idx = reg_idx * elements_per_register + i;
++        if (!IsElementActive(element_idx, vstart, vl, masked, mask_span)) {
++          continue;
++        }
++
++        uint32_t f32 = vs2_op->AsUint32(element_idx);
++        uint32_t fflags = 0;
++        uint16_t bf16 = ConvertF32ToBF16(f32, frm, state, &fflags);
++        if (fflags & kFcsrNX) has_nx = true;
++        if (fflags & kFcsrUF) has_uf = true;
++        if (fflags & kFcsrOF) has_of = true;
++        if (fflags & kFcsrNV) has_nv = true;
++
++        vd_span[i] = bf16;
++      }
++      vd_db->Submit(inst->Destination(0)->latency());
++    }
++  }
++
++  uint32_t new_fcsr = host_fp->GetRiscVFcsr();
++  uint32_t generated_flags = new_fcsr & 0x1F;
++  host_fp->SetRiscVFcsr(old_fcsr);
++
++  if (has_nx) generated_flags |= kFcsrNX;
++  if (has_uf) generated_flags |= kFcsrUF;
++  if (has_of) generated_flags |= kFcsrOF;
++  if (has_nv) generated_flags |= kFcsrNV;
++
++  auto* fflags_dest = inst->Destination(1);
++  if (fflags_dest != nullptr) {
++    auto* fflags_db = fflags_dest->AllocateDataBuffer();
++    fflags_db->Set<uint32_t>(0, generated_flags);
++    fflags_db->Submit(inst->Destination(1)->latency());
++  }
++
++  vector_state->clear_vstart();
++}
++
++void CoralNPUVfwmaccbf16vv(Instruction* inst) {
++  CoralNPUVfwmaccbf16(Vfwmaccbf16OperandType::kVector, inst);
++}
++
++void CoralNPUVfwmaccbf16vf(Instruction* inst) {
++  CoralNPUVfwmaccbf16(Vfwmaccbf16OperandType::kScalar, inst);
++}
++
+ }  // namespace coralnpu::sim
+diff --git a/sim/coralnpu_m4.bin_fmt b/sim/coralnpu_m4.bin_fmt
+index 1234567..89abcdef 100755
+--- a/sim/coralnpu_m4.bin_fmt
++++ b/sim/coralnpu_m4.bin_fmt
+@@ -52,6 +52,7 @@ decoder CoralNPUM4 {
+     RiscVZbbImmInst32,
+     RiscVPrivInst32,
+     CoralNPUV2CustomInst32,
++    RiscVZvfbfminInst32_M3,
+     RiscVZvtInst32,
+   };
+ };
+diff --git a/sim/coralnpu_m3.isa b/sim/coralnpu_m3.isa
+index 1234567..89abcdef 100755
+--- a/sim/coralnpu_m3.isa
++++ b/sim/coralnpu_m3.isa
+@@ -99,8 +99,8 @@ slot coralnpu_vfp {
+     vfmv_vf{: frs1, vmask : vd},
+       disasm: "vfmv.vf", "%vd, %frs1, %vmask",
+       semfunc: "&::mpact::sim::riscv::Vfmvvf";
+-    vfmerge_vf{: vs2, vs1, vmask : vd},
+-      disasm: "vfmerge.vf", "%vd, %vs2, %vs1, %vmask",
++    vfmerge_vf{: vs2, frs1, vmask : vd},
++      disasm: "vfmerge.vf", "%vd, %vs2, %frs1, %vmask",
+       semfunc: "&::mpact::sim::riscv::Vfmerge";
+     vmfeq_vv{: vs2, vs1, vmask : vd},
+

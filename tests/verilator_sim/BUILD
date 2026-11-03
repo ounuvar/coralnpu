@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("//rules:coralnpu_v2.bzl", "collect_coralnpu_elfs", "coralnpu_v2_binary")
+load("//rules:coralnpu_v2.bzl", "coralnpu_v2_binary")
 load("//rules:utils.bzl", "template_rule")
 
 coralnpu_v2_binary(
@@ -66,26 +66,6 @@ cc_library(
         "coralnpu/memory_if.h",
     ],
     defines = ["CORALNPU_SIMD=256"],
-)
-
-cc_binary(
-    name = "core_sim",
-    srcs = [
-        "coralnpu/core_tb.cc",
-        "@coralnpu_hw//hdl/chisel/src/coralnpu:VCore_parameters.h",
-    ],
-    defines = [
-        "VERILATOR_MODEL=VCore",
-    ],
-    deps = [
-        ":coralnpu_if",
-        ":sim_libs",
-        ":util",
-        "//hdl/chisel/src/coralnpu:core_cc_library",
-        "@com_google_absl//absl/flags:flag",
-        "@com_google_absl//absl/flags:parse",
-        "@com_google_absl//absl/flags:usage",
-    ],
 )
 
 CORE_MINI_AXI_TB_CC_LIBRARY_COMMON_SRCS = [
@@ -263,6 +243,7 @@ template_rule(
     srcs = [
         "coralnpu/core_mini_axi_sim.cc",
     ],
+    visibility = ["//visibility:public"],
 )
 
 cc_test(
@@ -286,26 +267,6 @@ cc_test(
         ":core_mini_axi_tb",
         "@com_google_absl//absl/flags:parse",
         "@com_google_absl//absl/log:initialize",
-    ],
-)
-
-cc_binary(
-    name = "core_scalar_sim",
-    srcs = [
-        "coralnpu/core_tb.cc",
-        "@coralnpu_hw//hdl/chisel/src/coralnpu:VCoreScalar_parameters.h",
-    ],
-    defines = [
-        "VERILATOR_MODEL=VCoreScalar",
-    ],
-    deps = [
-        ":coralnpu_if",
-        ":sim_libs",
-        ":util",
-        "//hdl/chisel/src/coralnpu:core_scalar_cc_library",
-        "@com_google_absl//absl/flags:flag",
-        "@com_google_absl//absl/flags:parse",
-        "@com_google_absl//absl/flags:usage",
     ],
 )
 
@@ -339,46 +300,3 @@ cc_test(
         "//hdl/chisel/src/coralnpu:dbus2axi_cc_library",
     ],
 )
-
-cc_test(
-    name = "l1dcache_tb",
-    size = "large",
-    srcs = [
-        "coralnpu/l1dcache_tb.cc",
-    ],
-    deps = [
-        ":coralnpu_if",
-        ":sim_libs",
-        "//hdl/chisel/src/coralnpu:l1dcache_cc_library",
-    ],
-)
-
-cc_test(
-    name = "l1dcachebank_tb",
-    size = "large",
-    srcs = [
-        "coralnpu/l1dcache_tb.cc",
-    ],
-    defines = [
-        "L1DCACHEBANK",
-    ],
-    deps = [
-        ":coralnpu_if",
-        ":sim_libs",
-        "//hdl/chisel/src/coralnpu:l1dcachebank_cc_library",
-    ],
-)
-
-cc_test(
-    name = "l1icache_tb",
-    srcs = [
-        "coralnpu/l1icache_tb.cc",
-    ],
-    deps = [
-        ":coralnpu_if",
-        ":sim_libs",
-        "//hdl/chisel/src/coralnpu:l1icache_cc_library",
-    ],
-)
-
-collect_coralnpu_elfs()

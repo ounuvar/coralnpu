@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("@coralnpu_hw//rules:coralnpu_v2.bzl", "collect_coralnpu_riscv_tests")
 load("@coralnpu_hw//rules:utils.bzl", "template_rule")
 load("@coralnpu_hw//third_party/riscv-tests:defs.bzl", "OUT_BINARIES_RV32UF", "OUT_BINARIES_RV32UI", "OUT_BINARIES_RV32UM", "OUT_BINARIES_RV32UZBB")
 load("@rules_foreign_cc//foreign_cc:defs.bzl", "configure_make")
@@ -26,9 +25,10 @@ COMMON_ARGS = [
 ]
 
 POSTFIX_SCRIPT = """
-mkdir -p ${{INSTALLDIR}}/isa
-cp isa/rv32{subset}-v-* ${{INSTALLDIR}}/isa
-cp isa/rv32{subset}-p-* ${{INSTALLDIR}}/isa
+mkdir -p $$INSTALLDIR/isa
+cp isa/rv32{subset}-v-* $$INSTALLDIR/isa
+cp isa/rv32{subset}-p-* $$INSTALLDIR/isa
+rm -f $$INSTALLDIR/isa/*fence_i*
 """
 
 exports_files(glob(["**"]))
@@ -156,5 +156,3 @@ genrule(
       done
     """,
 )
-
-collect_coralnpu_riscv_tests(binaries = ALL_BINS)

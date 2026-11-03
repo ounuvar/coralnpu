@@ -31,6 +31,7 @@ module rvv_backend_decode_unit_lsu
   RVVOpCode                       inst_opcode;      // inst original encoding[6:0]
 
   logic   [`XLEN-1:0]             rs1;    
+  logic                           csr_vill;
   logic   [`VSTART_WIDTH-1:0]     csr_vstart;
   logic   [`VL_WIDTH-1:0]         csr_vl;
   logic   [`VL_WIDTH-1:0]         evl;
@@ -40,7 +41,6 @@ module rvv_backend_decode_unit_lsu
 `ifdef ZVT_ON
   logic   [1:0]                   csr_mtwiden;
   logic   [$clog2(`TE):0]         csr_tm;
-  TSS_t                           tss;
 `endif  
   EMUL_e                          emul_vd;          
   EMUL_e                          emul_vs2;          
@@ -100,17 +100,15 @@ module rvv_backend_decode_unit_lsu
   assign inst_vd        = inst_valid ? inst.bits[4:0] : 'b0;
   assign inst_opcode    = inst_valid ? inst.opcode : LOAD;
   assign rs1            = inst_valid ? inst.rs1 : 'b0;
+  assign csr_vill       = inst_valid ? inst.arch_state.vill : 'b0;
   assign csr_vstart     = inst_valid ? inst.arch_state.vstart : 'b0;
   assign csr_vl         = inst_valid ? inst.arch_state.vl : 'b0;
   assign csr_sew        = inst_valid ? inst.arch_state.sew : SEW8;
   assign csr_lmul       = inst_valid ? inst.arch_state.lmul_orig : LMULRESERVED;
   assign reduced_lmul   = inst_valid ? inst.arch_state.lmul : LMULRESERVED;  
-  `ifdef ZVT_ON
+`ifdef ZVT_ON
   assign csr_mtwiden    = inst_valid ? inst.arch_state.mtwiden : 'b0;
   assign csr_tm         = inst_valid ? inst.arch_state.tm : 'b0;
-  assign tss.tile       = rs1[30:27];
-  assign tss.pattern    = rs1[24];
-  assign tss.index      = rs1[$clog2(`TE)-1:0];
 `endif
 
 // decode funct6
@@ -3051,23 +3049,24 @@ module rvv_backend_decode_unit_lsu
 
       `ifdef ZVT_ON
         TILELDST: begin
-          case(csr_lmul)
-            LMUL1: begin
-              if(inst_funct6[5:3]==TILESEW8) begin
-                emul_max = EMUL1;
-              end
+          case(inst_funct6[5:3])
+            TILESEW8: begin
+              emul_max      = EMUL1;
             end
-            LMUL2: begin
-              if(inst_funct6[5:3]==TILESEW16) begin
-                emul_max      = EMUL2;
-                uop_index_max = (`UOP_INDEX_WIDTH)'('d1);
-              end
+            TILESEW16: begin
+              emul_max      = EMUL2;
+              uop_index_max = (csr_vl > (`TE/2)) ? (`UOP_INDEX_WIDTH)'('d1) : (`UOP_INDEX_WIDTH)'('d0);
             end
-            LMUL4: begin
-              if(inst_funct6[5:3]==TILESEW32) begin
-                emul_max      = EMUL4;
+            TILESEW32: begin
+              emul_max      = EMUL4;
+              if (csr_vl > (`TE*3/4))
                 uop_index_max = (`UOP_INDEX_WIDTH)'('d3);
-              end
+              else if (csr_vl > (`TE/2))
+                uop_index_max = (`UOP_INDEX_WIDTH)'('d2);
+              else if (csr_vl > (`TE/4))
+                uop_index_max = (`UOP_INDEX_WIDTH)'('d1);
+              else
+                uop_index_max = (`UOP_INDEX_WIDTH)'('d0);
             end
           endcase
         end
@@ -3389,14 +3388,19 @@ module rvv_backend_decode_unit_lsu
 
       `ifdef ZVT_ON
         TILE_LDST: begin
-          check_special = inst_vm&(csr_vstart<=(`VSTART_WIDTH)'(tss.index));
+          check_special = inst_vm
+                        `ifndef RVVCHECK_VSTART_VL
+                          &check_evl_not_0&check_vstart_sle_evl
+                        `endif 
+                          &(csr_mtwiden!=2'b00);
         end
       `endif
     endcase
   end
 
   //check common requirements for all instructions
-  assign check_common = check_vd_align&check_vs2_align&check_vd_in_range&check_sew&check_lmul
+  assign check_common = (!csr_vill || (funct6_lsu.lsu_funct6.lsu_umop==US_WR))
+                        &check_vd_align&check_vs2_align&check_vd_in_range&check_sew&check_lmul
                       `ifdef RVVCHECK_VSTART_VL
                         &check_evl_not_0&check_vstart_sle_evl
                       `endif
@@ -3536,11 +3540,16 @@ module rvv_backend_decode_unit_lsu
           end
         endcase
       end
+      `ifdef ZVT_ON
+      TILE_LDST: begin
+        evl = (csr_vl > `TE) ? `TE : csr_vl;
+      end
+    `endif
     endcase
   end
   
   // check evl is not 0
-  assign check_evl_not_0 = evl!='b0;
+  assign check_evl_not_0 = |evl;
 
   // check vstart < evl
   assign check_vstart_sle_evl = {1'b0,csr_vstart} < evl;

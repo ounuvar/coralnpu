@@ -246,6 +246,40 @@ module Sram #(
   always @(posedge clock) rvalid_reg <= enable;
   assign rvalid = rvalid_reg;
 
+`elsif USE_ASAP7
+  ///////////////////////////
+  //////// ASAP7 SRAM ///////
+  ///////////////////////////
+  // WARNING: fakeram_512x128 and fakeram_2048x128 are abstract non-functional
+  // PnR placement proxies without byte-enable pins and should not be used for
+  // functional simulation.
+  if (NUM_ENTRIES == 2048) begin
+    fakeram_2048x128 u_sram (
+        .rd_out(rdata),
+        .addr_in(addr),
+        .we_in(write & (|wmask)),
+        .wd_in(wdata),
+        .clk(clock),
+        .ce_in(enable)
+    );
+  end else if (NUM_ENTRIES == 512) begin
+    fakeram_512x128 u_sram (
+        .rd_out(rdata),
+        .addr_in(addr),
+        .we_in(write & (|wmask)),
+        .wd_in(wdata),
+        .clk(clock),
+        .ce_in(enable)
+    );
+  end else begin
+    initial begin
+      $error("Unsupported SRAM size for ASAP7: %d", NUM_ENTRIES);
+    end
+  end
+
+  reg rvalid_reg;
+  always @(posedge clock) rvalid_reg <= enable;
+  assign rvalid = rvalid_reg;
 
 `else
   ///////////////////////////
@@ -259,6 +293,7 @@ module Sram #(
   assign rvalid = rvalid_reg;
 
 `ifdef SYNTHESIS
+  (* ram_style = "ultra" *)
   bit [127:0] mem[0:NUM_ENTRIES-1];
   reg [ADDR_WIDTH-1:0] raddr;
 

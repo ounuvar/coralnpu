@@ -1,13 +1,13 @@
+from coralnpu_test_utils.coralflow.runner import coralflow_main, coralflow_test
 import cocotb
 from cocotb.triggers import RisingEdge
 import itertools
+import logging
 import numpy as np
 import tqdm
 from coralnpu_test_utils.core_mini_axi_interface import CoreMiniAxiInterface
 from coralnpu_test_utils.rvv_type_util import construct_vtype, DTYPE_TO_SEW, SEWS, SEW_TO_LMULS_AND_VLMAXS, LMUL_TO_EMUL
-from coralnpu_test_utils.sim_backends.verilator_test_fixture import VerilatorTestFixture
 from bazel_tools.tools.python.runfiles import runfiles
-from cocotb.triggers import RisingEdge
 
 SEWS = [
     0b000,  # SEW8
@@ -48,18 +48,15 @@ def _illegal_vtype(sew, lmul):
     return False
 
 
-@cocotb.test()
-async def core_mini_rvv_load(dut):
+@coralflow_test
+async def core_mini_rvv_load(fixture):
     """Testbench to test RVV load intrinsics.
 
     This test loads 16 bytes of data and read back from the input address.
     Todo: update the test with store unit.
     """
     # Test bench setup
-    core_mini_axi = CoreMiniAxiInterface(dut)
-    await core_mini_axi.init()
-    await core_mini_axi.reset()
-    cocotb.start_soon(core_mini_axi.clock.start())
+    core_mini_axi = fixture.core_mini_axi
     r = runfiles.Create()
 
     elf_path = r.Rlocation("coralnpu_hw/tests/cocotb/rvv/rvv_load.elf")
@@ -101,8 +98,8 @@ async def core_mini_rvv_load(dut):
     await core_mini_axi.wait_for_halted()
 
 
-@cocotb.test()
-async def core_mini_rvv_add(dut):
+@coralflow_test
+async def core_mini_rvv_add(fixture):
     """Testbench to test RVV add intrinsics.
 
     This test loads 16 bytes of data from each input buffer and saved result into a register.
@@ -110,10 +107,7 @@ async def core_mini_rvv_add(dut):
     Todo: update the test with store unit.
     """
     # Test bench setup
-    core_mini_axi = CoreMiniAxiInterface(dut)
-    await core_mini_axi.init()
-    await core_mini_axi.reset()
-    cocotb.start_soon(core_mini_axi.clock.start())
+    core_mini_axi = fixture.core_mini_axi
     r = runfiles.Create()
 
     elf_path = r.Rlocation("coralnpu_hw/tests/cocotb/rvv/rvv_add.elf")
@@ -164,52 +158,42 @@ async def core_mini_rvv_add(dut):
     await core_mini_axi.wait_for_halted()
 
 
-@cocotb.test()
-async def core_mini_vstart_store(dut):
+@coralflow_test
+async def core_mini_vstart_store(fixture):
     """Testbench to test vstart store.
     """
-    # Test bench setup
-    core_mini_axi = CoreMiniAxiInterface(dut)
-    await core_mini_axi.init()
-    await core_mini_axi.reset()
-    cocotb.start_soon(core_mini_axi.clock.start())
     r = runfiles.Create()
 
     elf_path = r.Rlocation("coralnpu_hw/tests/cocotb/rvv/vstart_store.elf")
     if not elf_path:
         raise ValueError("elf_path must consist a valid path")
-    with open(elf_path, "rb") as f:
-        entry_point = await core_mini_axi.load_elf(f)
-
-    #Write your program inputs
-    with open(elf_path, "rb") as f:
-        input_addr = core_mini_axi.lookup_symbol(f, "input_data")
-        output_addr = core_mini_axi.lookup_symbol(f, "output_data")
+    await fixture.load_elf_and_lookup_symbols(
+        elf_path, ["input_data", "output_data"]
+    )
 
     input_data = np.random.randint(
         np.iinfo(np.uint8).min, np.iinfo(np.uint8).max, 16, dtype=np.uint8
     )
-    await core_mini_axi.write(input_addr, input_data)
-    await core_mini_axi.write(output_addr, np.zeros(16, dtype=np.uint8))
+    await fixture.write("input_data", input_data)
+    await fixture.write("output_data", np.zeros(16, dtype=np.uint8))
 
-    await core_mini_axi.execute_from(entry_point)
-    await core_mini_axi.wait_for_wfi()
+    await fixture.run_to_wfi()
 
-    output_data = (await core_mini_axi.read(output_addr, 16)).view(np.uint8)
+    output_data = (await fixture.read("output_data", 16)).view(np.uint8)
 
     # vstart is 4, so first 4 elements are skipped.
     # 12 elements are stored.
     assert np.array_equal(output_data[0:4], np.zeros(4, dtype=np.uint8))
     assert np.array_equal(output_data[4:], input_data[4:])
 
-    await core_mini_axi.raise_irq()
-    await core_mini_axi.wait_for_halted()
+    if hasattr(fixture, "core_mini_axi"):
+        await fixture.core_mini_axi.raise_irq()
+        await fixture.core_mini_axi.wait_for_halted()
 
 
-@cocotb.test()
-async def core_mini_vcsr_test(dut):
+@coralflow_test
+async def core_mini_vcsr_test(fixture):
     """Testbench to test vcsr is set correctly."""
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
 
     elf_path = r.Rlocation("coralnpu_hw/tests/cocotb/rvv/vcsr_test.elf")
@@ -262,8 +246,7 @@ async def core_mini_vcsr_test(dut):
                 assert (lmul == lmul_result)
 
 
-async def test_vstart_not_zero_failure(dut, binary):
-    fixture = await VerilatorTestFixture.Create(dut)
+async def test_vstart_not_zero_failure(fixture, binary):
     r = runfiles.Create()
 
     elf_path = r.Rlocation(binary)
@@ -296,35 +279,34 @@ async def test_vstart_not_zero_failure(dut, binary):
                     assert (mcause_result == 0x2)
 
 
-@cocotb.test()
-async def core_mini_viota_test(dut):
+@coralflow_test
+async def core_mini_viota_test(fixture):
     """Testbench to test vstart!=0 viota."""
     await test_vstart_not_zero_failure(
-        dut, "coralnpu_hw/tests/cocotb/rvv/viota_test.elf"
+        fixture, "coralnpu_hw/tests/cocotb/rvv/viota_test.elf"
     )
 
 
-@cocotb.test()
-async def core_mini_vfirst_test(dut):
+@coralflow_test
+async def core_mini_vfirst_test(fixture):
     """Testbench to test vstart!=0 vfirst."""
     await test_vstart_not_zero_failure(
-        dut, "coralnpu_hw/tests/cocotb/rvv/vfirst_test.elf"
+        fixture, "coralnpu_hw/tests/cocotb/rvv/vfirst_test.elf"
     )
 
 
-@cocotb.test()
-async def core_mini_vcpop_exception_test(dut):
+@coralflow_test
+async def core_mini_vcpop_exception_test(fixture):
     """Testbench to test vstart!=0 vcpop."""
     await test_vstart_not_zero_failure(
-        dut, "coralnpu_hw/tests/cocotb/rvv/vcpop_exception_test.elf"
+        fixture, "coralnpu_hw/tests/cocotb/rvv/vcpop_exception_test.elf"
     )
 
 
-@cocotb.test()
-async def core_mini_vcpop_test(dut):
+@coralflow_test
+async def core_mini_vcpop_test(fixture):
     """Test vcpop usage accessible from intrinsics."""
     # mask is not accessible from here.
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     cases = [
         {
@@ -417,7 +399,7 @@ async def core_mini_vcpop_test(dut):
 
         await fixture.run_to_halt()
 
-        actual_output = (await fixture.read_word('result')).view(np.uint32)
+        actual_output = await fixture.read_word('result')
 
         debug_msg = str({
             'impl': impl,
@@ -428,41 +410,40 @@ async def core_mini_vcpop_test(dut):
         assert (actual_output == expected_output), debug_msg
 
 
-@cocotb.test()
-async def core_mini_vcompress_test(dut):
+@coralflow_test
+async def core_mini_vcompress_test(fixture):
     """Testbench to test vstart!=0 vcompress."""
     await test_vstart_not_zero_failure(
-        dut, "coralnpu_hw/tests/cocotb/rvv/vcompress_test.elf"
+        fixture, "coralnpu_hw/tests/cocotb/rvv/vcompress_test.elf"
     )
 
 
-@cocotb.test()
-async def core_mini_vmsbf_test(dut):
+@coralflow_test
+async def core_mini_vmsbf_test(fixture):
     """Testbench to test vstart!=0 vmsbf."""
     await test_vstart_not_zero_failure(
-        dut, "coralnpu_hw/tests/cocotb/rvv/vmsbf_test.elf"
+        fixture, "coralnpu_hw/tests/cocotb/rvv/vmsbf_test.elf"
     )
 
 
-@cocotb.test()
-async def core_mini_vmsof_test(dut):
+@coralflow_test
+async def core_mini_vmsof_test(fixture):
     """Testbench to test vstart!=0 vmsof."""
     await test_vstart_not_zero_failure(
-        dut, "coralnpu_hw/tests/cocotb/rvv/vmsof_test.elf"
+        fixture, "coralnpu_hw/tests/cocotb/rvv/vmsof_test.elf"
     )
 
 
-@cocotb.test()
-async def core_mini_vmsif_test(dut):
+@coralflow_test
+async def core_mini_vmsif_test(fixture):
     """Testbench to test vstart!=0 vmsbf."""
     await test_vstart_not_zero_failure(
-        dut, "coralnpu_hw/tests/cocotb/rvv/vmsif_test.elf"
+        fixture, "coralnpu_hw/tests/cocotb/rvv/vmsif_test.elf"
     )
 
 
-@cocotb.test()
-async def core_mini_vill_test(dut):
-    fixture = await VerilatorTestFixture.Create(dut)
+@coralflow_test
+async def core_mini_vill_test(fixture):
     r = runfiles.Create()
 
     elf_path = r.Rlocation("coralnpu_hw/tests/cocotb/rvv/vill_test.elf")
@@ -478,9 +459,8 @@ async def core_mini_vill_test(dut):
     assert (mcause_result == 0x2)
 
 
-@cocotb.test()
-async def core_mini_vill_whole_reg_test(dut):
-    fixture = await VerilatorTestFixture.Create(dut)
+@coralflow_test
+async def core_mini_vill_whole_reg_test(fixture):
     r = runfiles.Create()
     await fixture.load_elf_and_lookup_symbols(
         r.Rlocation("coralnpu_hw/tests/cocotb/rvv/vill_whole_reg_test.elf"),
@@ -490,7 +470,7 @@ async def core_mini_vill_whole_reg_test(dut):
     src_data = np.arange(1, 129, dtype=np.uint8)
     await fixture.write("src_data", src_data)
 
-    await fixture.run_to_halt()
+    await fixture.run_to_halt(timeout_cycles=20000)
 
     faulted = await fixture.read_word("faulted")
     assert faulted == 0, f"Unexpected fault occurred (faulted={faulted})"
@@ -498,10 +478,9 @@ async def core_mini_vill_whole_reg_test(dut):
     assert test_passed == 1, f"Test did not pass (test_passed={test_passed})"
 
 
-@cocotb.test()
-async def core_mini_vl_test(dut):
+@coralflow_test
+async def core_mini_vl_test(fixture):
     """Testbench to test vsetvl instruciton saturate vl correctly."""
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
 
     elf_path = r.Rlocation("coralnpu_hw/tests/cocotb/rvv/vcsr_test.elf")
@@ -550,8 +529,8 @@ async def core_mini_vl_test(dut):
         assert (vl_result == (vlmax - 1))
 
 
-@cocotb.test()
-async def vsetvl_test(dut):
+@coralflow_test
+async def vsetvl_test(fixture):
     cases = [{
         'impl': 'vsetvl_max',
         'vtype': construct_vtype(1, 1, sew, lmul),
@@ -649,7 +628,6 @@ async def vsetvl_test(dut):
         },
     ]
 
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     await fixture.load_elf_and_lookup_symbols(
         r.Rlocation('coralnpu_hw/tests/cocotb/rvv/vsetvl_test.elf'),
@@ -680,20 +658,18 @@ async def vsetvl_test(dut):
 
             await fixture.run_to_halt()
 
-            actual_vl1 = (await fixture.read_word('vl_out1')).view(np.uint32)
-            actual_vl2 = (await fixture.read_word('vl_out1')).view(np.uint32)
-            actual_vtype = (await
-                            fixture.read_word('vtype_out')).view(np.uint32)
+            actual_vl1 = await fixture.read_word('vl_out1')
+            actual_vl2 = await fixture.read_word('vl_out2')
+            actual_vtype = await fixture.read_word('vtype_out')
 
             assert (actual_vl1 == expected_vl)
             assert (actual_vl2 == expected_vl)
             assert (actual_vtype == vtype)
 
 
-async def vslide_test(dut, cases, expfunc):
+async def vslide_test(fixture, cases, expfunc):
     """Test slide[1]{up,down} usage accessible from intrinsics."""
     # mask is not accessible from here.
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     await fixture.load_elf_and_lookup_symbols(
         r.Rlocation('coralnpu_hw/tests/cocotb/rvv/vslide.elf'),
@@ -782,8 +758,8 @@ async def vslide_test(dut, cases, expfunc):
         assert (actual_output == expected_output).all(), debug_msg
 
 
-@cocotb.test()
-async def vslideup_test(dut):
+@coralflow_test
+async def vslideup_test(fixture):
     """Test slideup usage accessible from intrinsics."""
 
     def expfunc(dest, src, scalar, vl, offset, vlmax):
@@ -890,11 +866,11 @@ async def vslideup_test(dut):
         'vl': vl,
         'offset': offset
     } for vl in [32, 31, 16, 8, 4] for offset in [0, 4, 16, 30, 32]]
-    await vslide_test(dut, cases, expfunc)
+    await vslide_test(fixture, cases, expfunc)
 
 
-@cocotb.test()
-async def vslidedown_test(dut):
+@coralflow_test
+async def vslidedown_test(fixture):
     """Test slidedown usage accessible from intrinsics."""
 
     def expfunc(dest, src, scalar, vl, offset, vlmax):
@@ -1019,11 +995,11 @@ async def vslidedown_test(dut):
                        for vl in [32, 31, 16, 8, 4]
                        for offset in [0, 4, 16, 30, 32, 33]
                    ]
-    await vslide_test(dut, cases, expfunc)
+    await vslide_test(fixture, cases, expfunc)
 
 
-@cocotb.test()
-async def vslide1up_test(dut):
+@coralflow_test
+async def vslide1up_test(fixture):
     """Test slide1up usage accessible from intrinsics."""
 
     def expfunc(dest, src, scalar, vl, offset, vlmax):
@@ -1122,11 +1098,11 @@ async def vslide1up_test(dut):
         'vl': vl,
         'offset': 0
     } for vl in [32, 31, 16, 8, 4]]
-    await vslide_test(dut, cases, expfunc)
+    await vslide_test(fixture, cases, expfunc)
 
 
-@cocotb.test()
-async def vslide1down_test(dut):
+@coralflow_test
+async def vslide1down_test(fixture):
     """Test slide1down usage accessible from intrinsics."""
 
     def expfunc(dest, src, scalar, vl, offset, vlmax):
@@ -1231,13 +1207,12 @@ async def vslide1down_test(dut):
         'vl': vl,
         'offset': 0
     } for vl in [32, 31, 16, 8, 4]]
-    await vslide_test(dut, cases, expfunc)
+    await vslide_test(fixture, cases, expfunc)
 
 
-@cocotb.test()
-async def vslide_boundary_test(dut):
+@coralflow_test
+async def vslide_boundary_test(fixture):
     """Test vslide boundary, dynamic LMUL reduction, and masked operations."""
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     await fixture.load_elf_and_lookup_symbols(
         r.Rlocation('coralnpu_hw/tests/cocotb/rvv/vslide_boundary_test.elf'),
@@ -1450,9 +1425,8 @@ async def vslide_boundary_test(dut):
                                 )
 
 
-async def vgather1_test(dut, cases):
+async def vgather1_test(fixture, cases):
     """Test gather usage accessible from intrinsics."""
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     await fixture.load_elf_and_lookup_symbols(
         r.Rlocation('coralnpu_hw/tests/cocotb/rvv/vgather.elf'),
@@ -1506,8 +1480,8 @@ async def vgather1_test(dut, cases):
         assert (actual_output == expected_output).all(), debug_msg
 
 
-@cocotb.test()
-async def vgather_test(dut):
+@coralflow_test
+async def vgather_test(fixture):
     """Test gather usage accessible from intrinsics."""
     cases = [{
         'rvv_shuffle': 'vgather_d8mf2_i8mf2',
@@ -1550,13 +1524,12 @@ async def vgather_test(dut):
         'n': n,
         'dtype': np.uint16,
     } for n in [2, 4, 8, 16]]
-    await vgather1_test(dut, cases)
+    await vgather1_test(fixture, cases)
 
 
-@cocotb.test()
-async def vstart_test(dut):
+@coralflow_test
+async def vstart_test(fixture):
     """Test vstart usage."""
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     await fixture.load_elf_and_lookup_symbols(
         r.Rlocation('coralnpu_hw/tests/cocotb/rvv/vstart_test.elf'), [
@@ -1604,7 +1577,7 @@ async def vstart_test(dut):
                          np.dtype(np.uint32).itemsize)
         ).view(np.uint32)[0]
 
-        dut._log.info(
+        logging.info(
             f"vstart={test_vstart_val}: vstart_after_op1={vstart_after_op1_val}, "
             f"vstart_after_op2={vstart_after_op2_val}"
         )
@@ -1621,13 +1594,9 @@ async def vstart_test(dut):
         )
 
 
-@cocotb.test()
-async def core_mini_rvv_small_loop_test(dut):
+@coralflow_test
+async def core_mini_rvv_small_loop_test(fixture):
     """Testbench to test RVV retirement in small loops."""
-    core_mini_axi = CoreMiniAxiInterface(dut)
-    await core_mini_axi.init()
-    await core_mini_axi.reset()
-    cocotb.start_soon(core_mini_axi.clock.start())
     r = runfiles.Create()
 
     elf_path = r.Rlocation(
@@ -1635,20 +1604,20 @@ async def core_mini_rvv_small_loop_test(dut):
     )
     if not elf_path:
         raise ValueError("elf_path must consist a valid path")
-    with open(elf_path, "rb") as f:
-        entry_point = await core_mini_axi.load_elf(f)
-
-    with open(elf_path, "rb") as f:
-        input_addr = core_mini_axi.lookup_symbol(f, "input_data")
-        output_addr = core_mini_axi.lookup_symbol(f, "output_data")
+    await fixture.load_elf_and_lookup_symbols(
+        elf_path, ["input_data", "output_data"]
+    )
 
     # input: [1, 2, 3, 4]
     input_data = np.array([1, 2, 3, 4], dtype=np.uint32)
-    await core_mini_axi.write(input_addr, input_data)
-    await core_mini_axi.write(output_addr, np.zeros(4, dtype=np.uint32))
+    await fixture.write("input_data", input_data)
+    await fixture.write("output_data", np.zeros(4, dtype=np.uint32))
 
     # Find vadd.vv address
     retired_vadds = []
+    dut = fixture.core_mini_axi.dut if hasattr(
+        fixture, "core_mini_axi"
+    ) else None
 
     async def monitor():
         while True:
@@ -1686,13 +1655,14 @@ async def core_mini_rvv_small_loop_test(dut):
                             flush=True
                         )
 
-    cocotb.start_soon(monitor())
-    await core_mini_axi.execute_from(entry_point)
-    await core_mini_axi.wait_for_wfi()
+    if dut is not None:
+        cocotb.start_soon(monitor())
+    await fixture.run_to_wfi()
 
-    has_debug_ports = getattr(
-        dut, "io_debug_rb_inst_0_valid", None
-    ) is not None
+    has_debug_ports = (
+        dut is not None
+        and getattr(dut, "io_debug_rb_inst_0_valid", None) is not None
+    )
     if has_debug_ports:
         # Check that each of the 32 iterations retired with the correct calculated vector data
         assert len(
@@ -1717,20 +1687,16 @@ async def core_mini_rvv_small_loop_test(dut):
 
         print(f"Total vadd.vv retired: {len(retired_vadds)}", flush=True)
 
-    output_data = (await core_mini_axi.read(output_addr, 16)).view(np.uint32)
+    output_data = (await fixture.read("output_data", 16)).view(np.uint32)
     expected = np.array([33, 66, 99, 132], dtype=np.uint32)
     assert np.array_equal(
         output_data, expected
     ), f"Output mismatch: got {output_data}, expected {expected}"
 
 
-@cocotb.test()
-async def core_mini_rvv_flush_race_test(dut):
+@coralflow_test
+async def core_mini_rvv_flush_race_test(fixture):
     """Testbench to test flush race condition between in-flight vector operations and post-trap dispatch."""
-    core_mini_axi = CoreMiniAxiInterface(dut)
-    await core_mini_axi.init()
-    await core_mini_axi.reset()
-    cocotb.start_soon(core_mini_axi.clock.start())
     r = runfiles.Create()
 
     elf_path = r.Rlocation(
@@ -1738,18 +1704,13 @@ async def core_mini_rvv_flush_race_test(dut):
     )
     if not elf_path:
         raise ValueError("elf_path must consist a valid path")
-    with open(elf_path, "rb") as f:
-        entry_point = await core_mini_axi.load_elf(f)
+    await fixture.load_elf_and_lookup_symbols(elf_path, ["output_data"])
 
-    with open(elf_path, "rb") as f:
-        output_addr = core_mini_axi.lookup_symbol(f, "output_data")
+    await fixture.write("output_data", np.zeros(4, dtype=np.uint32))
 
-    await core_mini_axi.write(output_addr, np.zeros(4, dtype=np.uint32))
+    await fixture.run_to_wfi()
 
-    await core_mini_axi.execute_from(entry_point)
-    await core_mini_axi.wait_for_wfi()
-
-    output_data = (await core_mini_axi.read(output_addr, 16)).view(np.uint32)
+    output_data = (await fixture.read("output_data", 16)).view(np.uint32)
     # Expected: input_add_a + input_add_b = [10+1, 20+2, 30+3, 40+4] = [11, 22, 33, 44]
     # If the flush race occurs, the divider's writeback [500, 1000, 1500, 2000] will prematurely retire or corrupt the adder
     expected = np.array([11, 22, 33, 44], dtype=np.uint32)
@@ -1758,13 +1719,9 @@ async def core_mini_rvv_flush_race_test(dut):
     ), f"Output mismatch (Flush race detected!): got {output_data}, expected {expected}"
 
 
-@cocotb.test()
-async def core_mini_rvv_vill_loop_trap_test(dut):
+@coralflow_test
+async def core_mini_rvv_vill_loop_trap_test(fixture):
     """Testbench to test vector-originated trap (vill) tag matching in loops."""
-    core_mini_axi = CoreMiniAxiInterface(dut)
-    await core_mini_axi.init()
-    await core_mini_axi.reset()
-    cocotb.start_soon(core_mini_axi.clock.start())
     r = runfiles.Create()
 
     elf_path = r.Rlocation(
@@ -1772,24 +1729,20 @@ async def core_mini_rvv_vill_loop_trap_test(dut):
     )
     if not elf_path:
         raise ValueError("elf_path must consist a valid path")
-    with open(elf_path, "rb") as f:
-        entry_point = await core_mini_axi.load_elf(f)
+    symbols = await fixture.load_elf_and_lookup_symbols(
+        elf_path, ["output_data", "trap_info", "loop_vdiv"]
+    )
+    loop_vdiv_addr = symbols["loop_vdiv"]
 
-    with open(elf_path, "rb") as f:
-        output_addr = core_mini_axi.lookup_symbol(f, "output_data")
-        trap_info_addr = core_mini_axi.lookup_symbol(f, "trap_info")
-        loop_vdiv_addr = core_mini_axi.lookup_symbol(f, "loop_vdiv")
+    await fixture.write("output_data", np.zeros(4, dtype=np.uint32))
+    await fixture.write("trap_info", np.zeros(4, dtype=np.uint32))
 
-    await core_mini_axi.write(output_addr, np.zeros(4, dtype=np.uint32))
-    await core_mini_axi.write(trap_info_addr, np.zeros(4, dtype=np.uint32))
+    await fixture.run_to_wfi()
 
-    await core_mini_axi.execute_from(entry_point)
-    await core_mini_axi.wait_for_wfi()
-
-    trap_info = (await core_mini_axi.read(trap_info_addr, 16)).view(np.uint32)
+    trap_info = (await fixture.read("trap_info", 16)).view(np.uint32)
     mcause, mepc, mtval, trap_count = trap_info
 
-    dut._log.info(
+    logging.info(
         f"TRAP INFO: mcause={mcause}, mepc={hex(mepc)}, mtval={hex(mtval)}, trap_count={trap_count}"
     )
 
@@ -1797,20 +1750,16 @@ async def core_mini_rvv_vill_loop_trap_test(dut):
     assert mcause == 2, f"Expected mcause=2 (Illegal instruction), got {mcause}"
     assert mepc == loop_vdiv_addr, f"Expected mepc={hex(loop_vdiv_addr)} (loop_vdiv), got {hex(mepc)}"
 
-    output_data = (await core_mini_axi.read(output_addr, 16)).view(np.uint32)
+    output_data = (await fixture.read("output_data", 16)).view(np.uint32)
     expected = np.array([1, 1, 1, 1], dtype=np.uint32)
     assert np.array_equal(
         output_data, expected
     ), f"Output mismatch (Premature trap cancellation on earlier iteration!): got {output_data}, expected {expected}"
 
 
-@cocotb.test()
-async def core_mini_rvv_vstart_rob_test(dut):
+@coralflow_test
+async def core_mini_rvv_vstart_rob_test(fixture):
     """Testbench to test vstart architectural reset upon retirement and preservation across flushes."""
-    core_mini_axi = CoreMiniAxiInterface(dut)
-    await core_mini_axi.init()
-    await core_mini_axi.reset()
-    cocotb.start_soon(core_mini_axi.clock.start())
     r = runfiles.Create()
 
     elf_path = r.Rlocation(
@@ -1818,56 +1767,39 @@ async def core_mini_rvv_vstart_rob_test(dut):
     )
     if not elf_path:
         raise ValueError("elf_path must consist a valid path")
-    with open(elf_path, "rb") as f:
-        entry_point = await core_mini_axi.load_elf(f)
-
-    with open(elf_path, "rb") as f:
-        input_a_addr = core_mini_axi.lookup_symbol(f, "input_a")
-        input_b_addr = core_mini_axi.lookup_symbol(f, "input_b")
-        output_normal_addr = core_mini_axi.lookup_symbol(f, "output_normal")
-        test_results_normal_addr = core_mini_axi.lookup_symbol(
-            f, "test_results_normal"
-        )
-
-    await core_mini_axi.write(
-        input_a_addr, np.array([10, 20, 30, 40], dtype=np.uint32)
+    await fixture.load_elf_and_lookup_symbols(
+        elf_path,
+        ["input_a", "input_b", "output_normal", "test_results_normal"],
     )
-    await core_mini_axi.write(
-        input_b_addr, np.array([1, 2, 3, 4], dtype=np.uint32)
-    )
-    await core_mini_axi.write(output_normal_addr, np.zeros(4, dtype=np.uint32))
-    await core_mini_axi.write(
-        test_results_normal_addr,
+
+    await fixture.write("input_a", np.array([10, 20, 30, 40], dtype=np.uint32))
+    await fixture.write("input_b", np.array([1, 2, 3, 4], dtype=np.uint32))
+    await fixture.write("output_normal", np.zeros(4, dtype=np.uint32))
+    await fixture.write(
+        "test_results_normal",
         np.array([0xDEAD, 0xDEAD, 0xDEAD, 0], dtype=np.uint32)
     )
 
-    await core_mini_axi.execute_from(entry_point)
-    await core_mini_axi.wait_for_wfi()
+    await fixture.run_to_wfi()
 
-    output_normal = (await core_mini_axi.read(output_normal_addr,
-                                              16)).view(np.uint32)
+    output_normal = (await fixture.read("output_normal", 16)).view(np.uint32)
     expected_normal = np.array([0, 0, 33, 44], dtype=np.uint32)
     assert np.array_equal(
         output_normal, expected_normal
     ), f"Normal vector execution mismatch: got {output_normal}, expected {expected_normal}"
 
-    test_results_normal = (
-        await core_mini_axi.read(test_results_normal_addr, 16)
-    ).view(np.uint32)
-    dut._log.info(f"test_results: vstart_normal={test_results_normal[0]}")
+    test_results_normal = (await fixture.read("test_results_normal",
+                                              16)).view(np.uint32)
+    logging.info(f"test_results: vstart_normal={test_results_normal[0]}")
 
     assert test_results_normal[
         0
     ] == 0, f"Expected vstart to reset to 0 upon retirement, got {test_results_normal[0]}"
 
 
-@cocotb.test()
-async def core_mini_rvv_vstart_vset_test(dut):
+@coralflow_test
+async def core_mini_rvv_vstart_vset_test(fixture):
     """Testbench to test vstart reset for vector config instructions (vset*)."""
-    core_mini_axi = CoreMiniAxiInterface(dut)
-    await core_mini_axi.init()
-    await core_mini_axi.reset()
-    cocotb.start_soon(core_mini_axi.clock.start())
     r = runfiles.Create()
 
     elf_path = r.Rlocation(
@@ -1875,57 +1807,44 @@ async def core_mini_rvv_vstart_vset_test(dut):
     )
     if not elf_path:
         raise ValueError("elf_path must consist a valid path")
-    with open(elf_path, "rb") as f:
-        entry_point = await core_mini_axi.load_elf(f)
+    await fixture.load_elf_and_lookup_symbols(
+        elf_path,
+        [
+            "input_a",
+            "input_b",
+            "output_dual_dispatch",
+            "test_results_vset",
+            "test_results_dual_dispatch",
+        ],
+    )
 
-    with open(elf_path, "rb") as f:
-        input_a_addr = core_mini_axi.lookup_symbol(f, "input_a")
-        input_b_addr = core_mini_axi.lookup_symbol(f, "input_b")
-        output_dual_dispatch_addr = core_mini_axi.lookup_symbol(
-            f, "output_dual_dispatch"
-        )
-        test_results_vset_addr = core_mini_axi.lookup_symbol(
-            f, "test_results_vset"
-        )
-        test_results_dual_dispatch_addr = core_mini_axi.lookup_symbol(
-            f, "test_results_dual_dispatch"
-        )
-
-    await core_mini_axi.write(
-        input_a_addr, np.array([10, 20, 30, 40], dtype=np.uint32)
-    )
-    await core_mini_axi.write(
-        input_b_addr, np.array([1, 2, 3, 4], dtype=np.uint32)
-    )
-    await core_mini_axi.write(
-        output_dual_dispatch_addr, np.zeros(4, dtype=np.uint32)
-    )
-    await core_mini_axi.write(
-        test_results_vset_addr,
+    await fixture.write("input_a", np.array([10, 20, 30, 40], dtype=np.uint32))
+    await fixture.write("input_b", np.array([1, 2, 3, 4], dtype=np.uint32))
+    await fixture.write("output_dual_dispatch", np.zeros(4, dtype=np.uint32))
+    await fixture.write(
+        "test_results_vset",
         np.array([0xDEAD, 0xDEAD, 0xDEAD, 0], dtype=np.uint32)
     )
-    await core_mini_axi.write(
-        test_results_dual_dispatch_addr,
+    await fixture.write(
+        "test_results_dual_dispatch",
         np.array([0xDEAD, 0xDEAD, 0xDEAD, 0], dtype=np.uint32)
     )
 
-    await core_mini_axi.execute_from(entry_point)
-    await core_mini_axi.wait_for_wfi()
+    await fixture.run_to_wfi()
 
-    output_dual_dispatch = (
-        await core_mini_axi.read(output_dual_dispatch_addr, 16)
-    ).view(np.uint32)
+    output_dual_dispatch = (await fixture.read("output_dual_dispatch",
+                                               16)).view(np.uint32)
     expected_dual_dispatch = np.array([11, 22, 33, 44], dtype=np.uint32)
     assert np.array_equal(
         output_dual_dispatch, expected_dual_dispatch
     ), f"Dual dispatch vector execution mismatch: got {output_dual_dispatch}, expected {expected_dual_dispatch}"
 
-    test_results_vset = (await core_mini_axi.read(test_results_vset_addr,
-                                                  16)).view(np.uint32)
+    test_results_vset = (await fixture.read("test_results_vset",
+                                            16)).view(np.uint32)
     test_results_dual_dispatch = (
-        await core_mini_axi.read(test_results_dual_dispatch_addr, 16)
+        await fixture.read("test_results_dual_dispatch", 16)
     ).view(np.uint32)
-    dut._log.info(
+    logging.info(
         f"test_results: vstart_vset={test_results_vset[0]}, vstart_dual_dispatch={test_results_dual_dispatch[0]}"
     )
 
@@ -1937,13 +1856,9 @@ async def core_mini_rvv_vstart_vset_test(dut):
     ] == 0, f"Expected vstart to reset to 0 upon dual dispatch retirement, got {test_results_dual_dispatch[0]}"
 
 
-@cocotb.test()
-async def core_mini_rvv_vstart_vmv_scalar_test(dut):
+@coralflow_test
+async def core_mini_rvv_vstart_vmv_scalar_test(fixture):
     """Testbench to test vstart reset for vector instruction writing scalar reg."""
-    core_mini_axi = CoreMiniAxiInterface(dut)
-    await core_mini_axi.init()
-    await core_mini_axi.reset()
-    cocotb.start_soon(core_mini_axi.clock.start())
     r = runfiles.Create()
 
     elf_path = r.Rlocation(
@@ -1951,30 +1866,22 @@ async def core_mini_rvv_vstart_vmv_scalar_test(dut):
     )
     if not elf_path:
         raise ValueError("elf_path must consist a valid path")
-    with open(elf_path, "rb") as f:
-        entry_point = await core_mini_axi.load_elf(f)
-
-    with open(elf_path, "rb") as f:
-        input_a_addr = core_mini_axi.lookup_symbol(f, "input_a")
-        test_results_vmv_scalar_addr = core_mini_axi.lookup_symbol(
-            f, "test_results_vmv_scalar"
-        )
-
-    await core_mini_axi.write(
-        input_a_addr, np.array([10, 20, 30, 40], dtype=np.uint32)
+    await fixture.load_elf_and_lookup_symbols(
+        elf_path, ["input_a", "test_results_vmv_scalar"]
     )
-    await core_mini_axi.write(
-        test_results_vmv_scalar_addr,
+
+    await fixture.write("input_a", np.array([10, 20, 30, 40], dtype=np.uint32))
+    await fixture.write(
+        "test_results_vmv_scalar",
         np.array([0xDEAD, 0xDEAD, 0xDEAD, 0], dtype=np.uint32)
     )
 
-    await core_mini_axi.execute_from(entry_point)
-    await core_mini_axi.wait_for_wfi()
+    await fixture.run_to_wfi()
 
     test_results_vmv_scalar = (
-        await core_mini_axi.read(test_results_vmv_scalar_addr, 16)
+        await fixture.read("test_results_vmv_scalar", 16)
     ).view(np.uint32)
-    dut._log.info(
+    logging.info(
         f"test_results_vmv_scalar: vstart={test_results_vmv_scalar[0]}"
     )
 
@@ -1983,13 +1890,9 @@ async def core_mini_rvv_vstart_vmv_scalar_test(dut):
     ] == 0, f"Expected vstart to reset to 0 upon vmv.x.s retirement, got {test_results_vmv_scalar[0]}"
 
 
-@cocotb.test()
-async def core_mini_rvv_vstart_trap_flush_test(dut):
+@coralflow_test
+async def core_mini_rvv_vstart_trap_flush_test(fixture):
     """Testbench to test vstart architectural preservation across flushes."""
-    core_mini_axi = CoreMiniAxiInterface(dut)
-    await core_mini_axi.init()
-    await core_mini_axi.reset()
-    cocotb.start_soon(core_mini_axi.clock.start())
     r = runfiles.Create()
 
     elf_path = r.Rlocation(
@@ -1997,63 +1900,42 @@ async def core_mini_rvv_vstart_trap_flush_test(dut):
     )
     if not elf_path:
         raise ValueError("elf_path must consist a valid path")
-    with open(elf_path, "rb") as f:
-        entry_point = await core_mini_axi.load_elf(f)
-
-    with open(elf_path, "rb") as f:
-        input_a_addr = core_mini_axi.lookup_symbol(f, "input_a")
-        input_b_addr = core_mini_axi.lookup_symbol(f, "input_b")
-        test_results_trap_addr = core_mini_axi.lookup_symbol(
-            f, "test_results_trap"
-        )
-
-    await core_mini_axi.write(
-        input_a_addr, np.array([10, 20, 30, 40], dtype=np.uint32)
+    await fixture.load_elf_and_lookup_symbols(
+        elf_path, ["input_a", "input_b", "test_results_trap"]
     )
-    await core_mini_axi.write(
-        input_b_addr, np.array([1, 2, 3, 4], dtype=np.uint32)
-    )
-    await core_mini_axi.write(
-        test_results_trap_addr,
+
+    await fixture.write("input_a", np.array([10, 20, 30, 40], dtype=np.uint32))
+    await fixture.write("input_b", np.array([1, 2, 3, 4], dtype=np.uint32))
+    await fixture.write(
+        "test_results_trap",
         np.array([0xDEAD, 0xDEAD, 0xDEAD, 0], dtype=np.uint32)
     )
 
-    await core_mini_axi.execute_from(entry_point)
-    await core_mini_axi.wait_for_wfi()
+    await fixture.run_to_wfi()
 
-    test_results_trap = (await core_mini_axi.read(test_results_trap_addr,
-                                                  16)).view(np.uint32)
-    dut._log.info(f"test_results_trap: vstart={test_results_trap[0]}")
+    test_results_trap = (await fixture.read("test_results_trap",
+                                            16)).view(np.uint32)
+    logging.info(f"test_results_trap: vstart={test_results_trap[0]}")
 
     assert test_results_trap[
         0
     ] == 5, f"Expected vstart=5 to be preserved after trap flush, got {test_results_trap[0]}"
 
 
-@cocotb.test()
-async def core_mini_rvv_vfrdiv_test(dut):
+@coralflow_test
+async def core_mini_rvv_vfrdiv_test(fixture):
     """Testbench to test OPFVF instruction with scalar float register."""
-    core_mini_axi = CoreMiniAxiInterface(dut)
-    await core_mini_axi.init()
-    await core_mini_axi.reset()
-    cocotb.start_soon(core_mini_axi.clock.start())
     r = runfiles.Create()
 
     elf_path = r.Rlocation("coralnpu_hw/tests/cocotb/rvv/rvv_vfrdiv_test.elf")
     if not elf_path:
         raise ValueError("elf_path must consist a valid path")
-    with open(elf_path, "rb") as f:
-        entry_point = await core_mini_axi.load_elf(f)
+    await fixture.load_elf_and_lookup_symbols(elf_path, ["v18_result"])
 
-    with open(elf_path, "rb") as f:
-        v18_result_addr = core_mini_axi.lookup_symbol(f, "v18_result")
+    await fixture.run_to_wfi()
 
-    await core_mini_axi.execute_from(entry_point)
-    await core_mini_axi.wait_for_wfi()
-
-    v18_result = (await core_mini_axi.read(v18_result_addr,
-                                           16)).view(np.uint32)
-    dut._log.info(f"v18_result: {[hex(x) for x in v18_result]}")
+    v18_result = (await fixture.read("v18_result", 16)).view(np.uint32)
+    logging.info(f"v18_result: {[hex(x) for x in v18_result]}")
 
     # Expected: 0x8000000080000000dd6762d400000000 -> words in LE order:
     # word 0: 0x00000000, word 1: 0xdd6762d4, word 2: 0x80000000, word 3: 0x80000000
@@ -2064,43 +1946,38 @@ async def core_mini_rvv_vfrdiv_test(dut):
     ), f"v18 mismatch: got {[hex(x) for x in v18_result]}, expected {[hex(x) for x in expected_v18]}"
 
 
-@cocotb.test()
-async def core_mini_rvv_vleff_test(dut):
+@coralflow_test
+async def core_mini_rvv_vleff_test(fixture):
     """Testbench to test fault-only-first loads vle16ff.v, vle8ff.v, vle32ff.v across varied configurations."""
-    core_mini_axi = CoreMiniAxiInterface(dut)
-    await core_mini_axi.init()
-    await core_mini_axi.reset()
-    cocotb.start_soon(core_mini_axi.clock.start())
     r = runfiles.Create()
 
     elf_path = r.Rlocation("coralnpu_hw/tests/cocotb/rvv/rvv_vleff_test.elf")
     if not elf_path:
         raise ValueError("elf_path must consist a valid path")
-    with open(elf_path, "rb") as f:
-        entry_point = await core_mini_axi.load_elf(f)
+    await fixture.load_elf_and_lookup_symbols(
+        elf_path,
+        [
+            "v12_result",
+            "v8_result",
+            "v4_result",
+            "v14_result",
+            "v16_result",
+            "v20_result",
+            "v24_result",
+            "v25_result",
+            "v26_result",
+            "vstart_result",
+            "v30_result",
+            "v1_result",
+            "v2_result",
+            "v3_result",
+        ],
+    )
 
-    with open(elf_path, "rb") as f:
-        v12_result_addr = core_mini_axi.lookup_symbol(f, "v12_result")
-        v8_result_addr = core_mini_axi.lookup_symbol(f, "v8_result")
-        v4_result_addr = core_mini_axi.lookup_symbol(f, "v4_result")
-        v14_result_addr = core_mini_axi.lookup_symbol(f, "v14_result")
-        v16_result_addr = core_mini_axi.lookup_symbol(f, "v16_result")
-        v20_result_addr = core_mini_axi.lookup_symbol(f, "v20_result")
-        v24_result_addr = core_mini_axi.lookup_symbol(f, "v24_result")
-        v25_result_addr = core_mini_axi.lookup_symbol(f, "v25_result")
-        v26_result_addr = core_mini_axi.lookup_symbol(f, "v26_result")
-        vstart_result_addr = core_mini_axi.lookup_symbol(f, "vstart_result")
-        v30_result_addr = core_mini_axi.lookup_symbol(f, "v30_result")
-        v1_result_addr = core_mini_axi.lookup_symbol(f, "v1_result")
-        v2_result_addr = core_mini_axi.lookup_symbol(f, "v2_result")
-        v3_result_addr = core_mini_axi.lookup_symbol(f, "v3_result")
-
-    await core_mini_axi.execute_from(entry_point)
-    await core_mini_axi.wait_for_wfi()
+    await fixture.run_to_wfi()
 
     # 1. Baseline vle16ff.v (e16, m1, vl=8)
-    v12_result = (await core_mini_axi.read(v12_result_addr,
-                                           16)).view(np.uint32)
+    v12_result = (await fixture.read("v12_result", 16)).view(np.uint32)
     expected_v12 = np.array([0x11112222, 0x33334444, 0x55556666, 0x77778888],
                             dtype=np.uint32)
     assert np.array_equal(
@@ -2108,7 +1985,7 @@ async def core_mini_rvv_vleff_test(dut):
     ), f"v12 mismatch (vle16ff): got {[hex(x) for x in v12_result]}, expected {[hex(x) for x in expected_v12]}"
 
     # 2. Baseline vle8ff.v (e8, m1, vl=16)
-    v8_result = (await core_mini_axi.read(v8_result_addr, 16)).view(np.uint32)
+    v8_result = (await fixture.read("v8_result", 16)).view(np.uint32)
     expected_v8 = np.array([0x01020304, 0x05060708, 0x090a0b0c, 0x0d0e0f10],
                            dtype=np.uint32)
     assert np.array_equal(
@@ -2116,7 +1993,7 @@ async def core_mini_rvv_vleff_test(dut):
     ), f"v8 mismatch (vle8ff): got {[hex(x) for x in v8_result]}, expected {[hex(x) for x in expected_v8]}"
 
     # 3. Baseline vle32ff.v (e32, m1, vl=4)
-    v4_result = (await core_mini_axi.read(v4_result_addr, 16)).view(np.uint32)
+    v4_result = (await fixture.read("v4_result", 16)).view(np.uint32)
     expected_v4 = np.array([0xdeadbeef, 0xcafebabe, 0x01234567, 0x89abcdef],
                            dtype=np.uint32)
     assert np.array_equal(
@@ -2124,8 +2001,7 @@ async def core_mini_rvv_vleff_test(dut):
     ), f"v4 mismatch (vle32ff): got {[hex(x) for x in v4_result]}, expected {[hex(x) for x in expected_v4]}"
 
     # 4. Masked vle16ff.v with tu, mu, vl = 5 (active elems: 0,2,4; inactive: 1,3; tail: 5..7)
-    v14_result = (await core_mini_axi.read(v14_result_addr,
-                                           16)).view(np.uint32)
+    v14_result = (await fixture.read("v14_result", 16)).view(np.uint32)
     expected_v14 = np.array([0xbbbb0101, 0xdddd0303, 0xffff0505, 0x56781234],
                             dtype=np.uint32)
     assert np.array_equal(
@@ -2133,8 +2009,7 @@ async def core_mini_rvv_vleff_test(dut):
     ), f"v14 mismatch (masked tu/mu): got {[hex(x) for x in v14_result]}, expected {[hex(x) for x in expected_v14]}"
 
     # 5. Multi-register m2 vle16ff.v (vl = 16, 32 bytes)
-    v16_result = (await core_mini_axi.read(v16_result_addr,
-                                           32)).view(np.uint32)
+    v16_result = (await fixture.read("v16_result", 32)).view(np.uint32)
     expected_v16 = np.array(
         [
             0x00020001,
@@ -2153,8 +2028,7 @@ async def core_mini_rvv_vleff_test(dut):
     ), f"v16 mismatch (m2): got {[hex(x) for x in v16_result]}, expected {[hex(x) for x in expected_v16]}"
 
     # 6. Multi-register m4 vle32ff.v (vl = 16, 64 bytes)
-    v20_result = (await core_mini_axi.read(v20_result_addr,
-                                           64)).view(np.uint32)
+    v20_result = (await fixture.read("v20_result", 64)).view(np.uint32)
     expected_v20 = np.array(
         [
             0x10000001,
@@ -2181,37 +2055,34 @@ async def core_mini_rvv_vleff_test(dut):
     ), f"v20 mismatch (m4): got {[hex(x) for x in v20_result]}, expected {[hex(x) for x in expected_v20]}"
 
     # 7. Fractional LMUL mf4 vle8ff.v (vl = 4, 4 bytes)
-    v24_result = (await core_mini_axi.read(v24_result_addr, 4)).view(np.uint32)
+    v24_result = (await fixture.read("v24_result", 4)).view(np.uint32)
     expected_v24 = np.array([0x44332211], dtype=np.uint32)
     assert np.array_equal(
         v24_result, expected_v24
     ), f"v24 mismatch (mf4): got {[hex(x) for x in v24_result]}, expected {[hex(x) for x in expected_v24]}"
 
     # 8. Fractional LMUL mf2 vle16ff.v (vl = 4, 8 bytes)
-    v25_result = (await core_mini_axi.read(v25_result_addr, 8)).view(np.uint32)
+    v25_result = (await fixture.read("v25_result", 8)).view(np.uint32)
     expected_v25 = np.array([0x22221111, 0x44443333], dtype=np.uint32)
     assert np.array_equal(
         v25_result, expected_v25
     ), f"v25 mismatch (mf2): got {[hex(x) for x in v25_result]}, expected {[hex(x) for x in expected_v25]}"
 
     # 9. Non-zero vstart = 2 (elems 0,1 untouched; elems 2..7 loaded; vstart cleared)
-    v26_result = (await core_mini_axi.read(v26_result_addr,
-                                           16)).view(np.uint32)
+    v26_result = (await fixture.read("v26_result", 16)).view(np.uint32)
     expected_v26 = np.array([0x00020001, 0x00400030, 0x00600050, 0x00800070],
                             dtype=np.uint32)
     assert np.array_equal(
         v26_result, expected_v26
     ), f"v26 mismatch (vstart=2): got {[hex(x) for x in v26_result]}, expected {[hex(x) for x in expected_v26]}"
 
-    vstart_result = (await core_mini_axi.read(vstart_result_addr,
-                                              4)).view(np.uint32)[0]
+    vstart_result = await fixture.read_word("vstart_result")
     assert (
         vstart_result == 0
     ), f"vstart not reset: expected 0, got {vstart_result}"
 
     # 10. RAW Hazard: vle16ff.v immediately consumed by vadd.vv
-    v30_result = (await core_mini_axi.read(v30_result_addr,
-                                           16)).view(np.uint32)
+    v30_result = (await fixture.read("v30_result", 16)).view(np.uint32)
     expected_v30 = np.array([0x00660065, 0x00680067, 0x006a0069, 0x006c006b],
                             dtype=np.uint32)
     assert np.array_equal(
@@ -2219,7 +2090,7 @@ async def core_mini_rvv_vleff_test(dut):
     ), f"v30 mismatch (RAW hazard): got {[hex(x) for x in v30_result]}, expected {[hex(x) for x in expected_v30]}"
 
     # 11. Unaligned vle16ff.v: base + 2, vl = 5, tu (ff_tail_index = 10)
-    v1_result = (await core_mini_axi.read(v1_result_addr, 16)).view(np.uint32)
+    v1_result = (await fixture.read("v1_result", 16)).view(np.uint32)
     expected_v1 = np.array([0x02020101, 0x04040303, 0xeeee0505, 0xeeeeeeee],
                            dtype=np.uint32)
     assert np.array_equal(
@@ -2227,7 +2098,7 @@ async def core_mini_rvv_vleff_test(dut):
     ), f"v1 mismatch (unaligned vle16ff): got {[hex(x) for x in v1_result]}, expected {[hex(x) for x in expected_v1]}"
 
     # 12. Unaligned vle8ff.v: base + 3, vl = 7, tu (ff_tail_index = 7)
-    v2_result = (await core_mini_axi.read(v2_result_addr, 16)).view(np.uint32)
+    v2_result = (await fixture.read("v2_result", 16)).view(np.uint32)
     expected_v2 = np.array([0x44332211, 0xaa776655, 0xaaaaaaaa, 0xaaaaaaaa],
                            dtype=np.uint32)
     assert np.array_equal(
@@ -2235,7 +2106,7 @@ async def core_mini_rvv_vleff_test(dut):
     ), f"v2 mismatch (unaligned vle8ff): got {[hex(x) for x in v2_result]}, expected {[hex(x) for x in expected_v2]}"
 
     # 13. Unaligned vle32ff.v: base + 4, vl = 3, tu (ff_tail_index = 12)
-    v3_result = (await core_mini_axi.read(v3_result_addr, 16)).view(np.uint32)
+    v3_result = (await fixture.read("v3_result", 16)).view(np.uint32)
     expected_v3 = np.array([0x11111111, 0x22222222, 0x33333333, 0xcccccccc],
                            dtype=np.uint32)
     assert np.array_equal(
@@ -2243,13 +2114,9 @@ async def core_mini_rvv_vleff_test(dut):
     ), f"v3 mismatch (unaligned vle32ff): got {[hex(x) for x in v3_result]}, expected {[hex(x) for x in expected_v3]}"
 
 
-@cocotb.test()
-async def core_mini_rvv_vl0_v0_corruption_test(dut):
+@coralflow_test
+async def core_mini_rvv_vl0_v0_corruption_test(fixture):
     """Directed test to check vector mask register v0 preservation when vl=0."""
-    core_mini_axi = CoreMiniAxiInterface(dut)
-    await core_mini_axi.init()
-    await core_mini_axi.reset()
-    cocotb.start_soon(core_mini_axi.clock.start())
     r = runfiles.Create()
 
     elf_path = r.Rlocation(
@@ -2257,38 +2124,28 @@ async def core_mini_rvv_vl0_v0_corruption_test(dut):
     )
     if not elf_path:
         raise ValueError("elf_path must consist a valid path")
-    with open(elf_path, "rb") as f:
-        entry_point = await core_mini_axi.load_elf(f)
-
-    with open(elf_path, "rb") as f:
-        output_v0_after_vmsbc_addr = core_mini_axi.lookup_symbol(
-            f, "output_v0_after_vmsbc"
-        )
-        output_v29_after_vmsbc_addr = core_mini_axi.lookup_symbol(
-            f, "output_v29_after_vmsbc"
-        )
+    await fixture.load_elf_and_lookup_symbols(
+        elf_path, ["output_v0_after_vmsbc", "output_v29_after_vmsbc"]
+    )
 
     # Initial expected v0: 0xf0b0e6759579717a4fc03532a0a512b6
     expected_v0 = np.array([0xA0A512B6, 0x4FC03532, 0x9579717A, 0xF0B0E675],
                            dtype=np.uint32)
 
-    await core_mini_axi.execute_from(entry_point)
-    await core_mini_axi.wait_for_wfi()
+    await fixture.run_to_wfi()
 
-    v0_after_vmsbc = (
-        await core_mini_axi.read(output_v0_after_vmsbc_addr, 16)
-    ).view(np.uint32)
-    v29_after_vmsbc = (
-        await core_mini_axi.read(output_v29_after_vmsbc_addr, 16)
-    ).view(np.uint32)
+    v0_after_vmsbc = (await fixture.read("output_v0_after_vmsbc",
+                                         16)).view(np.uint32)
+    v29_after_vmsbc = (await fixture.read("output_v29_after_vmsbc",
+                                          16)).view(np.uint32)
 
-    dut._log.info(
+    logging.info(
         f"v0_after_vmsbc:  0x{v0_after_vmsbc[3]:08x}_{v0_after_vmsbc[2]:08x}_{v0_after_vmsbc[1]:08x}_{v0_after_vmsbc[0]:08x}"
     )
-    dut._log.info(
+    logging.info(
         f"v29_after_vmsbc: 0x{v29_after_vmsbc[3]:08x}_{v29_after_vmsbc[2]:08x}_{v29_after_vmsbc[1]:08x}_{v29_after_vmsbc[0]:08x}"
     )
-    dut._log.info(
+    logging.info(
         f"expected_v0:     0x{expected_v0[3]:08x}_{expected_v0[2]:08x}_{expected_v0[1]:08x}_{expected_v0[0]:08x}"
     )
 
@@ -2299,13 +2156,9 @@ async def core_mini_rvv_vl0_v0_corruption_test(dut):
     )
 
 
-@cocotb.test()
-async def core_mini_rvv_lsu_indexed_short_vl_test(dut):
+@coralflow_test
+async def core_mini_rvv_lsu_indexed_short_vl_test(fixture):
     """Directed test for indexed vector ops under short vl."""
-    core_mini_axi = CoreMiniAxiInterface(dut)
-    await core_mini_axi.init()
-    await core_mini_axi.reset()
-    cocotb.start_soon(core_mini_axi.clock.start())
     r = runfiles.Create()
 
     elf_path = r.Rlocation(
@@ -2313,48 +2166,40 @@ async def core_mini_rvv_lsu_indexed_short_vl_test(dut):
     )
     if not elf_path:
         raise ValueError("elf_path must consist a valid path")
-    with open(elf_path, "rb") as f:
-        entry_point = await core_mini_axi.load_elf(f)
+    await fixture.load_elf_and_lookup_symbols(
+        elf_path,
+        [
+            "out_data_indexed_e32_vl2",
+            "out_data_indexed_e32_vl1",
+            "out_data_indexed_e16_vl2",
+            "out_data_store",
+            "out_data_indexed_store",
+        ],
+    )
 
-    with open(elf_path, "rb") as f:
-        out_e32_vl2_addr = core_mini_axi.lookup_symbol(
-            f, "out_data_indexed_e32_vl2"
-        )
-        out_e32_vl1_addr = core_mini_axi.lookup_symbol(
-            f, "out_data_indexed_e32_vl1"
-        )
-        out_e16_vl2_addr = core_mini_axi.lookup_symbol(
-            f, "out_data_indexed_e16_vl2"
-        )
-        out_store_addr = core_mini_axi.lookup_symbol(f, "out_data_store")
-        out_idx_store_addr = core_mini_axi.lookup_symbol(
-            f, "out_data_indexed_store"
-        )
+    await fixture.run_to_wfi()
 
-    await core_mini_axi.execute_from(entry_point)
-    await core_mini_axi.wait_for_wfi()
+    out_e32_vl2 = (await fixture.read("out_data_indexed_e32_vl2",
+                                      16)).view(np.uint32)
+    out_e32_vl1 = (await fixture.read("out_data_indexed_e32_vl1",
+                                      16)).view(np.uint32)
+    out_e16_vl2 = (await fixture.read("out_data_indexed_e16_vl2",
+                                      16)).view(np.uint16)
+    out_store = (await fixture.read("out_data_store", 16)).view(np.uint8)
+    out_idx_store = (await fixture.read("out_data_indexed_store",
+                                        16)).view(np.uint32)
 
-    out_e32_vl2 = (await core_mini_axi.read(out_e32_vl2_addr,
-                                            16)).view(np.uint32)
-    out_e32_vl1 = (await core_mini_axi.read(out_e32_vl1_addr,
-                                            16)).view(np.uint32)
-    out_e16_vl2 = (await core_mini_axi.read(out_e16_vl2_addr,
-                                            16)).view(np.uint16)
-    out_store = (await core_mini_axi.read(out_store_addr, 16)).view(np.uint8)
-    out_idx_store = (await core_mini_axi.read(out_idx_store_addr,
-                                              16)).view(np.uint32)
-
-    dut._log.info(
+    logging.info(
         f"out_e32_vl2:   [0x{out_e32_vl2[0]:08x}, 0x{out_e32_vl2[1]:08x}]"
     )
-    dut._log.info(f"out_e32_vl1:   [0x{out_e32_vl1[0]:08x}]")
-    dut._log.info(
+    logging.info(f"out_e32_vl1:   [0x{out_e32_vl1[0]:08x}]")
+    logging.info(
         f"out_e16_vl2:   [0x{out_e16_vl2[0]:04x}, 0x{out_e16_vl2[1]:04x}]"
     )
-    dut._log.info(
+    logging.info(
         f"out_store:     [0x{out_store[0]:02x}, 0x{out_store[1]:02x}, 0x{out_store[2]:02x}, 0x{out_store[3]:02x}]"
     )
-    dut._log.info(
+    logging.info(
         f"out_idx_store: [0x{out_idx_store[0]:08x}, 0x{out_idx_store[1]:08x}, 0x{out_idx_store[2]:08x}]"
     )
 
@@ -2394,17 +2239,14 @@ async def core_mini_rvv_lsu_indexed_short_vl_test(dut):
         2
     ] == 0x33333333, f"Expected 0x33333333 at word 2, got 0x{out_idx_store[2]:08x}"
 
-    await core_mini_axi.raise_irq()
-    await core_mini_axi.wait_for_halted()
+    if hasattr(fixture, "core_mini_axi"):
+        await fixture.core_mini_axi.raise_irq()
+        await fixture.core_mini_axi.wait_for_halted()
 
 
-@cocotb.test()
-async def core_mini_rvv_vstart_pipeline_test(dut):
+@coralflow_test
+async def core_mini_rvv_vstart_pipeline_test(fixture):
     """Testbench to test vstart reset across in-flight vector instructions in pipeline."""
-    core_mini_axi = CoreMiniAxiInterface(dut)
-    await core_mini_axi.init()
-    await core_mini_axi.reset()
-    cocotb.start_soon(core_mini_axi.clock.start())
     r = runfiles.Create()
 
     elf_path = r.Rlocation(
@@ -2412,49 +2254,40 @@ async def core_mini_rvv_vstart_pipeline_test(dut):
     )
     if not elf_path:
         raise ValueError("elf_path must consist a valid path")
-    with open(elf_path, "rb") as f:
-        entry_point = await core_mini_axi.load_elf(f)
-
-    with open(elf_path, "rb") as f:
-        input_a_addr = core_mini_axi.lookup_symbol(f, "input_a")
-        input_b_addr = core_mini_axi.lookup_symbol(f, "input_b")
-        output_reopen_addr = core_mini_axi.lookup_symbol(f, "output_reopen")
-        output_b2b_0_addr = core_mini_axi.lookup_symbol(f, "output_b2b_0")
-        output_b2b_1_addr = core_mini_axi.lookup_symbol(f, "output_b2b_1")
-        output_dual_0_addr = core_mini_axi.lookup_symbol(f, "output_dual_0")
-        output_dual_1_addr = core_mini_axi.lookup_symbol(f, "output_dual_1")
-
-    await core_mini_axi.write(
-        input_a_addr, np.array([10, 20, 30, 40], dtype=np.uint32)
+    await fixture.load_elf_and_lookup_symbols(
+        elf_path,
+        [
+            "input_a",
+            "input_b",
+            "output_reopen",
+            "output_b2b_0",
+            "output_b2b_1",
+            "output_dual_0",
+            "output_dual_1",
+        ],
     )
-    await core_mini_axi.write(
-        input_b_addr, np.array([1, 2, 3, 4], dtype=np.uint32)
-    )
-    await core_mini_axi.write(output_reopen_addr, np.zeros(4, dtype=np.uint32))
-    await core_mini_axi.write(output_b2b_0_addr, np.zeros(4, dtype=np.uint32))
-    await core_mini_axi.write(output_b2b_1_addr, np.zeros(4, dtype=np.uint32))
-    await core_mini_axi.write(output_dual_0_addr, np.zeros(4, dtype=np.uint32))
-    await core_mini_axi.write(output_dual_1_addr, np.zeros(4, dtype=np.uint32))
 
-    await core_mini_axi.execute_from(entry_point)
-    await core_mini_axi.wait_for_wfi()
+    await fixture.write("input_a", np.array([10, 20, 30, 40], dtype=np.uint32))
+    await fixture.write("input_b", np.array([1, 2, 3, 4], dtype=np.uint32))
+    await fixture.write("output_reopen", np.zeros(4, dtype=np.uint32))
+    await fixture.write("output_b2b_0", np.zeros(4, dtype=np.uint32))
+    await fixture.write("output_b2b_1", np.zeros(4, dtype=np.uint32))
+    await fixture.write("output_dual_0", np.zeros(4, dtype=np.uint32))
+    await fixture.write("output_dual_1", np.zeros(4, dtype=np.uint32))
 
-    output_reopen = (await core_mini_axi.read(output_reopen_addr,
-                                              16)).view(np.uint32)
-    output_b2b_0 = (await core_mini_axi.read(output_b2b_0_addr,
-                                             16)).view(np.uint32)
-    output_b2b_1 = (await core_mini_axi.read(output_b2b_1_addr,
-                                             16)).view(np.uint32)
-    output_dual_0 = (await core_mini_axi.read(output_dual_0_addr,
-                                              16)).view(np.uint32)
-    output_dual_1 = (await core_mini_axi.read(output_dual_1_addr,
-                                              16)).view(np.uint32)
+    await fixture.run_to_wfi()
 
-    dut._log.info(f"output_reopen: {output_reopen}")
-    dut._log.info(f"output_b2b_0: {output_b2b_0}")
-    dut._log.info(f"output_b2b_1: {output_b2b_1}")
-    dut._log.info(f"output_dual_0: {output_dual_0}")
-    dut._log.info(f"output_dual_1: {output_dual_1}")
+    output_reopen = (await fixture.read("output_reopen", 16)).view(np.uint32)
+    output_b2b_0 = (await fixture.read("output_b2b_0", 16)).view(np.uint32)
+    output_b2b_1 = (await fixture.read("output_b2b_1", 16)).view(np.uint32)
+    output_dual_0 = (await fixture.read("output_dual_0", 16)).view(np.uint32)
+    output_dual_1 = (await fixture.read("output_dual_1", 16)).view(np.uint32)
+
+    logging.info(f"output_reopen: {output_reopen}")
+    logging.info(f"output_b2b_0: {output_b2b_0}")
+    logging.info(f"output_b2b_1: {output_b2b_1}")
+    logging.info(f"output_dual_0: {output_dual_0}")
+    logging.info(f"output_dual_1: {output_dual_1}")
 
     # Test 1 (In-flight vector instruction followed by vmv.v.x)
     # vmv.v.x must execute with vstart=0, setting all elements to 0x33333333.
@@ -2486,3 +2319,454 @@ async def core_mini_rvv_vstart_pipeline_test(dut):
     assert np.array_equal(
         output_dual_1, expected_dual_1
     ), f"Dual-dispatch inst 1 mismatch (slot 1 inherited vstart=2): got {output_dual_1}, expected {expected_dual_1}"
+
+
+@coralflow_test
+async def core_mini_rvv_vstart_dual_dispatch_lsu_test(fixture):
+    """Testing vstart dual dispatch"""
+    r = runfiles.Create()
+    await fixture.load_elf_and_lookup_symbols(
+        r.Rlocation(
+            "coralnpu_hw/tests/cocotb/rvv/rvv_vstart_dual_dispatch_lsu_test.elf"
+        ), [
+            "out_a",
+            "out_b",
+            "out_c",
+            "out_ctrl",
+        ]
+    )
+
+    await fixture.run_to_halt()
+
+    out_a = (await fixture.read("out_a", 8)).view(np.uint16)
+    out_b = (await fixture.read("out_b", 8)).view(np.uint16)
+    out_c = (await fixture.read("out_c", 8)).view(np.uint16)
+    out_ctrl = (await fixture.read("out_ctrl", 8)).view(np.uint16)
+
+    logging.info(f"out_a:    {[hex(x) for x in out_a]}")
+    logging.info(f"out_b:    {[hex(x) for x in out_b]}")
+    logging.info(f"out_c:    {[hex(x) for x in out_c]}")
+    logging.info(f"out_ctrl: {[hex(x) for x in out_ctrl]}")
+
+    expected = np.array([0x00A4, 0x0088, 0x1234, 0x5678], dtype=np.uint16)
+    for name, got in (("A (vxor|scalar|vle16)", out_a),
+                      ("B (vxor|vle16)", out_b), ("C (nop|nop|vxor|vle16)",
+                                                  out_c)):
+        assert np.array_equal(got, expected), (
+            f"case {name}: vle16.v co-dispatched behind a vector op"
+            f" used a stale non-zero vstart: got {[hex(x) for x in got]},"
+            f" expected {[hex(x) for x in expected]}"
+        )
+
+    expected_ctrl = np.array([0x7FC0, 0x7FC0, 0x1234, 0x5678], dtype=np.uint16)
+    assert np.array_equal(out_ctrl, expected_ctrl), (
+        "vle16.v co-dispatched behind a scalar op must still honour vstart=2:"
+        f" got {[hex(x) for x in out_ctrl]},"
+        f" expected {[hex(x) for x in expected_ctrl]}"
+    )
+
+
+_FWD_ELF = (
+    "coralnpu_hw/tests/cocotb/rvv/rvv_vstart_forwarding_debug_test.elf"
+)
+_FWD_SYMS = [
+    "test_sel", "ctrl_out", "ctrl_vstart", "dbg1_vxor", "dbg2_vxor",
+    "dbg2_addi", "dbg2_vle", "dbg2_nop", "out_dbg1", "out_dbg2", "loop_iters",
+    "out_loop", "loop_csrw", "loop_win_start", "loop_vxor"
+]
+_FWD_FILL = 0x7FC0
+_DBG_EXPECTED = np.array([0x00A4, 0x0088, 0x1234, 0x5678], dtype=np.uint16)
+_CSR_VSTART = 0x008
+_CSR_TSELECT = 0x7A0
+_CSR_TDATA1 = 0x7A1
+_CSR_TDATA2 = 0x7A2
+_CSR_DCSR = 0x7B0
+_CSR_DPC = 0x7B1
+
+
+async def _fwd_load(fixture, test_sel):
+    r = runfiles.Create()
+    await fixture.load_elf_and_lookup_symbols(r.Rlocation(_FWD_ELF), _FWD_SYMS)
+    await fixture.write("test_sel", np.array([test_sel], dtype=np.uint32))
+    return fixture
+
+
+async def _dm_halt_state(cm):
+    dcsr = await cm.dm_read_reg(_CSR_DCSR)
+    dpc = await cm.dm_read_reg(_CSR_DPC)
+    vstart = await cm.dm_read_reg(_CSR_VSTART)
+    return (dcsr >> 6) & 0b111, dpc, vstart
+
+
+@coralflow_test
+async def core_mini_rvv_vstart_forwarding_debug_breakpoint_test(fixture):
+    """T3a: debug halts (trigger + single-step) around the packet."""
+    if not hasattr(fixture, "core_mini_axi"):
+        return
+    await _fwd_load(fixture, 1)
+    cm = fixture.core_mini_axi
+    sym = fixture.symbols
+
+    await cm.dm_request_halt()
+    await cm.execute_from(fixture.entry_point)
+    await cm.dm_wait_for_halted()
+
+    # Breakpoint on the packet head: nothing in the packet dispatched yet.
+    await cm.dm_write_reg(_CSR_TSELECT, 0)
+    await cm.dm_write_reg(_CSR_TDATA2, sym["dbg1_vxor"])
+    await cm.dm_write_reg(_CSR_TDATA1, 0x68001044)
+    for vxor in ("dbg1_vxor", "dbg2_vxor"):
+        await cm.dm_write_reg(_CSR_TDATA2, sym[vxor])
+        await cm.dm_request_resume()
+        await cm.dm_wait_for_halted()
+        cause, dpc, vstart = await _dm_halt_state(cm)
+        logging.info(
+            f"break {vxor}: cause={cause} dpc={hex(dpc)}"
+            f" vstart={vstart}"
+        )
+        assert cause == 2 and dpc == sym[vxor]
+        assert vstart == 2, f"halt at {vxor}: vstart={vstart}, expected 2"
+
+    await cm.dm_write_reg(_CSR_TSELECT, 0)
+    await cm.dm_write_reg(_CSR_TDATA1, 0)
+    await cm.dm_write_reg(_CSR_TDATA2, 0)
+    dcsr = await cm.dm_read_reg(_CSR_DCSR)
+    await cm.dm_write_reg(_CSR_DCSR, dcsr | (1 << 2))
+    for nxt in ("dbg2_addi", "dbg2_vle", "dbg2_nop"):
+        await cm.dm_request_resume()
+        await cm.dm_wait_for_halted()
+        cause, dpc, vstart = await _dm_halt_state(cm)
+        logging.info(
+            f"step -> {nxt}: cause={cause} dpc={hex(dpc)}"
+            f" vstart={vstart}"
+        )
+        assert cause == 4 and dpc == sym[nxt]
+        assert vstart == 0, (
+            f"halt at {nxt} (vxor retired): vstart={vstart}, expected 0"
+        )
+    dcsr = await cm.dm_read_reg(_CSR_DCSR)
+    await cm.dm_write_reg(_CSR_DCSR, dcsr & ~(1 << 2))
+    await cm.dm_request_resume()
+    await cm.wait_for_halted(timeout_cycles=20000)
+
+    for name in ("out_dbg1", "out_dbg2"):
+        got = (await fixture.read(name, 8)).view(np.uint16)
+        logging.info(f"{name}: {[hex(x) for x in got]}")
+        assert np.array_equal(got, _DBG_EXPECTED), (
+            f"{name}: got {[hex(x) for x in got]},"
+            f" expected {[hex(x) for x in _DBG_EXPECTED]}"
+        )
+
+
+@coralflow_test
+async def core_mini_rvv_vstart_forwarding_debug_async_halt_test(fixture):
+    """T3b: random asynchronous debug halts over a looped packet."""
+    if not hasattr(fixture, "core_mini_axi"):
+        return
+    import random
+    from cocotb.triggers import ClockCycles
+
+    dut = fixture.core_mini_axi.dut
+    await _fwd_load(fixture, 2)
+    cm = fixture.core_mini_axi
+    sym = fixture.symbols
+    iters = await fixture.read_word("loop_iters")
+    rng = random.Random(77)
+
+    await cm.execute_from(fixture.entry_point)
+    halts = 0
+    in_window = 0
+    for _ in range(40):
+        await ClockCycles(dut.io_aclk, rng.randint(0, 200))
+        if dut.io_halted.value == 1:
+            break
+        await cm.dm_request_halt()
+        await cm.dm_wait_for_halted()
+        cause, dpc, vstart = await _dm_halt_state(cm)
+        win = sym["loop_win_start"] <= dpc <= sym["loop_vxor"]
+        halts += 1
+        in_window += int(win)
+        logging.info(
+            f"halt {halts}: cause={cause} dpc={hex(dpc)}"
+            f" vstart={vstart} in_window={win}"
+        )
+        assert cause == 3
+        assert vstart == (2 if win else 0), (
+            f"halt at dpc={hex(dpc)}: vstart={vstart}, expected"
+            f" {2 if win else 0}"
+        )
+        await cm.dm_request_resume()
+        await cm.dm_wait_for_resumed()
+
+    await cm.wait_for_halted(timeout_cycles=200000)
+    logging.info(f"{halts} halts, {in_window} inside the vstart=2 window")
+    assert in_window >= 1, "no halt landed inside the vstart=2 window"
+
+    out = (await fixture.read("out_loop",
+                              iters * 8)).view(np.uint16).reshape(iters, 4)
+    for i in range(iters):
+        assert np.array_equal(out[i], _DBG_EXPECTED), (
+            f"iteration {i}: got {[hex(x) for x in out[i]]},"
+            f" expected {[hex(x) for x in _DBG_EXPECTED]}"
+        )
+
+
+@coralflow_test
+async def core_mini_rvv_vstart_forwarding_whole_reg_control_test(fixture):
+    """Control: vill=1, vstart=2, lone whole-register load honours vstart."""
+    await _fwd_load(fixture, 0)
+    try:
+        await fixture.run_to_halt(timeout_cycles=20000)
+    except AssertionError:
+        cm = fixture.core_mini_axi
+        await cm.dm_request_halt()
+        await cm.dm_wait_for_halted()
+        cause, dpc, vstart = await _dm_halt_state(cm)
+        logging.error(f"timeout: dpc={hex(dpc)} vstart={vstart}")
+        raise
+    out = (await fixture.read("ctrl_out", 16)).view(np.uint16)
+    logging.info(f"control out: {[hex(x) for x in out]}")
+    expected = np.array([
+        _FWD_FILL, _FWD_FILL, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888
+    ],
+                        dtype=np.uint16)
+    assert np.array_equal(out, expected), (
+        f"whole-register load under vill ignored vstart=2: got"
+        f" {[hex(x) for x in out]}"
+    )
+    vstart = await fixture.read_word("ctrl_vstart")
+    assert vstart == 0, f"vstart after the load = {vstart}, expected 0"
+
+
+_SQUASH_ELF = (
+    "coralnpu_hw/tests/cocotb/rvv/rvv_vstart_forwarding_squash_test.elf"
+)
+_SQUASH_SYMS = [
+    "test_sel", "trap_count", "trap_log", "probe_insn", "t1_vadd", "t2_vadd",
+    "t3_vadd", "t4_vle", "t5_vadd", "t6_vle", "case_snap", "case_out",
+    "vstart_after_trap", "vstart_final", "resume_pc", "snap_ptr"
+]
+# The .data globals the program writes, restored before each case.
+_SQUASH_STATE = [
+    "trap_count", "trap_log", "resume_pc", "snap_ptr", "case_snap", "case_out",
+    "vstart_after_trap", "vstart_final"
+]
+_SQUASH_EXT_ADDR = 0x20000000
+_SQUASH_EXT = np.array([
+    0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD, 0xEEEE, 0xFFFF, 0x1357, 0x2468
+],
+                       dtype=np.uint16)
+_SQUASH_SRC = np.array([
+    0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0x6666, 0x7777, 0x8888
+],
+                       dtype=np.uint16)
+_SQUASH_FILL = np.full(8, _FWD_FILL, dtype=np.uint16)
+
+
+def _hex(values):
+    return [hex(x) for x in np.atleast_1d(values)]
+
+
+async def _squash_run(fixture, init, test_sel):
+    """Runs the probe and case T<test_sel>, and returns the results."""
+    await fixture.core_mini_axi.reset()
+    for name, value in init.items():
+        await fixture.write(name, value)
+    await fixture.write("test_sel", np.array([test_sel], dtype=np.uint32))
+
+    async def word(name):
+        return await fixture.read_word(name)
+
+    hung = False
+    try:
+        await fixture.run_to_halt(timeout_cycles=20000)
+    except AssertionError:
+        hung = True
+        cm = fixture.core_mini_axi
+        await cm.dm_request_halt()
+        await cm.dm_wait_for_halted()
+        dpc = await cm.dm_read_reg(_CSR_DPC)
+        logging.error(f"T{test_sel}: core hung, dpc={hex(dpc)}")
+
+    res = {
+        "case":
+        f"T{test_sel}",
+        "sym":
+        fixture.symbols,
+        "hung":
+        hung,
+        "trap_count":
+        await word("trap_count"),
+        "trap_log": (await fixture.read("trap_log",
+                                        128)).view(np.uint32).reshape(8, 4),
+        "snap": (await fixture.read("case_snap", 16)).view(np.uint16),
+        "out": (await fixture.read("case_out", 16)).view(np.uint16),
+        "vstart_after_trap":
+        await word("vstart_after_trap"),
+        "vstart_final":
+        await word("vstart_final"),
+    }
+    for i in range(min(res["trap_count"], 8)):
+        mcause, mepc, mtval, vstart = res["trap_log"][i]
+        logging.info(
+            f"trap[{i}]: mcause={mcause} mepc={hex(mepc)}"
+            f" mtval={hex(mtval)} vstart={vstart}"
+        )
+    logging.info(f"snap={_hex(res['snap'])} out={_hex(res['out'])}")
+    logging.info(
+        f"vstart_after_trap={res['vstart_after_trap']}"
+        f" vstart_final={res['vstart_final']}"
+    )
+
+    mcause, mepc, _, _ = res["trap_log"][0]
+    assert mcause == 5 and mepc == res["sym"]["probe_insn"], (
+        f"the probe load at 0x1ffffffc did not fault (mcause={mcause}"
+        f" mepc={hex(mepc)}), so the faulting cases test nothing"
+    )
+    return res
+
+
+def _squash_check_trap(res, mcause, pc_sym, vstart):
+    """The case must raise exactly one trap, then run to completion."""
+    case = res["case"]
+    assert res["trap_count"] == 2, (
+        f"{case}: expected exactly 1 trap after the probe, got"
+        f" {res['trap_count'] - 1}"
+    )
+    got_mcause, got_mepc, _, got_vstart = res["trap_log"][1]
+    assert got_mcause == mcause and got_mepc == res["sym"][pc_sym], (
+        f"{case}: expected mcause={mcause} at {hex(res['sym'][pc_sym])},"
+        f" got mcause={got_mcause} at {hex(got_mepc)}"
+    )
+    assert got_vstart == vstart, (
+        f"{case}: vstart in the trap handler = {got_vstart}, expected"
+        f" {vstart}"
+    )
+    assert res["vstart_after_trap"] == vstart
+    assert not res["hung"], f"{case}: core hung after the trap"
+
+
+_SQUASH_DTCM_OUT = np.concatenate([_SQUASH_FILL[:2], _SQUASH_SRC[2:]])
+_SQUASH_EXT_OUT = np.concatenate([_SQUASH_FILL[:2], _SQUASH_EXT[:6]])
+# (test_sel, mcause, trap pc symbol, vstart at the trap, expected results)
+_SQUASH_CASES = [
+    # T1: an RVV trap squashes the load dispatched with it.
+    (
+        1, 2, "t1_vadd", 2, {
+            "snap": _SQUASH_FILL,
+            "out": _SQUASH_DTCM_OUT,
+            "vstart_final": 0
+        }
+    ),
+    # T2: the squashed load faults on elements [0, vstart).
+    (
+        2, 2, "t2_vadd", 2, {
+            "snap": _SQUASH_FILL,
+            "out": _SQUASH_EXT_OUT,
+            "vstart_final": 0
+        }
+    ),
+    # T3: T2 behind a long div, so the trap retires after the load faults.
+    (
+        3, 2, "t3_vadd", 2, {
+            "snap": _SQUASH_FILL,
+            "out": _SQUASH_EXT_OUT,
+            "vstart_final": 0
+        }
+    ),
+    # T4: an older faulting load beats a younger RVV trap.
+    (4, 5, "t4_vle", 2, {}),
+    # T5: an RVV trap squashes the store dispatched with it.
+    (
+        5, 2, "t5_vadd", 2, {
+            "out":
+            np.concatenate([np.zeros(1, dtype=np.uint16), _SQUASH_SRC[1:]]),
+            "vstart_final": 0
+        }
+    ),
+    # T6: a load behind a long div faults with its own vstart (4, not 0).
+    (6, 5, "t6_vle", 4, {}),
+]
+
+
+@coralflow_test
+async def core_mini_rvv_vstart_forwarding_squash_test(fixture):
+    """Runs cases T1-T6 of the squash test, loading the ELF once."""
+    if not hasattr(fixture, "core_mini_axi"):
+        return
+    r = runfiles.Create()
+    await fixture.load_elf_and_lookup_symbols(
+        r.Rlocation(_SQUASH_ELF), _SQUASH_SYMS
+    )
+    await fixture.core_mini_axi.write(
+        _SQUASH_EXT_ADDR, _SQUASH_EXT.view(np.uint8)
+    )
+    init = {name: await fixture.read(name) for name in _SQUASH_STATE}
+    for test_sel, mcause, pc_sym, vstart, expected in _SQUASH_CASES:
+        res = await _squash_run(fixture, init, test_sel)
+        _squash_check_trap(res, mcause, pc_sym, vstart)
+        for k, v in expected.items():
+            assert np.array_equal(
+                res[k], v
+            ), (f"{res['case']}: {k}={_hex(res[k])}, expected {_hex(v)}")
+
+
+@coralflow_test
+async def core_mini_rvv_vill_trap_squashed_load_test(fixture):
+    """RVV vill trap squashing a co-dispatched vl1re16.v must not hang."""
+    r = runfiles.Create()
+    await fixture.load_elf_and_lookup_symbols(
+        r.Rlocation(
+            "coralnpu_hw/tests/cocotb/rvv/rvv_vill_trap_squashed_load_test.elf"
+        ), [
+            "trap_count", "trap_mcause", "trap_mepc", "trap_vstart",
+            "squash_vadd", "out_reload", "out_after", "vstart_final"
+        ]
+    )
+
+    async def word(name):
+        return await fixture.read_word(name)
+
+    hung = False
+    try:
+        await fixture.run_to_halt(timeout_cycles=20000)
+    except AssertionError:
+        hung = True
+        cm = fixture.core_mini_axi
+        await cm.dm_request_halt()
+        await cm.dm_wait_for_halted()
+        dpc = await cm.dm_read_reg(_CSR_DPC)
+        logging.error(f"core hung, dpc={hex(dpc)}")
+
+    trap_count = await word("trap_count")
+    mcause = await word("trap_mcause")
+    mepc = await word("trap_mepc")
+    vstart = await word("trap_vstart")
+    out_reload = (await fixture.read("out_reload", 16)).view(np.uint16)
+    out_after = (await fixture.read("out_after", 16)).view(np.uint16)
+    logging.info(
+        f"traps={trap_count} mcause={mcause} mepc={hex(mepc)}"
+        f" vstart={vstart}"
+    )
+    logging.info(f"out_reload={_hex(out_reload)}")
+    logging.info(f"out_after={_hex(out_after)}")
+
+    assert trap_count == 1, f"expected 1 trap, got {trap_count}"
+    assert mcause == 2 and mepc == fixture.symbols["squash_vadd"], (
+        f"expected illegal-instruction trap at the vadd, got mcause={mcause}"
+        f" mepc={hex(mepc)}"
+    )
+    assert vstart == 2, f"vstart at trap = {vstart}, expected 2"
+    assert not hung, (
+        "core hung after the RVV trap squashed the co-dispatched"
+        " whole-register load"
+    )
+    expected_reload = np.concatenate([_SQUASH_FILL[:2], _SQUASH_SRC[2:]])
+    assert np.array_equal(out_reload, expected_reload
+                          ), (f"re-executed load got {_hex(out_reload)}")
+    assert np.array_equal(out_after, np.full(8, 0x5A5A, dtype=np.uint16))
+    assert await word("vstart_final") == 0
+
+
+if __name__ == "__main__":
+    coralflow_main()

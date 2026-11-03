@@ -14,6 +14,7 @@
 
 load("@coralnpu_hw//rules:coco_tb.bzl", "cocotb_test_suite", "verilator_cocotb_model")
 load("@coralnpu_hw//third_party/python:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library")
 load(
     "//tests/cocotb:build_defs.bzl",
     "VCS_BUILD_ARGS",
@@ -463,6 +464,7 @@ cocotb_test_suite(
         ],
         "data": [
             "//tests/cocotb/rvv/arithmetics:rvv_add_int32_m1.elf",
+            "//tests/cocotb:spi_exec_test.elf",
             "//tests/cocotb:timer_interrupt_test.elf",
             "//tests/cocotb:ddr_test.elf",
             "//tests/cocotb:software_interrupt_test.elf",
@@ -475,6 +477,7 @@ cocotb_test_suite(
     vcs_data = [
         "//hdl/verilog:dpi_files",
         "//tests/cocotb/rvv/arithmetics:rvv_add_int32_m1.elf",
+        "//tests/cocotb:spi_exec_test.elf",
         "//tests/cocotb:timer_interrupt_test.elf",
         "//tests/cocotb:ddr_test.elf",
         "//tests/cocotb:software_interrupt_test.elf",

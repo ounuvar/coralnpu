@@ -17,9 +17,6 @@ package bus
 import chisel3._
 import chisel3.util._
 import common.CoralNPURRArbiter
-import _root_.circt.stage.{ChiselStage, FirtoolOption}
-import chisel3.stage.ChiselGeneratorAnnotation
-import scala.annotation.nowarn
 
 /** TLUL2Axi: A Chisel module that serves as a bridge between a TileLink-UL master and an AXI4
   * slave.
@@ -30,6 +27,10 @@ import scala.annotation.nowarn
   *
   * @param p
   *   The CoralNPU parameters.
+  * @param maxReadTx
+  *   Maximum number of in-flight read transactions.
+  * @param maxWriteTx
+  *   Maximum number of in-flight write transactions.
   */
 class TLUL2Axi[A_USER <: Data with TLUL_A_User_InstrType, D_USER <: Data](
   val p_tl: TLULParameters,
@@ -37,8 +38,12 @@ class TLUL2Axi[A_USER <: Data with TLUL_A_User_InstrType, D_USER <: Data](
   val axiAddrBits: Int,
   val axiIdBits: Int,
   userAGen: () => A_USER,
-  userDGen: () => D_USER
+  userDGen: () => D_USER,
+  val maxReadTx: Int = 8,
+  val maxWriteTx: Int = 8
 ) extends Module {
+  require(maxReadTx > 0, "maxReadTx must be positive")
+  require(maxWriteTx > 0, "maxWriteTx must be positive")
   val tlul_p = p_tl
   val io     = IO(new Bundle {
     val tl_a = Flipped(Decoupled(new TileLink_A_ChannelBase(tlul_p, userAGen))) // TileLink Input
@@ -80,8 +85,8 @@ class TLUL2Axi[A_USER <: Data with TLUL_A_User_InstrType, D_USER <: Data](
   class TxInfo extends Bundle {
     val size = UInt(p_tl_remapped.z.W)
   }
-  val read_tx_info_q  = Module(new Queue(new TxInfo, entries = 2))
-  val write_tx_info_q = Module(new Queue(new TxInfo, entries = 2))
+  val read_tx_info_q  = Module(new Queue(new TxInfo, entries = maxReadTx))
+  val write_tx_info_q = Module(new Queue(new TxInfo, entries = maxWriteTx))
 
   // --- Queue for incoming TileLink A-Channel requests ---
   val is_get = tl_a_q_remapped.bits.opcode === TLULOpcodesA.Get.asUInt
@@ -91,8 +96,14 @@ class TLUL2Axi[A_USER <: Data with TLUL_A_User_InstrType, D_USER <: Data](
   // --- AXI Channel Generation ---
   // TODO: Consider gating these signals (on get/put)? Especially address.
   // Drive AXI write channels for Put requests
-  val aw_q = Module(new Queue(new AxiAddress(axiAddrBits, axiDataBits, axiIdBits), 1))
-  aw_q.io.enq.valid       := tl_a_q_remapped.valid && is_put
+  val aw_q = Module(
+    new Queue(new AxiAddress(axiAddrBits, axiDataBits, axiIdBits), entries = 1, pipe = true)
+  )
+  val w_q = Module(
+    new Queue(new AxiWriteData(axiDataBits, axiIdBits), entries = 1, pipe = true)
+  )
+
+  aw_q.io.enq.valid := tl_a_q_remapped.valid && is_put && w_q.io.enq.ready && write_tx_info_q.io.enq.ready
   aw_q.io.enq.bits.addr   := tl_a_q_remapped.bits.address
   aw_q.io.enq.bits.id     := tl_a_q_remapped.bits.source
   aw_q.io.enq.bits.len    := 0.U
@@ -104,8 +115,7 @@ class TLUL2Axi[A_USER <: Data with TLUL_A_User_InstrType, D_USER <: Data](
   aw_q.io.enq.bits.qos    := 0.U
   aw_q.io.enq.bits.region := 0.U
 
-  val w_q = Module(new Queue(new AxiWriteData(axiDataBits, axiIdBits), 1))
-  w_q.io.enq.valid     := tl_a_q_remapped.valid && is_put
+  w_q.io.enq.valid := tl_a_q_remapped.valid && is_put && aw_q.io.enq.ready && write_tx_info_q.io.enq.ready
   w_q.io.enq.bits.data := tl_a_q_remapped.bits.data
   w_q.io.enq.bits.strb := tl_a_q_remapped.bits.mask
   w_q.io.enq.bits.last := true.B
@@ -182,22 +192,19 @@ class TLUL2Axi[A_USER <: Data with TLUL_A_User_InstrType, D_USER <: Data](
 
 }
 
-@nowarn
+import common.ChiselEmitter
+
 object EmitTLUL2Axi extends App {
   val tlul_p = new TLULParameters(dataBits = 256, addrBits = 32, idBits = 6)
-  (new ChiselStage).execute(
-    Array("--target", "systemverilog") ++ args,
-    Seq(
-      ChiselGeneratorAnnotation(() =>
-        new TLUL2Axi(
-          tlul_p,
-          256,
-          32,
-          6,
-          () => new OpenTitanTileLink_A_User,
-          () => new OpenTitanTileLink_D_User
-        )
-      )
-    ) ++ Seq(FirtoolOption("-enable-layers=Verification"))
+  ChiselEmitter.emit(
+    new TLUL2Axi(
+      tlul_p,
+      256,
+      32,
+      6,
+      () => new OpenTitanTileLink_A_User,
+      () => new OpenTitanTileLink_D_User
+    ),
+    args
   )
 }

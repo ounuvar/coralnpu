@@ -13,6 +13,7 @@
 # limitations under the License.
 
 load("@coralnpu_hw//third_party/python:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -22,6 +23,7 @@ py_library(
         "common_utils.py",
     ],
     deps = [
+        "//coralnpu_test_utils/coralflow",
         requirement("numpy"),
         requirement("pyelftools"),
         "@bazel_tools//tools/python/runfiles",
@@ -94,3 +96,8 @@ alias(
     name = "uvm_test_fixture_test",
     actual = ":sim_backends_unit_test",
 )
+
+exports_files([
+    "common_utils.py",
+    "fpga_test_fixture.py",
+])

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 load("@coralnpu_hw//third_party/python:requirements.bzl", "requirement")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
 
 py_library(
     name = "TileLinkULInterface",
@@ -63,15 +64,6 @@ py_library(
     name = "secded_golden",
     srcs = ["secded_golden.py"],
     visibility = ["//visibility:public"],
-)
-
-py_library(
-    name = "elf_util",
-    srcs = ["elf_util.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        requirement("pyelftools"),
-    ],
 )
 
 py_library(
@@ -168,8 +160,8 @@ py_binary(
         "//sw/utils/tflite_runner:tflite_runner.elf",
     ],
     deps = [
-        ":elf_util",
         ":ftdi_spi_master_lib",
+        "//coralnpu_test_utils/sim_backends:common_utils",
         "@bazel_tools//tools/python/runfiles",
     ],
 )
@@ -205,7 +197,11 @@ py_library(
     ],
 )
 
-exports_files(["dispatch.vlt.tpl"])
+exports_files([
+    "dispatch.vlt.tpl",
+    "ftdi_spi_master.py",
+    "spi_constants.py",
+])
 
 py_library(
     name = "dispatch_verifier",

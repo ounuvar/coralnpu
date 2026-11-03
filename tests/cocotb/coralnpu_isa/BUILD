@@ -12,13 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-load("//rules:coralnpu_v2.bzl", "collect_coralnpu_elfs", "coralnpu_v2_binary")
+load("//rules:coralnpu_v2.bzl", "coralnpu_v2_binary")
 
 package(default_visibility = ["//visibility:public"])
 
 coralnpu_v2_binary(
     name = "ecall",
     srcs = ["ecall.cc"],
+)
+
+coralnpu_v2_binary(
+    name = "fence_test",
+    srcs = ["fence_test.cc"],
 )
 
 coralnpu_v2_binary(
@@ -30,8 +35,7 @@ filegroup(
     name = "coralnpu_isa_tests",
     srcs = [
         "ecall.elf",
+        "fence_test.elf",
         "perf_counters.elf",
     ],
 )
-
-collect_coralnpu_elfs()

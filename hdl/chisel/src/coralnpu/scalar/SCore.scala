@@ -20,7 +20,6 @@ import chisel3.util._
 import common._
 import coralnpu.float.FloatCore
 import coralnpu.rvv.{Rob2Rt, RvvCoreIO}
-import _root_.circt.stage.ChiselStage
 
 object SCore {
   def apply(p: Parameters): SCore = {
@@ -50,8 +49,7 @@ class SCore(p: Parameters) extends Module {
 
   // The functional units that make up the core.
   val regfile = Regfile(p)
-  val fetch   = if (p.enableFetchL0) { Fetch(p) }
-  else { Module(new UncachedFetch(p)) }
+  val fetch   = Module(new UncachedFetch(p))
 
   val csr      = Csr(p)
   val dispatch = Module(new DispatchV2(p))
@@ -71,7 +69,7 @@ class SCore(p: Parameters) extends Module {
   dispatch.io.retirement_buffer_nSpace       := rob_io.nSpace
   dispatch.io.retirement_buffer_empty        := rob_io.empty
   dispatch.io.retirement_buffer_trap_pending := rob_io.trapPending
-  val rvvFlushReg = if (p.enableRvv) Some(RegNext(rob_io.trapRetired, false.B)) else None
+  val rvvFlushReg = Option.when(p.enableRvv)(RegNext(rob_io.trapRetired, false.B))
   if (p.enableRvv) {
     rob_io.isVector.get                        := dispatch.io.isVector.get
     rob_io.writeAddrVector.get                 := dispatch.io.rvvRdMark.get
@@ -86,6 +84,7 @@ class SCore(p: Parameters) extends Module {
     rvvRdPipedBits := io.rvvcore.get.rd_rob2rt_o
     (0 until p.rvvRetireLanes).foreach(i => {
       rob_io.writeDataVector.get(i).valid        := rvvRdPipedValid(i)
+      rob_io.writeDataVector.get(i).bits.w_valid := rvvRdPipedBits(i).w_valid
       rob_io.writeDataVector.get(i).bits.addr    := rvvRdPipedBits(i).w_index
       rob_io.writeDataVector.get(i).bits.rob_tag := rvvRdPipedBits(i).rob_tag
       if (p.enableVerification) {
@@ -95,13 +94,17 @@ class SCore(p: Parameters) extends Module {
       rob_io.writeDataVector.get(i).bits.last_uop_valid := rvvRdPipedBits(i).last_uop_valid
     })
     if (p.enableVme) {
-      rob_io.isTile.get        := dispatch.io.isTile.get
-      rob_io.writeDataTile.get := io.rvvcore.get.vmeRt.get
-      rob_io.mtype.get         := io.rvvcore.get.nextConfigMtype
-        .getOrElse(io.rvvcore.get.configState.bits.mtype.get)
+      rob_io.isTile.get         := dispatch.io.isTile.get
+      rob_io.writeDataTile.get  := io.rvvcore.get.vmeRt.get
+      rob_io.vmeMtypeWb.get     := io.rvvcore.get.vmeMtypeWb.get
       dispatch.io.mstatusMs.get := csr.io.mstatus_ms.get
-      csr.io.vme_discard.get    := dispatch.io.vmeDiscard.get
-      csr.io.vme_dirty.get      := dispatch.io.vmeDirty.get
+      val vmeEventValid = !(rob_io.trapRetired || rvvFlushReg.get || io.rvvcore.get.trap.valid)
+      csr.io.vme_discard.get  := RegNext(dispatch.io.vmeDiscard.get, false.B) && vmeEventValid
+      csr.io.vme_ms_dirty.get := RegNext(dispatch.io.vmeMsDirty.get, false.B) && vmeEventValid
+      csr.io.vme_vs_dirty.get := RegNext(dispatch.io.vmeVsDirty.get, false.B) && vmeEventValid
+      if (p.enableFloat) {
+        csr.io.vme_fp_dirty.get := RegNext(dispatch.io.vmeFpDirty.get, false.B) && vmeEventValid
+      }
     }
 
   }
@@ -142,7 +145,6 @@ class SCore(p: Parameters) extends Module {
   // Decode/Dispatch
   dispatch.io.inst <> fetch.io.inst.lanes
   dispatch.io.halted := csr.io.halted || csr.io.wfi || csr.io.dm.debug_mode || csr.io.dm.entering_debug_mode
-  dispatch.io.mactive          := false.B
   dispatch.io.lsuActive        := lsu.io.active
   dispatch.io.lsuQueueCapacity := lsu.io.queueCapacity
   dispatch.io.scoreboard.comb  := regfile.io.scoreboard.comb
@@ -287,6 +289,7 @@ class SCore(p: Parameters) extends Module {
 
   // ---------------------------------------------------------------------------
   // Register File
+  regfile.io.debugBusPort <> io.dm.scalar_rs
   for (i <- 0 until p.instructionLanes) {
     regfile.io.readAddr(2 * i + 0) := dispatch.io.rs1Read(i)
     regfile.io.readAddr(2 * i + 1) := dispatch.io.rs2Read(i)
@@ -294,8 +297,6 @@ class SCore(p: Parameters) extends Module {
     regfile.io.readSet(2 * i + 1)  := dispatch.io.rs2Set(i)
     regfile.io.writeAddr(i)        := dispatch.io.rdMark(i)
     regfile.io.busAddr(i)          := dispatch.io.busRead(i)
-
-    regfile.io.debugBusPort <> io.dm.scalar_rs
 
     val csr0Valid = if (i == 0) csr.io.rd.valid else false.B
     val csr0Addr  = if (i == 0) csr.io.rd.bits.addr else 0.U
@@ -489,7 +490,6 @@ class SCore(p: Parameters) extends Module {
 
       io.rvvcore.get.inst(i).valid        := dispatch.io.rvv.get(i).valid
       io.rvvcore.get.inst(i).bits         := dispatch.io.rvv.get(i).bits
-      io.rvvcore.get.inst(i).bits.pc      := dispatch.io.rvv.get(i).bits.pc
       io.rvvcore.get.inst(i).bits.rob_tag := tag
       dispatch.io.rvv.get(i).ready        := io.rvvcore.get.inst(i).ready
     }
@@ -547,15 +547,12 @@ class SCore(p: Parameters) extends Module {
     csr.io.rvv_dirty.get := io.rvvcore.get.rd_rob2rt_o.map(_.valid).reduce(_ || _) ||
       io.rvvcore.get.rd.map(_.valid).reduce(_ || _)
   }
-  val isBranching            = bru.map(_.io.taken.valid).reduce(_ || _)
   val hasFetchedInstructions = fetch.io.inst.lanes.map(_.valid).reduce(_ || _)
-  val floatIdle              = if (p.enableFloat) { fRegfile.get.io.scoreboard === 0.U }
-  else { true.B }
-  val rvvIdle = if (p.enableRvv) { io.rvvcore.get.rvv_idle }
-  else { true.B }
+  val floatIdle              = fRegfile.map(_.io.scoreboard === 0.U).getOrElse(true.B)
+  val rvvIdle                = io.rvvcore.map(_.rvv_idle).getOrElse(true.B)
   // Scalar and float arithmetics don't actually trap, we're just trying to be precise here.
   val fetchFaultValid = fetch.io.fault.valid &&
-    !isBranching &&                         // Branches and jumps
+    !branchTaken &&                         // Branches and jumps
     (regfile.io.scoreboard.regd === 0.U) && // Pending scalar operation
     floatIdle &&                            // Pending float operation
     rvvIdle &&                              // Could have vill
@@ -654,5 +651,5 @@ class SCore(p: Parameters) extends Module {
 
 object EmitSCore extends App {
   val p = new Parameters
-  ChiselStage.emitSystemVerilogFile(new SCore(p), args)
+  ChiselEmitter.emit(new SCore(p), args)
 }

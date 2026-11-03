@@ -12,18 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import cocotb
+from coralnpu_test_utils.coralflow.runner import coralflow_main, coralflow_test
 import itertools
 import numpy as np
 import tqdm
 
 from bazel_tools.tools.python.runfiles import runfiles
 from coralnpu_test_utils.rvv_type_util import construct_vtype, DTYPE_TO_SEW, SEWS, SEW_TO_LMULS_AND_VLMAXS, LMUL_TO_EMUL
-from coralnpu_test_utils.sim_backends.verilator_test_fixture import VerilatorTestFixture
 
 
 async def vector_load_store(
-    dut,
+    fixture,
     elf_name: str,
     dtype,
     in_size: int,
@@ -34,7 +33,6 @@ async def vector_load_store(
 
     Each test performs some kind of patterned copy from `in_buf` to `out_buf`.
     """
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     await fixture.load_elf_and_lookup_symbols(
         r.Rlocation('coralnpu_hw/tests/cocotb/rvv/load_store/' + elf_name),
@@ -68,7 +66,7 @@ async def vector_load_store(
 
 
 async def vector_load_store_v2(
-    dut,
+    fixture,
     elf_name: str,
     cases: list[dict],  # keys: impl, vl, in_size, out_size, pattern.
     dtype,
@@ -77,7 +75,6 @@ async def vector_load_store_v2(
 
     Each test performs some kind of patterned copy from `in_buf` to `out_buf`.
     """
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     await fixture.load_elf_and_lookup_symbols(
         r.Rlocation('coralnpu_hw/tests/cocotb/rvv/load_store/' + elf_name),
@@ -122,7 +119,7 @@ async def vector_load_store_v2(
 
 
 async def vector_load_segmented_indexed(
-    dut,
+    fixture,
     elf_name: str,
     cases: list[dict],  # keys: impl, vl, segments, in_bytes, out_size.
     dtype,
@@ -132,7 +129,6 @@ async def vector_load_segmented_indexed(
 
     Each test performs a gather-unzip operation and writes the result to an output.
     """
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     await fixture.load_elf_and_lookup_symbols(
         r.Rlocation('coralnpu_hw/tests/cocotb/rvv/load_store/' + elf_name),
@@ -196,7 +192,7 @@ async def vector_load_segmented_indexed(
 
 
 async def vector_store_segmented_indexed(
-    dut,
+    fixture,
     elf_name: str,
     cases: list[dict],  # keys: impl, vl, segments, out_size.
     data_dtype,
@@ -206,7 +202,6 @@ async def vector_store_segmented_indexed(
 
     Each test loads indices and data and performs a scatter operation.
     """
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     await fixture.load_elf_and_lookup_symbols(
         r.Rlocation('coralnpu_hw/tests/cocotb/rvv/load_store/' + elf_name),
@@ -294,11 +289,10 @@ async def vector_store_segmented_indexed(
         assert (actual_outputs == expected_outputs).all(), debug_msg
 
 
-@cocotb.test()
-async def load_store_bits(dut):
+@coralflow_test
+async def load_store_bits(fixture):
     """Test vlm/vsm usage accessible from intrinsics."""
     # mask is not accessible from here.
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     cases = [
         {
@@ -405,11 +399,10 @@ async def load_store_bits(dut):
         assert (actual_output == expected_output).all(), debug_msg
 
 
-@cocotb.test()
-async def load_unit_masked(dut):
+@coralflow_test
+async def load_unit_masked(fixture):
     """Test masked unit stores."""
 
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
 
     await fixture.load_elf_and_lookup_symbols(
@@ -462,8 +455,10 @@ async def load_unit_masked(dut):
         np.uint32: "test_unit_load32",
     }
 
-    all_cases = itertools.product([False, True], cases)
-    total_loops = 2 * len(cases)
+    axi_options = [False, True] if hasattr(fixture,
+                                           'core_mini_axi') else [False]
+    all_cases = itertools.product(axi_options, cases)
+    total_loops = len(axi_options) * len(cases)
 
     rng = np.random.default_rng()
     for use_axi, (dtype, lmul, vl) in tqdm.tqdm(all_cases, total=total_loops):
@@ -510,11 +505,10 @@ async def load_unit_masked(dut):
                 assert load_filler == actual_output[i]
 
 
-@cocotb.test()
-async def load_unit_ff(dut):
+@coralflow_test
+async def load_unit_ff(fixture):
     """Test fault-only-first unit loads (vle8ff.v, vle16ff.v, vle32ff.v) across all SEWs and LMULs."""
 
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
 
     await fixture.load_elf_and_lookup_symbols(
@@ -590,8 +584,11 @@ async def load_unit_ff(dut):
 
     rng = np.random.default_rng(42)
 
+    axi_options = [False, True] if hasattr(fixture,
+                                           'core_mini_axi') else [False]
+
     # 1. Unmasked fault-only-first loads across TCM and AXI
-    unmasked_tests = list(itertools.product([False, True], cases))
+    unmasked_tests = list(itertools.product(axi_options, cases))
     for use_axi, (dtype, lmul, vl) in tqdm.tqdm(unmasked_tests,
                                                 desc="load_unit_ff unmasked"):
         vtype = construct_vtype(0, 0, DTYPE_TO_SEW[dtype], lmul)
@@ -634,7 +631,7 @@ async def load_unit_ff(dut):
     mask_modes = ['random', 'all_ones', 'all_zeros']
     for mask_mode in mask_modes:
         # For all_ones and all_zeros, testing on TCM is sufficient to keep test runtime lean.
-        tested_axi = [False, True] if mask_mode == 'random' else [False]
+        tested_axi = axi_options if mask_mode == 'random' else [False]
         masked_tests = list(itertools.product(tested_axi, cases))
         for use_axi, (dtype, lmul, vl) in tqdm.tqdm(
                 masked_tests, desc=f"load_unit_ff masked_{mask_mode}"):
@@ -722,7 +719,7 @@ async def load_unit_ff(dut):
         (np.uint32, 0b000, 3, 3),
     ]
 
-    alignment_tests = list(itertools.product([False, True], alignment_cases))
+    alignment_tests = list(itertools.product(axi_options, alignment_cases))
     load_data_base_tcm = fixture.symbols['load_data']
     for use_axi, (dtype, lmul, vl, byte_offset) in tqdm.tqdm(
             alignment_tests, desc="load_unit_ff unaligned_and_lengths"):
@@ -740,7 +737,7 @@ async def load_unit_ff(dut):
                                          ] = load_data_bytes
         else:
             load_addr = load_data_base_tcm + byte_offset
-            await fixture.core_mini_axi.write(load_addr, load_data)
+            await fixture.write(load_addr, load_data)
 
         await fixture.write_word('load_addr', load_addr)
         await fixture.write_ptr('impl', dtype_to_unmasked_function[dtype])
@@ -760,10 +757,9 @@ async def load_unit_ff(dut):
         ), f"unaligned mismatch at vl={vl}, offset={byte_offset}, dtype={dtype}, axi={use_axi}"
 
 
-@cocotb.test()
-async def store_unit_masked(dut):
+@coralflow_test
+async def store_unit_masked(fixture):
     """Test masked unit stores."""
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
 
     await fixture.load_elf_and_lookup_symbols(
@@ -816,8 +812,10 @@ async def store_unit_masked(dut):
         np.uint32: "test_unit_store32",
     }
 
-    all_cases = itertools.product([False, True], cases)
-    total_loops = 2 * len(cases)
+    axi_options = [False, True] if hasattr(fixture,
+                                           'core_mini_axi') else [False]
+    all_cases = itertools.product(axi_options, cases)
+    total_loops = len(axi_options) * len(cases)
 
     rng = np.random.default_rng()
     for use_axi, (dtype, lmul, vl) in tqdm.tqdm(all_cases, total=total_loops):
@@ -860,10 +858,10 @@ async def store_unit_masked(dut):
                 assert load_data[i] == actual_output[i]
 
 
-@cocotb.test()
-async def load8_stride0_m1(dut):
+@coralflow_test
+async def load8_stride0_m1(fixture):
     await vector_load_store(
-        dut=dut,
+        fixture=fixture,
         elf_name='load8_stride0_m1.elf',
         dtype=np.uint8,
         in_size=32,
@@ -872,10 +870,10 @@ async def load8_stride0_m1(dut):
     )
 
 
-@cocotb.test()
-async def load8_stride0strict_m1(dut):
+@coralflow_test
+async def load8_stride0strict_m1(fixture):
     await vector_load_store(
-        dut=dut,
+        fixture=fixture,
         elf_name='load8_stride0strict_m1.elf',
         dtype=np.uint8,
         in_size=32,
@@ -884,10 +882,10 @@ async def load8_stride0strict_m1(dut):
     )
 
 
-@cocotb.test()
-async def load8_stride2_m1(dut):
+@coralflow_test
+async def load8_stride2_m1(fixture):
     await vector_load_store(
-        dut=dut,
+        fixture=fixture,
         elf_name='load8_stride2_m1.elf',
         dtype=np.uint8,
         in_size=32,
@@ -896,10 +894,10 @@ async def load8_stride2_m1(dut):
     )
 
 
-@cocotb.test()
-async def load8_stride2_m1_partial(dut):
+@coralflow_test
+async def load8_stride2_m1_partial(fixture):
     await vector_load_store(
-        dut=dut,
+        fixture=fixture,
         elf_name='load8_stride2_m1_partial.elf',
         dtype=np.uint8,
         in_size=32,
@@ -908,10 +906,10 @@ async def load8_stride2_m1_partial(dut):
     )
 
 
-@cocotb.test()
-async def load8_stride2_mf4(dut):
+@coralflow_test
+async def load8_stride2_mf4(fixture):
     await vector_load_store(
-        dut=dut,
+        fixture=fixture,
         elf_name='load8_stride2_mf4.elf',
         dtype=np.uint8,
         in_size=32,
@@ -920,10 +918,10 @@ async def load8_stride2_mf4(dut):
     )
 
 
-@cocotb.test()
-async def load16_stride4_m1(dut):
+@coralflow_test
+async def load16_stride4_m1(fixture):
     await vector_load_store(
-        dut=dut,
+        fixture=fixture,
         elf_name='load16_stride4_m1.elf',
         dtype=np.uint16,
         in_size=16,
@@ -932,10 +930,10 @@ async def load16_stride4_m1(dut):
     )
 
 
-@cocotb.test()
-async def load16_stride4_m1_partial(dut):
+@coralflow_test
+async def load16_stride4_m1_partial(fixture):
     await vector_load_store(
-        dut=dut,
+        fixture=fixture,
         elf_name='load16_stride4_m1_partial.elf',
         dtype=np.uint16,
         in_size=16,
@@ -944,10 +942,10 @@ async def load16_stride4_m1_partial(dut):
     )
 
 
-@cocotb.test()
-async def load16_stride4_mf2(dut):
+@coralflow_test
+async def load16_stride4_mf2(fixture):
     await vector_load_store(
-        dut=dut,
+        fixture=fixture,
         elf_name='load16_stride4_mf2.elf',
         dtype=np.uint16,
         in_size=16,
@@ -956,10 +954,10 @@ async def load16_stride4_mf2(dut):
     )
 
 
-@cocotb.test()
-async def load32_stride8_m1(dut):
+@coralflow_test
+async def load32_stride8_m1(fixture):
     await vector_load_store(
-        dut=dut,
+        fixture=fixture,
         elf_name='load32_stride8_m1.elf',
         dtype=np.uint32,
         in_size=8,
@@ -968,10 +966,10 @@ async def load32_stride8_m1(dut):
     )
 
 
-@cocotb.test()
-async def load32_stride8_m1_partial(dut):
+@coralflow_test
+async def load32_stride8_m1_partial(fixture):
     await vector_load_store(
-        dut=dut,
+        fixture=fixture,
         elf_name='load32_stride8_m1_partial.elf',
         dtype=np.uint32,
         in_size=8,
@@ -980,10 +978,10 @@ async def load32_stride8_m1_partial(dut):
     )
 
 
-@cocotb.test()
-async def load_store8_unit_m2(dut):
+@coralflow_test
+async def load_store8_unit_m2(fixture):
     await vector_load_store(
-        dut=dut,
+        fixture=fixture,
         elf_name='load_store8_unit_m2.elf',
         dtype=np.uint8,
         in_size=64,
@@ -992,10 +990,10 @@ async def load_store8_unit_m2(dut):
     )
 
 
-@cocotb.test()
-async def load_store16_unit_m2(dut):
+@coralflow_test
+async def load_store16_unit_m2(fixture):
     await vector_load_store(
-        dut=dut,
+        fixture=fixture,
         elf_name='load_store16_unit_m2.elf',
         dtype=np.uint16,
         in_size=32,
@@ -1004,10 +1002,10 @@ async def load_store16_unit_m2(dut):
     )
 
 
-@cocotb.test()
-async def load_store32_unit_m2(dut):
+@coralflow_test
+async def load_store32_unit_m2(fixture):
     await vector_load_store(
-        dut=dut,
+        fixture=fixture,
         elf_name='load_store32_unit_m2.elf',
         dtype=np.uint32,
         in_size=16,
@@ -1016,8 +1014,8 @@ async def load_store32_unit_m2(dut):
     )
 
 
-@cocotb.test()
-async def load8_index8(dut):
+@coralflow_test
+async def load8_index8(fixture):
     """Test vl*xei8_v_u8 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int):
@@ -1030,7 +1028,7 @@ async def load8_index8(dut):
         }
 
     await vector_load_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='load8_index8.elf',
         cases=[
             # Unordered
@@ -1065,8 +1063,8 @@ async def load8_index8(dut):
     )
 
 
-@cocotb.test()
-async def load8_index8_seg(dut):
+@coralflow_test
+async def load8_index8_seg(fixture):
     """Test vl*xseg*ei8_v_u8 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, n_segs: int):
@@ -1079,7 +1077,7 @@ async def load8_index8_seg(dut):
         }
 
     await vector_load_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='load8_index8_seg.elf',
         cases=[
             # Unordered, segment 2
@@ -1202,8 +1200,8 @@ async def load8_index8_seg(dut):
     )
 
 
-@cocotb.test()
-async def load8_index16(dut):
+@coralflow_test
+async def load8_index16(fixture):
     """Test vl*xei16_v_u8 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int):
@@ -1216,7 +1214,7 @@ async def load8_index16(dut):
         }
 
     await vector_load_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='load8_index16.elf',
         cases=[
             # Unordered
@@ -1247,8 +1245,8 @@ async def load8_index16(dut):
     )
 
 
-@cocotb.test()
-async def load8_index16_seg(dut):
+@coralflow_test
+async def load8_index16_seg(fixture):
     """Test vl*xseg*ei16_v_u8 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, n_segs: int):
@@ -1261,7 +1259,7 @@ async def load8_index16_seg(dut):
         }
 
     await vector_load_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='load8_index16_seg.elf',
         cases=[
             # Unordered, segment 2
@@ -1384,8 +1382,8 @@ async def load8_index16_seg(dut):
     )
 
 
-@cocotb.test()
-async def load8_seg_unit(dut):
+@coralflow_test
+async def load8_seg_unit(fixture):
     """Test vlseg*e8 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, n_segs: int):
@@ -1406,7 +1404,7 @@ async def load8_seg_unit(dut):
         }
 
     await vector_load_store_v2(
-        dut=dut,
+        fixture=fixture,
         elf_name='load8_seg_unit.elf',
         cases=[
             # Seg 2
@@ -1496,8 +1494,8 @@ async def load8_seg_unit(dut):
     )
 
 
-@cocotb.test()
-async def load8_index32(dut):
+@coralflow_test
+async def load8_index32(fixture):
     """Test vl*xei32_v_u8 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int):
@@ -1510,7 +1508,7 @@ async def load8_index32(dut):
         }
 
     await vector_load_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='load8_index32.elf',
         cases=[
             # Unordered
@@ -1537,8 +1535,8 @@ async def load8_index32(dut):
     )
 
 
-@cocotb.test()
-async def load8_index32_seg(dut):
+@coralflow_test
+async def load8_index32_seg(fixture):
     """Test vl*xseg*ei32_v_u8 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, n_segs: int):
@@ -1551,7 +1549,7 @@ async def load8_index32_seg(dut):
         }
 
     await vector_load_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='load8_index32_seg.elf',
         cases=[
             # Unordered, segment 2
@@ -1670,8 +1668,8 @@ async def load8_index32_seg(dut):
     )
 
 
-@cocotb.test()
-async def load16_index8(dut):
+@coralflow_test
+async def load16_index8(fixture):
     """Test vl*xei8_v_u16 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int):
@@ -1684,7 +1682,7 @@ async def load16_index8(dut):
         }
 
     await vector_load_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='load16_index8.elf',
         cases=[
             # Unordered
@@ -1715,8 +1713,8 @@ async def load16_index8(dut):
     )
 
 
-@cocotb.test()
-async def load16_index8_seg(dut):
+@coralflow_test
+async def load16_index8_seg(fixture):
     """Test vl*xseg*ei8_v_u16 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, n_segs: int):
@@ -1729,7 +1727,7 @@ async def load16_index8_seg(dut):
         }
 
     await vector_load_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='load16_index8_seg.elf',
         cases=[
             # Unordered, segment 2
@@ -1824,8 +1822,8 @@ async def load16_index8_seg(dut):
     )
 
 
-@cocotb.test()
-async def load16_index16_seg(dut):
+@coralflow_test
+async def load16_index16_seg(fixture):
     """Test vl*xseg*ei16_v_u16 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, n_segs: int):
@@ -1838,7 +1836,7 @@ async def load16_index16_seg(dut):
         }
 
     await vector_load_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='load16_index16_seg.elf',
         cases=[
             # Unordered, segment 2
@@ -1933,8 +1931,8 @@ async def load16_index16_seg(dut):
     )
 
 
-@cocotb.test()
-async def load16_index32_seg(dut):
+@coralflow_test
+async def load16_index32_seg(fixture):
     """Test vl*xseg*ei32_v_u16 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, n_segs: int):
@@ -1947,7 +1945,7 @@ async def load16_index32_seg(dut):
         }
 
     await vector_load_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='load16_index32_seg.elf',
         cases=[
             # Unordered, segment 2
@@ -2042,8 +2040,8 @@ async def load16_index32_seg(dut):
     )
 
 
-@cocotb.test()
-async def load16_seg_unit(dut):
+@coralflow_test
+async def load16_seg_unit(fixture):
     """Test vlseg*e16 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, n_segs: int):
@@ -2064,7 +2062,7 @@ async def load16_seg_unit(dut):
         }
 
     await vector_load_store_v2(
-        dut=dut,
+        fixture=fixture,
         elf_name='load16_seg_unit.elf',
         cases=[
             # Seg 2
@@ -2133,8 +2131,8 @@ async def load16_seg_unit(dut):
     )
 
 
-@cocotb.test()
-async def load32_index8(dut):
+@coralflow_test
+async def load32_index8(fixture):
     """Test vl*xei8_v_u32 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int):
@@ -2147,7 +2145,7 @@ async def load32_index8(dut):
         }
 
     await vector_load_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='load32_index8.elf',
         cases=[
             # Unordered
@@ -2174,8 +2172,8 @@ async def load32_index8(dut):
     )
 
 
-@cocotb.test()
-async def load32_index8_seg(dut):
+@coralflow_test
+async def load32_index8_seg(fixture):
     """Test vl*xseg*ei32_v_u32 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, n_segs: int):
@@ -2188,7 +2186,7 @@ async def load32_index8_seg(dut):
         }
 
     await vector_load_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='load32_index8_seg.elf',
         cases=[
             # Unordered, segment 2
@@ -2255,8 +2253,8 @@ async def load32_index8_seg(dut):
     )
 
 
-@cocotb.test()
-async def load32_index16_seg(dut):
+@coralflow_test
+async def load32_index16_seg(fixture):
     """Test vl*xseg*ei32_v_u32 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, n_segs: int):
@@ -2269,7 +2267,7 @@ async def load32_index16_seg(dut):
         }
 
     await vector_load_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='load32_index16_seg.elf',
         cases=[
             # Unordered, segment 2
@@ -2332,8 +2330,8 @@ async def load32_index16_seg(dut):
     )
 
 
-@cocotb.test()
-async def load32_index32_seg(dut):
+@coralflow_test
+async def load32_index32_seg(fixture):
     """Test vl*xseg*ei32_v_u32 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, n_segs: int):
@@ -2346,7 +2344,7 @@ async def load32_index32_seg(dut):
         }
 
     await vector_load_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='load32_index32_seg.elf',
         cases=[
             # Unordered, segment 2
@@ -2413,8 +2411,8 @@ async def load32_index32_seg(dut):
     )
 
 
-@cocotb.test()
-async def load32_seg_unit(dut):
+@coralflow_test
+async def load32_seg_unit(fixture):
     """Test vlseg*e32 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, n_segs: int):
@@ -2435,7 +2433,7 @@ async def load32_seg_unit(dut):
         }
 
     await vector_load_store_v2(
-        dut=dut,
+        fixture=fixture,
         elf_name='load32_seg_unit.elf',
         cases=[
             # Seg 2
@@ -2483,10 +2481,10 @@ async def load32_seg_unit(dut):
     )
 
 
-@cocotb.test()
-async def load8_segment2_stride6_m1(dut):
+@coralflow_test
+async def load8_segment2_stride6_m1(fixture):
     await vector_load_store(
-        dut=dut,
+        fixture=fixture,
         elf_name='load8_segment2_stride6_m1.elf',
         dtype=np.uint8,
         in_size=256,
@@ -2495,10 +2493,10 @@ async def load8_segment2_stride6_m1(dut):
     )
 
 
-@cocotb.test()
-async def load16_segment2_stride6_m1(dut):
+@coralflow_test
+async def load16_segment2_stride6_m1(fixture):
     await vector_load_store(
-        dut=dut,
+        fixture=fixture,
         elf_name='load16_segment2_stride6_m1.elf',
         dtype=np.uint16,
         in_size=128,
@@ -2507,8 +2505,8 @@ async def load16_segment2_stride6_m1(dut):
     )
 
 
-@cocotb.test()
-async def store8_index8(dut):
+@coralflow_test
+async def store8_index8(fixture):
     """Test vs*xei8_v_u8 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int):
@@ -2520,7 +2518,7 @@ async def store8_index8(dut):
         }
 
     await vector_store_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='store8_index8.elf',
         cases=[
             # Unordered
@@ -2555,8 +2553,8 @@ async def store8_index8(dut):
     )
 
 
-@cocotb.test()
-async def store8_index8_seg(dut):
+@coralflow_test
+async def store8_index8_seg(fixture):
     """Test vs*xseg*ei8_v_u8 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, segs: int):
@@ -2568,7 +2566,7 @@ async def store8_index8_seg(dut):
         }
 
     await vector_store_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='store8_index8_seg.elf',
         cases=[
             # Unordered, segment 2
@@ -2691,8 +2689,8 @@ async def store8_index8_seg(dut):
     )
 
 
-@cocotb.test()
-async def store8_index16(dut):
+@coralflow_test
+async def store8_index16(fixture):
     """Test vs*xei16_v_u8 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int):
@@ -2704,7 +2702,7 @@ async def store8_index16(dut):
         }
 
     await vector_store_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='store8_index16.elf',
         cases=[
             # Unordered
@@ -2735,8 +2733,8 @@ async def store8_index16(dut):
     )
 
 
-@cocotb.test()
-async def store8_index32(dut):
+@coralflow_test
+async def store8_index32(fixture):
     """Test vs*xei32_v_u8 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int):
@@ -2748,7 +2746,7 @@ async def store8_index32(dut):
         }
 
     await vector_store_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='store8_index32.elf',
         cases=[
             # Unordered
@@ -2775,8 +2773,8 @@ async def store8_index32(dut):
     )
 
 
-@cocotb.test()
-async def store16_index8(dut):
+@coralflow_test
+async def store16_index8(fixture):
     """Test vs*xei8_v_u16 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int):
@@ -2788,7 +2786,7 @@ async def store16_index8(dut):
         }
 
     await vector_store_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='store16_index8.elf',
         cases=[
             # Unordered
@@ -2819,8 +2817,8 @@ async def store16_index8(dut):
     )
 
 
-@cocotb.test()
-async def store16_index16(dut):
+@coralflow_test
+async def store16_index16(fixture):
     """Test vs*xei16_v_u16 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int):
@@ -2832,7 +2830,7 @@ async def store16_index16(dut):
         }
 
     await vector_store_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='store16_index16.elf',
         cases=[
             # Unordered
@@ -2863,8 +2861,8 @@ async def store16_index16(dut):
     )
 
 
-@cocotb.test()
-async def store16_index32(dut):
+@coralflow_test
+async def store16_index32(fixture):
     """Test vs*xei32_v_u16 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int):
@@ -2876,7 +2874,7 @@ async def store16_index32(dut):
         }
 
     await vector_store_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='store16_index32.elf',
         cases=[
             # Unordered
@@ -2903,8 +2901,8 @@ async def store16_index32(dut):
     )
 
 
-@cocotb.test()
-async def store32_index8(dut):
+@coralflow_test
+async def store32_index8(fixture):
     """Test vs*xei8_v_u32 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int):
@@ -2916,7 +2914,7 @@ async def store32_index8(dut):
         }
 
     await vector_store_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='store32_index8.elf',
         cases=[
             # Unordered
@@ -2943,8 +2941,8 @@ async def store32_index8(dut):
     )
 
 
-@cocotb.test()
-async def store32_index16(dut):
+@coralflow_test
+async def store32_index16(fixture):
     """Test vs*xei16_v_u32 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int):
@@ -2956,7 +2954,7 @@ async def store32_index16(dut):
         }
 
     await vector_store_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='store32_index16.elf',
         cases=[
             # Unordered
@@ -2983,8 +2981,8 @@ async def store32_index16(dut):
     )
 
 
-@cocotb.test()
-async def store32_index32(dut):
+@coralflow_test
+async def store32_index32(fixture):
     """Test vs*xei32_v_u32 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int):
@@ -2996,7 +2994,7 @@ async def store32_index32(dut):
         }
 
     await vector_store_segmented_indexed(
-        dut=dut,
+        fixture=fixture,
         elf_name='store32_index32.elf',
         cases=[
             # Unordered
@@ -3023,8 +3021,8 @@ async def store32_index32(dut):
     )
 
 
-@cocotb.test()
-async def store8_seg_unit(dut):
+@coralflow_test
+async def store8_seg_unit(fixture):
     """Test vsseg*e8 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, n_segs: int):
@@ -3042,7 +3040,7 @@ async def store8_seg_unit(dut):
         }
 
     await vector_load_store_v2(
-        dut=dut,
+        fixture=fixture,
         elf_name='store8_seg_unit.elf',
         cases=[
             # Seg 2
@@ -3132,8 +3130,8 @@ async def store8_seg_unit(dut):
     )
 
 
-@cocotb.test()
-async def store16_seg_unit(dut):
+@coralflow_test
+async def store16_seg_unit(fixture):
     """Test vsseg*e16 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, n_segs: int):
@@ -3151,7 +3149,7 @@ async def store16_seg_unit(dut):
         }
 
     await vector_load_store_v2(
-        dut=dut,
+        fixture=fixture,
         elf_name='store16_seg_unit.elf',
         cases=[
             # Seg 2
@@ -3220,8 +3218,8 @@ async def store16_seg_unit(dut):
     )
 
 
-@cocotb.test()
-async def store32_seg_unit(dut):
+@coralflow_test
+async def store32_seg_unit(fixture):
     """Test vsseg*e32 usage accessible from intrinsics."""
 
     def make_test_case(impl: str, vl: int, n_segs: int):
@@ -3239,7 +3237,7 @@ async def store32_seg_unit(dut):
         }
 
     await vector_load_store_v2(
-        dut=dut,
+        fixture=fixture,
         elf_name='store32_seg_unit.elf',
         cases=[
             # Seg 2
@@ -3287,8 +3285,7 @@ async def store32_seg_unit(dut):
     )
 
 
-async def _setup_lsu_fault_fixture(dut):
-    fixture = await VerilatorTestFixture.Create(dut)
+async def _setup_lsu_fault_fixture(fixture):
     r = runfiles.Create()
     await fixture.load_elf_and_lookup_symbols(
         r.Rlocation(
@@ -3345,7 +3342,7 @@ async def _run_and_verify_lsu_fault(
     if vl is not None:
         count = num_input_bytes if num_input_bytes is not None else vl
         target_in_addr = fixture.symbols['buffer']
-        await fixture.core_mini_axi.write(
+        await fixture.write(
             target_in_addr, np.random.randint(0, 255, count, dtype=np.uint8)
         )
         await fixture.write(
@@ -3356,7 +3353,7 @@ async def _run_and_verify_lsu_fault(
     await fixture.write_ptr('test_fn', test_fn_symbol)
     await fixture.run_to_halt()
 
-    fault_count = (await fixture.read_word('fault_count')).view(np.int32)[0]
+    fault_count = await fixture.read_word('fault_count')
     assert fault_count == 1, f"Expected exactly 1 fault, got {fault_count}"
 
     fault_mcause = await fixture.read_word('fault_mcause')
@@ -3381,10 +3378,10 @@ async def _run_and_verify_lsu_fault(
     )
 
 
-@cocotb.test()
-async def lsu_fault_scalar_preserves_vstart(dut):
+@coralflow_test
+async def lsu_fault_scalar_preserves_vstart(fixture):
     """Testbench to verify scalar memory fault preserves non-zero vstart."""
-    fixture = await _setup_lsu_fault_fixture(dut)
+    await _setup_lsu_fault_fixture(fixture)
     await _run_and_verify_lsu_fault(
         fixture,
         test_fn_symbol='run_scalar_fault_preserves_vstart',
@@ -3395,10 +3392,10 @@ async def lsu_fault_scalar_preserves_vstart(dut):
     )
 
 
-@cocotb.test()
-async def lsu_fault_unit_stride_rs_flush(dut):
+@coralflow_test
+async def lsu_fault_unit_stride_rs_flush(fixture):
     """Testbench to verify unit-stride vector store fault purges subsequent stores in RS (Vector -> Vector)."""
-    fixture = await _setup_lsu_fault_fixture(dut)
+    await _setup_lsu_fault_fixture(fixture)
     await _run_and_verify_lsu_fault(
         fixture,
         test_fn_symbol='run_unit_stride_fault_rs_flush',
@@ -3409,10 +3406,10 @@ async def lsu_fault_unit_stride_rs_flush(dut):
     )
 
 
-@cocotb.test()
-async def lsu_fault_negative_stride_mid_vstart(dut):
+@coralflow_test
+async def lsu_fault_negative_stride_mid_vstart(fixture):
     """Testbench to verify negative-stride vector store crossing boundary calculates mid-vector vstart."""
-    fixture = await _setup_lsu_fault_fixture(dut)
+    await _setup_lsu_fault_fixture(fixture)
     await _run_and_verify_lsu_fault(
         fixture,
         test_fn_symbol='run_negative_stride_mid_vstart_fault',
@@ -3424,10 +3421,10 @@ async def lsu_fault_negative_stride_mid_vstart(dut):
     )
 
 
-@cocotb.test()
-async def lsu_fault_indexed_mid_vstart(dut):
+@coralflow_test
+async def lsu_fault_indexed_mid_vstart(fixture):
     """Testbench to verify indexed vector store calculates mid-vector vstart."""
-    fixture = await _setup_lsu_fault_fixture(dut)
+    await _setup_lsu_fault_fixture(fixture)
     await _run_and_verify_lsu_fault(
         fixture,
         test_fn_symbol='run_indexed_mid_vstart_fault',
@@ -3440,10 +3437,10 @@ async def lsu_fault_indexed_mid_vstart(dut):
     )
 
 
-@cocotb.test()
-async def lsu_fault_seg3_negative_stride_mid_vstart(dut):
+@coralflow_test
+async def lsu_fault_seg3_negative_stride_mid_vstart(fixture):
     """Testbench to verify segment store with NF=3 calculates mid-vector vstart via NF=3 division."""
-    fixture = await _setup_lsu_fault_fixture(dut)
+    await _setup_lsu_fault_fixture(fixture)
     await _run_and_verify_lsu_fault(
         fixture,
         test_fn_symbol='run_seg3_negative_stride_mid_vstart_fault',
@@ -3455,10 +3452,10 @@ async def lsu_fault_seg3_negative_stride_mid_vstart(dut):
     )
 
 
-@cocotb.test()
-async def lsu_fault_seg5_negative_stride_mid_vstart(dut):
+@coralflow_test
+async def lsu_fault_seg5_negative_stride_mid_vstart(fixture):
     """Testbench to verify segment store with NF=5 calculates mid-vector vstart via NF=5 division."""
-    fixture = await _setup_lsu_fault_fixture(dut)
+    await _setup_lsu_fault_fixture(fixture)
     await _run_and_verify_lsu_fault(
         fixture,
         test_fn_symbol='run_seg5_negative_stride_mid_vstart_fault',
@@ -3470,10 +3467,10 @@ async def lsu_fault_seg5_negative_stride_mid_vstart(dut):
     )
 
 
-@cocotb.test()
-async def lsu_fault_vector_load_rs_flush(dut):
+@coralflow_test
+async def lsu_fault_vector_load_rs_flush(fixture):
     """Testbench to verify vector load fault purges follow-on scalar store in RS (Vector -> Scalar)."""
-    fixture = await _setup_lsu_fault_fixture(dut)
+    await _setup_lsu_fault_fixture(fixture)
     await _run_and_verify_lsu_fault(
         fixture,
         test_fn_symbol='run_vector_load_fault_rs_flush',
@@ -3484,10 +3481,10 @@ async def lsu_fault_vector_load_rs_flush(dut):
     )
 
 
-@cocotb.test()
-async def lsu_fault_vleff_rs_flush(dut):
+@coralflow_test
+async def lsu_fault_vleff_rs_flush(fixture):
     """Testbench to verify fault-only-first load fault on element 0 purges follow-on scalar store and raises exception."""
-    fixture = await _setup_lsu_fault_fixture(dut)
+    await _setup_lsu_fault_fixture(fixture)
     await _run_and_verify_lsu_fault(
         fixture,
         test_fn_symbol='run_vleff_fault_rs_flush',
@@ -3499,10 +3496,10 @@ async def lsu_fault_vleff_rs_flush(dut):
     )
 
 
-@cocotb.test()
-async def lsu_fault_scalar_mixed_rs_flush(dut):
+@coralflow_test
+async def lsu_fault_scalar_mixed_rs_flush(fixture):
     """Testbench to verify scalar store fault purges follow-on vector store in RS (Scalar -> Vector)."""
-    fixture = await _setup_lsu_fault_fixture(dut)
+    await _setup_lsu_fault_fixture(fixture)
     await _run_and_verify_lsu_fault(
         fixture,
         test_fn_symbol='run_scalar_mixed_fault_rs_flush',
@@ -3513,10 +3510,10 @@ async def lsu_fault_scalar_mixed_rs_flush(dut):
     )
 
 
-@cocotb.test()
-async def lsu_fault_scalar_to_scalar_rs_flush(dut):
+@coralflow_test
+async def lsu_fault_scalar_to_scalar_rs_flush(fixture):
     """Testbench to verify scalar store fault purges follow-on scalar stores in RS (Scalar -> Scalar)."""
-    fixture = await _setup_lsu_fault_fixture(dut)
+    await _setup_lsu_fault_fixture(fixture)
     await _run_and_verify_lsu_fault(
         fixture,
         test_fn_symbol='run_scalar_to_scalar_fault_rs_flush',
@@ -3527,10 +3524,9 @@ async def lsu_fault_scalar_to_scalar_rs_flush(dut):
     )
 
 
-@cocotb.test()
-async def load_store8_test(dut):
+@coralflow_test
+async def load_store8_test(fixture):
     """Testbench to test RVV load."""
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     await fixture.load_elf_and_lookup_symbols(
         r.Rlocation(
@@ -3544,7 +3540,7 @@ async def load_store8_test(dut):
     target_in_addr = fixture.symbols['buffer'] + 16
     target_out_addr = fixture.symbols['buffer'] + 64
 
-    await fixture.core_mini_axi.write(target_in_addr, input_data)
+    await fixture.write(target_in_addr, input_data)
     await fixture.write('in_ptr', np.array([target_in_addr], dtype=np.uint32))
     await fixture.write(
         'out_ptr', np.array([target_out_addr], dtype=np.uint32)
@@ -3553,15 +3549,13 @@ async def load_store8_test(dut):
 
     await fixture.run_to_halt()
 
-    routputs = (await fixture.core_mini_axi.read(target_out_addr,
-                                                 vl)).view(np.uint8)
+    routputs = (await fixture.read(target_out_addr, vl)).view(np.uint8)
     assert (input_data == routputs).all()
 
 
-@cocotb.test()
-async def load_unit_all_vtypes_test(dut):
+@coralflow_test
+async def load_unit_all_vtypes_test(fixture):
     """Testbench to test RVV Unit/segmented loads, with all vtypes."""
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     functions = [
         ("test_vle8", np.uint8, 1),
@@ -3644,10 +3638,9 @@ async def load_unit_all_vtypes_test(dut):
                         assert (store_result == expected_result).all()
 
 
-@cocotb.test()
-async def store_unit_all_vtypes_test(dut):
+@coralflow_test
+async def store_unit_all_vtypes_test(fixture):
     """Testbench to test RVV Unit/segmented stores, with all vtypes."""
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     functions = [
         ("test_vse8", np.uint8, 1),
@@ -3737,10 +3730,9 @@ async def store_unit_all_vtypes_test(dut):
                     assert (expected_result == store_data).all()
 
 
-@cocotb.test()
-async def load_strided_all_vtypes_test(dut):
+@coralflow_test
+async def load_strided_all_vtypes_test(fixture):
     """Testbench to test RVV strided/segmented loads, with all vtypes."""
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     functions = [
         ("test_vlse8", np.uint8, 1),
@@ -3832,10 +3824,9 @@ async def load_strided_all_vtypes_test(dut):
                         assert (store_result == expected_result).all()
 
 
-@cocotb.test()
-async def store_strided_all_vtypes_test(dut):
+@coralflow_test
+async def store_strided_all_vtypes_test(fixture):
     """Testbench to test RVV strided/segmented store, with all vtypes."""
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     functions = [
         ("test_vsse8", np.uint8, 1),
@@ -3923,10 +3914,9 @@ async def store_strided_all_vtypes_test(dut):
                     assert (expected_store_data == store_data).all()
 
 
-@cocotb.test()
-async def load_store_whole_register_test(dut):
+@coralflow_test
+async def load_store_whole_register_test(fixture):
     """Testbench to test RVV strided/segmented store, with all vtypes."""
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     functions = [
         # Name, store, n_registers
@@ -3984,10 +3974,9 @@ async def load_store_whole_register_test(dut):
                         assert (store_data[data_written:] == 0x00).all()
 
 
-@cocotb.test()
-async def whole_reg_repro(dut):
+@coralflow_test
+async def whole_reg_repro(fixture):
     """Testbench to run whole_reg_repro."""
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     await fixture.load_elf_and_lookup_symbols(
         r.Rlocation(
@@ -3998,9 +3987,8 @@ async def whole_reg_repro(dut):
     await fixture.run_to_halt()
 
 
-async def load_store_stride_masked_param(dut, cases):
+async def load_store_stride_masked_param(fixture, cases):
     """Testbench for parameterized load store stride mask usage accessible from intrinsics."""
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     await fixture.load_elf_and_lookup_symbols(
         r.Rlocation(
@@ -4093,8 +4081,8 @@ async def load_store_stride_masked_param(dut, cases):
         assert (stride_output == expected_stride_output).all(), debug_msg
 
 
-@cocotb.test()
-async def load_store_stride_masked_param_test(dut):
+@coralflow_test
+async def load_store_stride_masked_param_test(fixture):
     """Testbench cases for parameterized load store stride mask."""
     cases = [{
         'rvv_stride_mask': 'vstride_mask_u8mf4',
@@ -4188,13 +4176,12 @@ async def load_store_stride_masked_param_test(dut):
                       'bstride': bstride,
                       'dtype': np.uint32,
                   } for n in range(0, 34, 2) for bstride in range(0, 24, 4)]
-    await load_store_stride_masked_param(dut, cases)
+    await load_store_stride_masked_param(fixture, cases)
 
 
-@cocotb.test()
-async def load_store_stride_masked_test(dut):
+@coralflow_test
+async def load_store_stride_masked_test(fixture):
     """Testbench for constant load store stride mask usage accessible from intrinsics."""
-    fixture = await VerilatorTestFixture.Create(dut)
     r = runfiles.Create()
     await fixture.load_elf_and_lookup_symbols(
         r.Rlocation(
@@ -4253,3 +4240,7 @@ async def load_store_stride_masked_test(dut):
     })
     assert (actual_output == expected_output).all(), debug_msg
     assert (stride_output == expected_stride_output).all(), debug_msg
+
+
+if __name__ == "__main__":
+    coralflow_main()

@@ -99,11 +99,11 @@ module zvt_ctrl (
 
 // -------------- code start --------------------
   // decode
-  logic                 isVme2Lsu, isLsu2Vme, isMv2Rvv, isMv2Vme, isZero; 
+  logic                 isStore, isLoad, isMv2Rvv, isMv2Vme, isZero; 
   logic [`ZVT_LMUL-1:0] isPe;
 
-  assign isVme2Lsu = !peBusy && uopVld[0] && uop[0].is_lsu &&  uop[0].is_store && vmelsuRdy && (!uop[0].first_uop_valid || rtCmdRdy);
-  assign isLsu2Vme = !peBusy && uopVld[0] && uop[0].is_lsu && !uop[0].is_store && vmelsuresVld && (!uop[0].first_uop_valid || rtCmdRdy);
+  assign isStore = !peBusy && uopVld[0] && uop[0].is_lsu &&  uop[0].is_store && vmelsuRdy && (!uop[0].first_uop_valid || rtCmdRdy);
+  assign isLoad  = !peBusy && uopVld[0] && uop[0].is_lsu && !uop[0].is_store && vmelsuresVld && (!uop[0].first_uop_valid || rtCmdRdy);
 
   always_comb begin
     isPe = 'b0;
@@ -167,12 +167,22 @@ module zvt_ctrl (
   
   // vtzero encodes its destination tile in rd (dst_index[4:1]); TSS ops
   // encode it in rs1 (tss.tile).
-  assign tile      = isZero ? uop[0].dst_index[4:1] : uop[0].tss.tile;
+  always_comb begin
+    if(isPe[0] || isZero)
+      tile = uop[0].dst_index[4:1];
+    else begin
+      case(uop[0].eew_mt)
+        EEW8:    tile = uop[0].tss.tile;
+        EEW16:   tile = {uop[0].tss.tile[$clog2(`NUM_MT)-1:1], 1'b0};
+        default: tile = {uop[0].tss.tile[$clog2(`NUM_MT)-1:2], 2'b0};
+      endcase
+    end
+  end
   assign pattern   = uop[0].tss.pattern;
   assign index     = uop[0].tss.index;
   assign vstart    = uop[0].vstart;
   assign tm        = uop[0].tm[$clog2(`TE):0];
-  assign tn        = (isVme2Lsu||isLsu2Vme) & (uop[0].vl>`TE) ? `TE : uop[0].vl;
+  assign tn        = (isStore||isLoad) & (uop[0].vl>`TE) ? `TE : uop[0].vl;
   assign uop_index = uop[0].uop_index;
   
   // element type
@@ -198,7 +208,7 @@ module zvt_ctrl (
       isMv2Vme : begin
         vsrc = uop[0].vs2_data;
       end
-      isLsu2Vme: begin
+      isLoad: begin
         vsrc = vmelsures.w_data;
       end
       isMv2Rvv : begin
@@ -213,7 +223,7 @@ module zvt_ctrl (
         resVme2rvv.fpexp     = 'b0;
       `endif
       end
-      isVme2Lsu: begin
+      isStore: begin
       `ifdef TB_SUPPORT
         vmelsu.uop_pc    = uop[0].uop_pc;
         vmelsu.uop_index = uop_index;
@@ -477,10 +487,10 @@ module zvt_ctrl (
       EEW16: begin
         for(int i=0; i<`TE/4*`COMPRATIO; i++) begin
           for(int j=0; j<`TE/4/2; j++) begin
-            zeroWriteMtIdx[0][`TE/4/2*i+j] = {tile[3:1], 1'b0};
-            zeroWriteMtIdx[1][`TE/4/2*i+j] = {tile[3:1], 1'b0};
-            zeroWriteMtIdx[2][`TE/4/2*i+j] = {tile[3:1], 1'b1};
-            zeroWriteMtIdx[3][`TE/4/2*i+j] = {tile[3:1], 1'b1};
+            zeroWriteMtIdx[0][`TE/4/2*i+j] = {tile[$clog2(`NUM_MT)-1:1], 1'b0};
+            zeroWriteMtIdx[1][`TE/4/2*i+j] = {tile[$clog2(`NUM_MT)-1:1], 1'b0};
+            zeroWriteMtIdx[2][`TE/4/2*i+j] = {tile[$clog2(`NUM_MT)-1:1], 1'b1};
+            zeroWriteMtIdx[3][`TE/4/2*i+j] = {tile[$clog2(`NUM_MT)-1:1], 1'b1};
             
             zeroWriteSubIdx[0][`TE/4/2*i+j] = (`SUBTILE_SIZE)'((`TE/4)*(`TE/4*`COMPRATIO)*cnt+`TE/4*i+2*j);
             zeroWriteSubIdx[1][`TE/4/2*i+j] = (`SUBTILE_SIZE)'((`TE/4)*(`TE/4*`COMPRATIO)*cnt+`TE/4*i+2*j+'d1);
@@ -537,10 +547,10 @@ module zvt_ctrl (
       default: begin  // EEW32
         for(int i=0; i<`TE/4*`COMPRATIO; i++) begin
           for(int j=0; j<`TE/2/2; j++) begin
-            zeroWriteMtIdx[0][`TE/4*i+j] = {tile[3:2], 2'd0};
-            zeroWriteMtIdx[1][`TE/4*i+j] = {tile[3:2], 2'd1};
-            zeroWriteMtIdx[2][`TE/4*i+j] = {tile[3:2], 2'd2};
-            zeroWriteMtIdx[3][`TE/4*i+j] = {tile[3:2], 2'd3};
+            zeroWriteMtIdx[0][`TE/4*i+j] = {tile[$clog2(`NUM_MT)-1:2], 2'd0};
+            zeroWriteMtIdx[1][`TE/4*i+j] = {tile[$clog2(`NUM_MT)-1:2], 2'd1};
+            zeroWriteMtIdx[2][`TE/4*i+j] = {tile[$clog2(`NUM_MT)-1:2], 2'd2};
+            zeroWriteMtIdx[3][`TE/4*i+j] = {tile[$clog2(`NUM_MT)-1:2], 2'd3};
             
             zeroWriteSubIdx[0][`TE/4*i+j] = (`SUBTILE_SIZE)'((`TE/4)*(`TE/4*`COMPRATIO)*cnt+`TE/4*i+j);
             zeroWriteSubIdx[1][`TE/4*i+j] = (`SUBTILE_SIZE)'((`TE/4)*(`TE/4*`COMPRATIO)*cnt+`TE/4*i+j);
@@ -574,6 +584,9 @@ module zvt_ctrl (
   end
 
   // uopRdy
+`ifdef FPGA_XILINX
+  zvt_ctrl_fpga u_ctrl_fpga (.*);
+`else
   always_comb begin
     vmelsuVld     = 'b0;
     resVme2rvvVld = 'b0;
@@ -581,11 +594,11 @@ module zvt_ctrl (
     vmelsuresRdy  = 'b0;
 
     case(1'b1)
-      isVme2Lsu: begin
+      isStore: begin
         vmelsuVld = 1'b1;
         uopRdy[0] = 1'b1;
       end
-      isLsu2Vme: begin
+      isLoad: begin
         uopRdy[0]     = 1'b1;
         vmelsuresRdy  = 1'b1;
       end
@@ -604,6 +617,7 @@ module zvt_ctrl (
       end
     endcase
   end
+`endif
 
 
   // MT accessing
@@ -616,7 +630,7 @@ module zvt_ctrl (
   always_comb begin
     case(1'b1)
       isMv2Rvv,
-      isVme2Lsu: begin
+      isStore: begin
       `ifdef TB_SUPPORT
         readMtPc[0] = uop[0].uop_pc;
         readMtPc[1] = uop[0].uop_pc;
@@ -632,7 +646,7 @@ module zvt_ctrl (
         writeData   = 'b0;
       end
       isMv2Vme,
-      isLsu2Vme: begin
+      isLoad: begin
       `ifdef TB_SUPPORT
         readMtPc     = 'b0;
         writeMtPc[0] = uop[0].uop_pc;
@@ -678,24 +692,24 @@ module zvt_ctrl (
   end
 
   // retire cmd information 
-  assign rtCmdVld       = isPe[0] ? &(peCmdVld&peCmdRdy) : !isMv2Rvv & uopVld[0] & uopRdy[0] & uop[0].last_uop_valid;
+  assign rtCmdVld         = isPe[0] ? &(peCmdVld&peCmdRdy) : !isMv2Rvv & uopVld[0] & uopRdy[0] & uop[0].last_uop_valid;
 `ifdef TB_SUPPORT
-  assign rtCmd.inst_pc  = uop[0].uop_pc;
+  assign rtCmd.inst_pc    = uop[0].uop_pc;
 `endif
-  assign rtCmd.rob_tag  = uop[0].rob_tag;
-  assign rtCmd.isStore  = isVme2Lsu;
-  assign rtCmd.isLoad   = isLsu2Vme;
-  assign rtCmd.isMv2Vme = isMv2Vme;
-  assign rtCmd.isZero   = isZero;
-  assign rtCmd.isPe     = isPe[0];
-`ifdef RVVI_ON
-  assign rtCmd.tssIndex = index;
+  assign rtCmd.rob_tag    = uop[0].rob_tag;
+  assign rtCmd.isStore    = isStore;
+  assign rtCmd.isLoad     = isLoad;
+  assign rtCmd.isMv2Vme   = isMv2Vme;
+  assign rtCmd.isZero     = isZero;
+  assign rtCmd.isPe       = isPe[0];
+  assign rtCmd.mtIdx      = tile;
+  assign rtCmd.tssIndex   = index;
   assign rtCmd.tssPattern = pattern;
-  assign rtCmd.mt_index = (isMv2Vme || isLsu2Vme) ? tile : uop[0].dst_index[4:1];
-  assign rtCmd.eew_mt   = uop[0].eew_mt;
+  assign rtCmd.eew_mt     = uop[0].eew_mt;
 
+`ifdef RVVI_ON
   assign miscRtInfo.uop_pc = uop[0].uop_pc;
-  assign miscRtInfo.mtIdx  = (isMv2Vme || isLsu2Vme) ? tile : uop[0].dst_index[4:1];
+  assign miscRtInfo.mtIdx  = tile;
 `endif
 
   // Every rtCmd push must be matched by exactly one push into each of zvt's
@@ -704,8 +718,8 @@ module zvt_ctrl (
   // through miscRtVld, on the same cycle its rtCmd entry is pushed.
   always_comb begin
     case(1'b1) 
-      isVme2Lsu,
-      isLsu2Vme,
+      isStore,
+      isLoad,
       isMv2Vme: miscRtVld = uopVld[0]&uopRdy[0]&uop[0].last_uop_valid;
       isZero:   miscRtVld = uopVld[0]&uopRdy[0]&cntCr;
       // isMv2Rvv: miscRtVld = 'b0;

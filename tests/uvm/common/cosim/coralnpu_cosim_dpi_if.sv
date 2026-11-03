@@ -23,7 +23,7 @@ package coralnpu_cosim_dpi_if;
     int unsigned itcm_start_address;  // Start address of the ITCM range.
     int unsigned itcm_length;         // Length of the ITCM range.
     int unsigned initial_misa_value;  // Initial value of the misa register.
-    int unsigned architecture;        // 0 - M2, 1 - M3
+    int unsigned architecture;        // 0 - M2, 1 - M3, 2 - M4 (Zvt)
   } sim_config_t;
 
   // Function to initialize the MPACT simulator.
@@ -53,6 +53,15 @@ package coralnpu_cosim_dpi_if;
     output int unsigned value
   );
 
+  // Function to set a register value (GPR, PC, CSR) by its string name.
+  import "DPI-C" context function int mpact_set_register(
+    input string name,
+    input int unsigned value
+  );
+
+  // Function to apply a binary memory patch file to MPACT memory.
+  import "DPI-C" context function int mpact_apply_memory_patch(input string patch_file);
+
   // Function to get a vector register value by its string name.
   // The C pointer 'svLogicVecVal* value' maps to an 'output' argument in SV.
   import "DPI-C" context function int mpact_get_vector_register(
@@ -67,5 +76,28 @@ package coralnpu_cosim_dpi_if;
   // Function to configure the MPACT simulator.
   // Returns 0 on success.
   import "DPI-C" context function int mpact_config(sim_config_t config_data);
+
+  // Function to get the number of 32-bit words for a matrix tile at requested TEW.
+  import "DPI-C" context function int mpact_get_matrix_tile_word_count(
+    input  int unsigned tew,
+    output int unsigned word_count
+  );
+
+  // Function to get a matrix tile by index and explicit TEW.
+  import "DPI-C" context function int mpact_get_matrix_tile(
+    input int unsigned tile,
+    input int unsigned tew,
+    output logic [1023:0][31:0] value,
+    input int unsigned word_count
+  );
+
+  // Function to get a matrix tile using current configuration.
+  // Value array provides storage for up to TE*TE words (1024 words = 4096 bytes).
+  import "DPI-C" context function int mpact_get_current_matrix_tile(
+    input int unsigned tile,
+    output logic [1023:0][31:0] value,
+    output int unsigned tew,
+    output int unsigned valid_word_count
+  );
 
 endpackage : coralnpu_cosim_dpi_if

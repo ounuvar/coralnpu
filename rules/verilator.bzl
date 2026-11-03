@@ -1,10 +1,8 @@
 """Bazel functions for Verilator."""
 
-load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@coralnpu_hw//rules:coco_tb.bzl", "verilator_make_parallelism", "verilator_resource_estimator")
 load("@rules_cc//cc:find_cc_toolchain.bzl", "find_cc_toolchain")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
-load("//rules:uvm_denylist.bzl", "SPIKE_DENYLIST")
 load("//rules:verilog.bzl", "VerilogInfo")
 
 _VERILATOR_COMPILE_SCRIPT = """
@@ -12,28 +10,111 @@ set -e
 RAW_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t 'verilator_raw')"
 trap 'rm -rf "$RAW_DIR"' EXIT
 mkdir -p "$1" "$2"
-VERILATOR_ROOT="$3" "$4" "${@:7}" -Mdir "$RAW_DIR"
+VERILATOR_ROOT="$3" "$4" "${@:5}" -Mdir "$RAW_DIR"
 python3 -c '
 import os, shutil, sys
+
 raw, cpp, hdr = sys.argv[1], sys.argv[2], sys.argv[3]
+active_compilation_units = set()
+target_prefixes = ("VM_CLASSES_", "VM_SUPPORT_", "VM_GLOBAL_")
+
+for entry in os.scandir(raw):
+    if entry.is_file() and entry.name.endswith("_classes.mk"):
+        with open(entry.path, "r", errors="replace") as f:
+            in_target = False
+            for line in f:
+                line = line.strip()
+                if "#" in line:
+                    line = line[:line.index("#")].strip()
+                if not line:
+                    continue
+                if "=" in line:
+                    in_target = any(line.startswith(p) for p in target_prefixes)
+                    line = line.split("=", 1)[1].strip()
+                if in_target:
+                    for tok in line.replace(chr(92), " ").split():
+                        tok = tok.strip()
+                        if tok and tok != chr(92):
+                            active_compilation_units.add(tok)
+
+for entry in os.scandir(raw):
+    if not entry.is_file():
+        continue
+    name = entry.name
+    if name.endswith((".h", ".hh", ".hpp")):
+        shutil.move(entry.path, os.path.join(hdr, name))
+    elif name.endswith((".cpp", ".cc", ".cxx")):
+        base = name.rsplit(".", 1)[0]
+        if not active_compilation_units or base in active_compilation_units:
+            shutil.move(entry.path, os.path.join(cpp, name))
+        else:
+            shutil.move(entry.path, os.path.join(hdr, name))
+' "$RAW_DIR" "$1" "$2"
+"""
+
+_UVM_VERILATOR_COMPILE_SCRIPT = """
+set -e
+RAW_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t 'verilator_raw')"
+trap 'rm -rf "$RAW_DIR"' EXIT
+mkdir -p "$1" "$2" "$3"
+VERILATOR_ROOT="$4" "$5" "${@:6}" -Mdir "$RAW_DIR"
+python3 -c '
+import glob, os, re, shutil, sys
+raw, cpp_fast, cpp_slow, hdr = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+
+# 1. Inline #include "foo.cpp" inside Verilator --output-groups *_vm_*.cpp files
+vm_files = sorted(glob.glob(os.path.join(raw, "*_vm_*.cpp")))
+included_files = set()
+for vf in vm_files:
+    out_lines = []
+    with open(vf, "r", encoding="utf-8") as fp:
+        for line in fp:
+            m = re.match(r"^#include\\s+\\"([^\\"]+\\.cpp)\\"", line.strip())
+            if m:
+                inc_name = m.group(1)
+                inc_path = os.path.join(raw, inc_name)
+                if os.path.exists(inc_path):
+                    included_files.add(inc_name)
+                    with open(inc_path, "r", encoding="utf-8") as inc_fp:
+                        out_lines.append(inc_fp.read())
+                    continue
+            out_lines.append(line)
+    with open(vf, "w", encoding="utf-8") as fp:
+        fp.writelines(out_lines)
+
+for inc_name in included_files:
+    inc_path = os.path.join(raw, inc_name)
+    if os.path.exists(inc_path):
+        os.remove(inc_path)
+
+# 2. Group remaining ungrouped *Slow.cpp files into batches of 4
+leftover_slow = sorted([
+    f for f in os.listdir(raw)
+    if f.endswith("Slow.cpp") and "_vm_" not in f
+])
+batch_size = 4
+for idx in range(0, len(leftover_slow), batch_size):
+    batch = leftover_slow[idx:idx + batch_size]
+    if len(batch) > 1:
+        merged_path = os.path.join(raw, f"Vtop_vm_extra_Slow_{idx // batch_size}.cpp")
+        with open(merged_path, "w", encoding="utf-8") as out_fp:
+            for fname in batch:
+                fpath = os.path.join(raw, fname)
+                with open(fpath, "r", encoding="utf-8") as in_fp:
+                    out_fp.write(in_fp.read() + "\\n")
+                os.remove(fpath)
+
+# 3. Distribute fast .cpp, slow .cpp, and .h files
 for entry in os.scandir(raw):
     if entry.is_file():
         if entry.name.endswith((".cpp", ".cc", ".cxx")):
-            shutil.move(entry.path, os.path.join(cpp, entry.name))
+            if "Slow" in entry.name:
+                shutil.move(entry.path, os.path.join(cpp_slow, entry.name))
+            else:
+                shutil.move(entry.path, os.path.join(cpp_fast, entry.name))
         elif entry.name.endswith((".h", ".hh", ".hpp")):
             shutil.move(entry.path, os.path.join(hdr, entry.name))
-' "$RAW_DIR" "$1" "$2"
-
-COMPILER="$5"
-PCH_INCS="$6"
-if [ -n "$COMPILER" ] && [ -f "$2/Vtop__pch.h" ]; then
-    "$COMPILER" -x c++-header -std=c++20 -O2 \
-        -DVERILATOR=1 -DVL_TIME_CONTEXT -DVM_TIMING=1 -DVM_VPI=1 \
-        -DVM_COVERAGE=0 -DVM_SC=0 -DVM_TRACE=0 -DVM_TRACE_FST=0 -DVM_TRACE_VCD=0 -DVM_TRACE_SAIF=0 \
-        -faligned-new -fPIC \
-        -I"$2" $PCH_INCS \
-        "$2/Vtop__pch.h" -o "$2/Vtop__pch.h.gch" 2>/dev/null || true
-fi
+' "$RAW_DIR" "$1" "$2" "$3"
 """
 
 def _uvm_verilator_cc_library_impl(ctx):
@@ -84,25 +165,14 @@ def _uvm_verilator_cc_library_impl(ctx):
     )
     add_input(vlt_file)
 
-    # 2. Collect CcInfo dependencies & include paths for PCH
+    # 2. Collect CcInfo dependencies
     all_cc_deps = [dep for dep in ctx.attr.deps if CcInfo in dep]
     if ctx.attr._verilator_runtime and CcInfo in ctx.attr._verilator_runtime:
         all_cc_deps.append(ctx.attr._verilator_runtime)
 
-    pch_includes = []
-    cc_headers = []
-    for dep in all_cc_deps:
-        cc_info = dep[CcInfo]
-        for inc in cc_info.compilation_context.includes.to_list():
-            pch_includes.append("-I" + inc)
-        for inc in cc_info.compilation_context.quote_includes.to_list():
-            pch_includes.append("-I" + inc)
-        for inc in cc_info.compilation_context.system_includes.to_list():
-            pch_includes.append("-isystem " + inc)
-        cc_headers.extend(cc_info.compilation_context.headers.to_list())
-
-    # 3. Codegen Action: Run Verilator to generate C++ code into cpp_dir and hdr_dir
-    cpp_dir = ctx.actions.declare_directory(ctx.label.name + "_cpp")
+    # 3. Codegen Action: Run Verilator to generate C++ code into cpp_fast_dir, cpp_slow_dir, and hdr_dir
+    cpp_fast_dir = ctx.actions.declare_directory(ctx.label.name + "_cpp_fast")
+    cpp_slow_dir = ctx.actions.declare_directory(ctx.label.name + "_cpp_slow")
     hdr_dir = ctx.actions.declare_directory(ctx.label.name + "_h")
 
     verilator_canonical = ctx.executable._verilator_bin.owner.workspace_name
@@ -132,72 +202,96 @@ def _uvm_verilator_cc_library_impl(ctx):
         for arg in flag.split(" "):
             if arg:
                 verilator_flags.append(arg)
-    verilator_flags.extend(["--output-groups", "0"])
+    verilator_flags.extend([
+        "--output-split",
+        "20000",
+        "--output-split-cfuncs",
+        "2000",
+        "--output-groups",
+        str(min(verilator_make_parallelism, 32)),
+    ])
     verilator_flags.append(vlt_file.path)
     verilator_flags.extend(verilog_paths)
 
     ctx.actions.run_shell(
-        outputs = [cpp_dir, hdr_dir],
+        outputs = [cpp_fast_dir, cpp_slow_dir, hdr_dir],
         tools = [ctx.executable._verilator_bin],
         inputs = depset(
-            verilog_inputs + cc_headers,
+            verilog_inputs,
             transitive = [
                 depset(ctx.files._verilator),
                 depset(ctx.files._uvm_lib),
             ],
         ),
-        command = _VERILATOR_COMPILE_SCRIPT,
+        command = _UVM_VERILATOR_COMPILE_SCRIPT,
         arguments = [
-            cpp_dir.path,
+            cpp_fast_dir.path,
+            cpp_slow_dir.path,
             hdr_dir.path,
             verilator_root,
             ctx.executable._verilator_bin.path,
-            cc_toolchain.compiler_executable,
-            " ".join(pch_includes),
         ] + verilator_flags,
         mnemonic = "VerilatorCodegen",
         progress_message = "Verilating SystemVerilog to C++ for %s" % ctx.label,
         resource_set = verilator_resource_estimator,
     )
 
-    # 4. Compile generated C++ files using Bazel C++ toolchain
-    compilation_context, compilation_outputs = cc_common.compile(
-        name = ctx.label.name,
+    common_compile_flags = [
+        "-std=c++20",
+        "-DVERILATOR=1",
+        "-DVL_TIME_CONTEXT",
+        "-DVM_TIMING=1",
+        "-DVM_VPI=1",
+        "-DVM_COVERAGE=0",
+        "-DVM_SC=0",
+        "-DVM_TRACE=0",
+        "-DVM_TRACE_FST=0",
+        "-DVM_TRACE_VCD=0",
+        "-DVM_TRACE_SAIF=0",
+        "-faligned-new",
+        "-Wno-bool-operation",
+        "-Wno-c++11-narrowing",
+        "-Wno-overloaded-virtual",
+        "-Wno-parentheses-equality",
+        "-Wno-shadow",
+        "-Wno-sign-compare",
+        "-Wno-tautological-compare",
+        "-Wno-uninitialized",
+        "-Wno-unused-but-set-parameter",
+        "-Wno-unused-but-set-variable",
+        "-Wno-unused-parameter",
+        "-Wno-unused-variable",
+        "-Wno-vla-cxx-extension",
+    ] + ctx.attr.copts
+
+    # 4a. Compile fast generated C++ files with opt_fast (-O2)
+    compilation_context, fast_compilation_outputs = cc_common.compile(
+        name = ctx.label.name + "_fast",
         actions = ctx.actions,
         feature_configuration = feature_configuration,
         cc_toolchain = cc_toolchain,
-        srcs = [cpp_dir],
+        srcs = [cpp_fast_dir],
         public_hdrs = [hdr_dir],
         quote_includes = [hdr_dir.path],
-        user_compile_flags = [
-            ctx.attr.opt_fast,
-            "-std=c++20",
-            "-DVERILATOR=1",
-            "-DVL_TIME_CONTEXT",
-            "-DVM_TIMING=1",
-            "-DVM_VPI=1",
-            "-DVM_COVERAGE=0",
-            "-DVM_SC=0",
-            "-DVM_TRACE=0",
-            "-DVM_TRACE_FST=0",
-            "-DVM_TRACE_VCD=0",
-            "-DVM_TRACE_SAIF=0",
-            "-faligned-new",
-            "-Wno-bool-operation",
-            "-Wno-c++11-narrowing",
-            "-Wno-overloaded-virtual",
-            "-Wno-parentheses-equality",
-            "-Wno-shadow",
-            "-Wno-sign-compare",
-            "-Wno-tautological-compare",
-            "-Wno-uninitialized",
-            "-Wno-unused-but-set-parameter",
-            "-Wno-unused-but-set-variable",
-            "-Wno-unused-parameter",
-            "-Wno-unused-variable",
-            "-Wno-vla-cxx-extension",
-        ] + ctx.attr.copts,
+        user_compile_flags = [ctx.attr.opt_fast] + common_compile_flags,
         compilation_contexts = [dep[CcInfo].compilation_context for dep in all_cc_deps],
+    )
+
+    # 4b. Compile slow/cold generated C++ files with -O0
+    _, slow_compilation_outputs = cc_common.compile(
+        name = ctx.label.name + "_slow",
+        actions = ctx.actions,
+        feature_configuration = feature_configuration,
+        cc_toolchain = cc_toolchain,
+        srcs = [cpp_slow_dir],
+        public_hdrs = [hdr_dir],
+        quote_includes = [hdr_dir.path],
+        user_compile_flags = common_compile_flags + ["-O0"],
+        compilation_contexts = [dep[CcInfo].compilation_context for dep in all_cc_deps],
+    )
+
+    compilation_outputs = cc_common.merge_compilation_outputs(
+        compilation_outputs = [fast_compilation_outputs, slow_compilation_outputs],
     )
 
     # 5. Create linking context (static library) with alwayslink = True
@@ -309,7 +403,7 @@ def _verilator_cc_library_impl(ctx):
         str(verilator_make_parallelism),
         "--no-std",
         "--output-groups",
-        "0",
+        str(min(verilator_make_parallelism, 32)),
     ]
     if ctx.attr.systemc:
         verilator_flags.append("--sc")
@@ -527,78 +621,6 @@ def verilator_model(
     native.cc_binary(
         name = name,
         deps = [":" + lib_name],
-        linkopts = kwargs.get("linkopts", []) + ["-lpthread", "-latomic", "-lstdc++", "-lm"],
+        linkopts = kwargs.get("linkopts", []) + ["-lpthread", "-latomic", "-ldl", "-lstdc++", "-lm"],
         **binary_kwargs
     )
-
-def _rlocation_path(ws, f):
-    if f.short_path.startswith("../"):
-        return f.short_path[len("../"):]
-    return ws + "/" + f.short_path
-
-def _verilator_batch_uvm_impl(ctx):
-    runfiles = []
-    run_spike_flag = ctx.attr.run_spike[BuildSettingInfo].value
-
-    model_binary = None
-    for f in ctx.files.model:
-        if not f.path.endswith(".log"):
-            model_binary = f
-            break
-
-    if not model_binary:
-        fail("Model binary could not be found")
-
-    ws = ctx.workspace_name
-    runner = ctx.actions.declare_file(ctx.label.name)
-    runfiles.extend(ctx.files.coralnpu_tests + [model_binary])
-
-    ctx.actions.symlink(output = runner, target_file = ctx.executable._runner, is_executable = True)
-
-    coralnpu_elfs_fmt = []
-    for file, label, timeout in zip(ctx.files.coralnpu_tests, ctx.attr.labels, ctx.attr.timeouts):
-        enable_spike = run_spike_flag
-        if enable_spike and label in SPIKE_DENYLIST:
-            print("Warning: skipping spike cosim for {}, because it is listed in SPIKE_DENYLIST".format(label))
-            enable_spike = False
-        coralnpu_elfs_fmt.append("{}\t{}\t{}\t{}".format(_rlocation_path(ws, file), label, timeout, enable_spike))
-
-    model_default_runfiles = ctx.attr.model[DefaultInfo].default_runfiles if ctx.attr.model[DefaultInfo].default_runfiles else ctx.runfiles()
-
-    return [
-        DefaultInfo(
-            executable = runner,
-            runfiles = ctx.runfiles(
-                files = runfiles,
-                collect_default = True,
-            ).merge(ctx.attr._runner[DefaultInfo].default_runfiles).merge(model_default_runfiles),
-        ),
-        RunEnvironmentInfo(
-            environment = {
-                "UVM_MODEL_RLOCATION": _rlocation_path(ws, model_binary),
-                "UVM_CORALNPU_ELFS": "\n".join(coralnpu_elfs_fmt),
-                "UVM_SPIKE_RLOCATION": "SPIKE" if run_spike_flag else "",
-                "UVM_ENABLE_SPIKE": "1" if run_spike_flag else "0",
-            },
-        ),
-    ]
-
-verilator_batch_uvm_test = rule(
-    doc = """Performs batch testing of the UVM Verilator model.""",
-    implementation = _verilator_batch_uvm_impl,
-    attrs = {
-        "model": attr.label(allow_files = True),
-        "coralnpu_tests": attr.label_list(allow_files = True),
-        "timeouts": attr.int_list(mandatory = True),
-        "labels": attr.string_list(mandatory = True),
-        "run_spike": attr.label(
-            providers = [BuildSettingInfo],
-        ),
-        "_runner": attr.label(
-            default = Label("//utils:uvm_batch_runner"),
-            executable = True,
-            cfg = "target",
-        ),
-    },
-    test = True,
-)

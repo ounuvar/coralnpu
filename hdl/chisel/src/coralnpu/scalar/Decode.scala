@@ -146,7 +146,8 @@ class DecodedInstruction(p: Parameters) extends Bundle {
   val wfi    = Bool()
 
   // Fences.
-  val fencei = Bool()
+  val fencei   = Bool()
+  val fencetso = Bool()
 
   val rvv = Option.when(p.enableRvv)(Valid(new RvvCompressedInstruction(p)))
 
@@ -193,7 +194,7 @@ class DecodedInstruction(p: Parameters) extends Bundle {
   // Instructions that should dispatch out of slot 0, with no other instructions
   // dispatched on the same cycle.
   def forceSlot0Only(): Bool = {
-    isFency() || isCsr() || isFloat() || rvvReadsFloatRs1() || rvvWritesFrd()
+    isFency() || isCsr() || isFloat() || rvvReadsFloatRs1() || rvvWritesFrd() || isVtdiscard()
   }
 
   // Checks if an instruction is a jump or changes context switch. Instructions
@@ -274,6 +275,14 @@ class DecodedInstruction(p: Parameters) extends Bundle {
     }
   }
 
+  def isVtfmm(): Bool = {
+    if (p.enableVme) {
+      rvv.map(r => r.valid && r.bits.isVtfmm()).getOrElse(false.B)
+    } else {
+      false.B
+    }
+  }
+
   def readsRs1(): Bool = {
     isCondBr() || isAluReg() || isAluImm() || isAlu1Bit() || isAlu2Bit() ||
     isCsr() || isMul() || isDvu() || jalr || floatReadsScalarRs1() ||
@@ -296,7 +305,6 @@ class Dispatch(p: Parameters) extends Module {
   val io = IO(new Bundle {
     // Core controls.
     val halted    = Input(Bool())
-    val mactive   = Input(Bool()) // memory active
     val lsuActive = Input(Bool()) // lsu active
 
     val scoreboard = new Bundle {
@@ -366,7 +374,9 @@ class Dispatch(p: Parameters) extends Module {
     val rvvQueueCapacity = Option.when(p.enableRvv)(Input(UInt(4.W)))
     val mstatusMs        = Option.when(p.enableVme)(Input(UInt(2.W)))
     val vmeDiscard       = Option.when(p.enableVme)(Output(Bool()))
-    val vmeDirty         = Option.when(p.enableVme)(Output(Bool()))
+    val vmeMsDirty       = Option.when(p.enableVme)(Output(Bool()))
+    val vmeVsDirty       = Option.when(p.enableVme)(Output(Bool()))
+    val vmeFpDirty       = Option.when(p.enableVme && p.enableFloat)(Output(Bool()))
 
     // Float interface
     val float  = Option.when(p.enableFloat)(Decoupled(new FloatInstruction(p)))
@@ -489,7 +499,7 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
 
   // ---------------------------------------------------------------------------
   // Fence interlock
-  val fence = decodedInsts.map(x => x.isFency() && (io.mactive || io.lsuActive))
+  val fence = decodedInsts.map(x => x.isFency() && io.lsuActive)
 
   // ---------------------------------------------------------------------------
   // Slot 0 interlock
@@ -537,6 +547,17 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
   } else {
     Seq.fill(p.instructionLanes)(true.B)
   }
+
+  // Every RVV instruction resets vstart to zero, so an LSU op behind an older
+  // RVV instruction in the same packet uses vstart = 0. This matches
+  // RvvFrontEnd and the retirement buffer, which use the same rvv.valid
+  // predicate. An older RVV instruction that doesn't reset vstart must trap,
+  // and then this op is squashed. rvvVillRobEmptyInterlock ensures such a
+  // squashed op is never a vector load/store.
+  val rvvVstartCleared = Option.when(p.enableRvv) {
+    decodedInsts.map(_.rvv.get.valid).scan(false.B)(_ || _)
+  }
+
   // ---------------------------------------------------------------------------
   // Rvv Vill
   // Only check vill at scalar dispatch for LSU instructions (vector loads/stores)
@@ -550,7 +571,14 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
         decodedInsts(i).rvv.get.bits.isLoadStore() &&
         !decodedInsts(i).rvv.get.bits.isWholeRegisterLoadStore()
       val invalidVill = isNonWrLdSt && (configInvalid(i) || io.rvvState.get.bits.vill)
-      !invalidVill
+      val invalidVme  = if (p.enableVme) {
+        decodedInsts(i).rvv.get.valid &&
+        decodedInsts(i).rvv.get.bits.isVmeLdSt() &&
+        (configInvalid(i) || !io.rvvState.get.bits.mtwiden.get.orR)
+      } else {
+        false.B
+      }
+      !invalidVill && !invalidVme
     })
   } else {
     Seq.fill(p.instructionLanes)(true.B)
@@ -573,8 +601,29 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
   val vmeDiscardVillInterlock = if (p.enableVme) {
     (0 until p.instructionLanes).map(i => {
       val isDiscard = decodedInsts(i).isVtdiscard()
-      val vill = configInvalid(i) || io.rvvState.map(s => s.valid && s.bits.vill).getOrElse(false.B)
-      !(isDiscard && vill)
+      val vill      = configInvalid(i) || io.rvvState.get.bits.vill
+      val inFlight  = !io.retirement_buffer_empty || !io.rvvIdle.getOrElse(true.B) || io.lsuActive
+      !(isDiscard && (vill || inFlight))
+    })
+  } else {
+    Seq.fill(p.instructionLanes)(true.B)
+  }
+
+  // Rvv Vill serialization
+  // With vill=1, an older RVV arithmetic instruction traps in RvvFrontEnd after
+  // it has been dispatched. Whole-register loads/stores are legal under vill,
+  // so without this they could run in the scalar LSU ahead of that trap, and
+  // the squashed op's lsu2rvv result would reach the RVV backend after the
+  // flush and hang it. Rather than gating only whole-register loads/stores,
+  // stall all RVV instructions (e.g. vset{i}vl{i}, whole-register moves, and
+  // whole-register loads/stores) while vill=1 so they only dispatch from slot 0
+  // once the retirement buffer has drained. rvvConfigInterlock keeps vector
+  // loads/stores back while the config state is invalid, so vill is up to date
+  // here.
+  val rvvVillRobEmptyInterlock = if (p.enableRvv) {
+    (0 until p.instructionLanes).map(i => {
+      val isRvv = decodedInsts(i).rvv.get.valid
+      !isRvv || !io.rvvState.get.bits.vill || ((i == 0).B && io.retirement_buffer_empty)
     })
   } else {
     Seq.fill(p.instructionLanes)(true.B)
@@ -647,7 +696,8 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
       rvvVstartInterlock(i) &&    // Don't dispatch illegal vstart != 0
       rvvVillInterlock(i) &&      // Don't dispatch illegal vill != 0 on non-WR load/store
       vmeMsOffInterlock(i) && // Don't dispatch tile instructions or vtdiscard if mstatus.MS == Off
-      vmeDiscardVillInterlock(i) && // Don't dispatch vtdiscard if vill == 1
+      vmeDiscardVillInterlock(i) &&  // Don't dispatch vtdiscard if vill == 1
+      rvvVillRobEmptyInterlock(i) && // Stall RVV instructions until ROB drains when vill == 1
       // rvvLsuInterlock(i) &&  // Dispatch only one Rvv LsuOp
       lsuInterlock(i) &&                     // Ensure lsu instructions can be dispatched into queue
       rvvInterlock(i) &&                     // Ensure rvv instructions can be dispatched into queue
@@ -676,7 +726,7 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
 
     // -------------------------------------------------------------------------
     // Alu
-    val alu = SafeMuxUpTo1H(
+    val alu = MuxUpTo1H(
       MakeValid(false.B, AluOp.ADD),
       Seq(
         // RV32IM
@@ -722,8 +772,7 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
         (d.slliw || d.sllw) -> MakeValid(true.B, AluOp.SLLW),
         (d.srliw || d.srlw) -> MakeValid(true.B, AluOp.SRLW),
         (d.sraiw || d.sraw) -> MakeValid(true.B, AluOp.SRAW)
-      ),
-      AluOp
+      )
     )
     io.alu(i).valid     := tryDispatch && alu.valid
     io.alu(i).bits.addr := rdAddr(i)
@@ -731,7 +780,7 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
 
     // -------------------------------------------------------------------------
     // Bru
-    val bru = SafeMuxUpTo1H(
+    val bru = MuxUpTo1H(
       MakeValid(false.B, BruOp.JAL),
       Seq(
         d.jal    -> MakeValid(true.B, BruOp.JAL),
@@ -747,8 +796,7 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
         d.mpause -> MakeValid(true.B, BruOp.MPAUSE),
         d.mret   -> MakeValid(true.B, BruOp.MRET),
         d.wfi    -> MakeValid(true.B, BruOp.WFI)
-      ),
-      BruOp
+      )
     )
     val bru_target = io.inst(i).bits.addr + Mux(io.inst(i).bits.inst(2), d.immjal, d.immbr)
     io.bru(i).bits.fwd    := io.inst(i).bits.brchFwd
@@ -774,7 +822,7 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
 
     // -------------------------------------------------------------------------
     // Mlu
-    val mlu = SafeMuxUpTo1H(
+    val mlu = MuxUpTo1H(
       MakeValid(false.B, MluOp.MUL),
       Seq(
         d.mul    -> MakeValid(true.B, MluOp.MUL),
@@ -782,8 +830,7 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
         d.mulhsu -> MakeValid(true.B, MluOp.MULHSU),
         d.mulhu  -> MakeValid(true.B, MluOp.MULHU),
         d.mulw   -> MakeValid(true.B, MluOp.MULW)
-      ),
-      MluOp
+      )
     )
     io.mlu(i).valid     := tryDispatch && mlu.valid
     io.mlu(i).bits.addr := rdAddr(i)
@@ -791,7 +838,7 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
 
     // -------------------------------------------------------------------------
     // Dvu
-    val dvu = SafeMuxUpTo1H(
+    val dvu = MuxUpTo1H(
       MakeValid(false.B, DvuOp.DIV),
       Seq(
         d.div   -> MakeValid(true.B, DvuOp.DIV),
@@ -802,8 +849,7 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
         d.divuw -> MakeValid(true.B, DvuOp.DIVUW),
         d.remw  -> MakeValid(true.B, DvuOp.REMW),
         d.remuw -> MakeValid(true.B, DvuOp.REMUW)
-      ),
-      DvuOp
+      )
     )
     io.dvu(i).valid     := tryDispatch && dvu.valid
     io.dvu(i).bits.addr := rdAddr(i)
@@ -811,7 +857,7 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
 
     // -------------------------------------------------------------------------
     // Lsu
-    val lsu = SafeMuxUpTo1H(
+    val lsu = MuxUpTo1H(
       MakeValid(false.B, LsuOp.LB),
       Seq(
         d.lb     -> MakeValid(true.B, LsuOp.LB),
@@ -899,8 +945,7 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
             )
           )
         }
-        .getOrElse(Seq()),
-      LsuOp
+        .getOrElse(Seq())
     )
     io.lsu(i).valid      := tryDispatch && lsu.valid
     io.lsu(i).bits.store := io.inst(i).bits.inst(5)
@@ -908,23 +953,23 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
     io.lsu(i).bits.op    := lsu.bits
     io.lsu(i).bits.pc    := io.inst(i).bits.addr
     if (p.enableRvv) {
-      io.lsu(i).bits.elemWidth.get := io.inst(i).bits.inst(14, 12)
-      io.lsu(i).bits.nfields.get   := io.inst(i).bits.inst(31, 29)
-      io.lsu(i).bits.bit24To20.get := io.inst(i).bits.inst(24, 20)
-      io.lsu(i).bits.vm.get        := io.inst(i).bits.inst(25)
+      io.lsu(i).bits.elemWidth.get     := io.inst(i).bits.inst(14, 12)
+      io.lsu(i).bits.nfields.get       := io.inst(i).bits.inst(31, 29)
+      io.lsu(i).bits.bit24To20.get     := io.inst(i).bits.inst(24, 20)
+      io.lsu(i).bits.vm.get            := io.inst(i).bits.inst(25)
+      io.lsu(i).bits.vstartCleared.get := rvvVstartCleared.get(i)
     }
 
     // -------------------------------------------------------------------------
     // Csr
     if (i == 0) {
-      val csr = SafeMuxUpTo1H(
+      val csr = MuxUpTo1H(
         MakeValid(false.B, CsrOp.CSRRW),
         Seq(
           d.csrrw -> MakeValid(true.B, CsrOp.CSRRW),
           d.csrrs -> MakeValid(true.B, CsrOp.CSRRS),
           d.csrrc -> MakeValid(true.B, CsrOp.CSRRC)
-        ),
-        CsrOp
+        )
       )
       val csr_bits_index                   = io.inst(0).bits.inst(31, 20)
       val (csr_address, csr_address_valid) = CsrAddress.safe(csr_bits_index)
@@ -971,7 +1016,7 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
 
     // -------------------------------------------------------------------------
     // Fence
-    val fenceValid = if (i == 0) { tryDispatch && d.fence }
+    val fenceValid = if (i == 0) { tryDispatch && (d.fence || d.fencetso) }
     else { false.B }
 
     // Set next lastReady if dispatched.
@@ -1015,8 +1060,17 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
                                // Return fault if vill is set for vtdiscard.
                                val invalidVillVtdiscard = decodedInsts(0).isVtdiscard() && villIsSet
 
+                               val invalidVme = if (p.enableVme) {
+                                 decodedInsts(0).rvv.get.valid &&
+                                 decodedInsts(0).rvv.get.bits.isVmeLdSt() &&
+                                 io.rvvState.get.valid &&
+                                 !io.rvvState.get.bits.mtwiden.get.orR
+                               } else {
+                                 false.B
+                               }
+
                                io.inst(0)
-                                 .valid && (invalidVstart || invalidVill || invalidMs || invalidVillVtdiscard) &&
+                                 .valid && (invalidVstart || invalidVill || invalidMs || invalidVillVtdiscard || invalidVme) &&
                                (0.U < io.retirement_buffer_nSpace) &&
                                !io.retirement_buffer_trap_pending
                              } else {
@@ -1108,9 +1162,17 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
     io.vmeDiscard.get := (0 until p.instructionLanes)
       .map(i => io.inst(i).fire && decodedInsts(i).isVtdiscard())
       .reduce(_ || _)
-    io.vmeDirty.get := (0 until p.instructionLanes)
+    io.vmeMsDirty.get := (0 until p.instructionLanes)
       .map(i => io.inst(i).fire && decodedInsts(i).writesTile())
       .reduce(_ || _)
+    io.vmeVsDirty.get := (0 until p.instructionLanes)
+      .map(i => io.inst(i).fire && (decodedInsts(i).accessesTile() || decodedInsts(i).isVmeMset()))
+      .reduce(_ || _)
+    if (p.enableFloat) {
+      io.vmeFpDirty.get := (0 until p.instructionLanes)
+        .map(i => io.inst(i).fire && decodedInsts(i).isVtfmm())
+        .reduce(_ || _)
+    }
   }
 }
 
@@ -1250,7 +1312,8 @@ object DecodeInstruction {
 
     // Fences.
     val fences = Seq(
-      "fencei" -> BitPat("b0000_0000_0000_00000_001_00000_0001111")
+      "fencei"   -> BitPat("b0000_0000_0000_00000_001_00000_0001111"),
+      "fencetso" -> BitPat("b1000_0011_0011_00000_000_00000_0001111")
     )
 
     rv32i ++ rv64i ++ rv32m ++ zbb ++ zbb64 ++ coreControls ++ fences
@@ -1316,8 +1379,9 @@ object DecodeInstruction {
       d.mret   := false.B
       d.wfi    := false.B
 
-      d.fence  := false.B
-      d.fencei := false.B
+      d.fence    := false.B
+      d.fencei   := false.B
+      d.fencetso := false.B
 
       if (p.enableFloat) {
         d.float.get := MakeInvalid(new FloatInstruction(p))

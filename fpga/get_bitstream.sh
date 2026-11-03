@@ -75,7 +75,7 @@ echo ""
 mkdir -p "${PROJECT_ROOT}/fpga/bitstreams"
 
 # Get list of changes that modified fpga/ or hdl/
-SHAS=$(git log "${START_REF}" -n "${LIMIT}" --format="%H" -- fpga/ hdl/chisel/src/soc/)
+SHAS=$(git log "${START_REF}" -n "${LIMIT}" --format="%H" -- fpga/ hdl/)
 
 if [[ -z "${SHAS}" ]]; then
     echo "ERROR: No matching commits found in the history of ${START_REF} affecting fpga/ or hdl/."

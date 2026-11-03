@@ -15,7 +15,6 @@
 """Common generator flags and Verilator options shared between simulation and production targets."""
 
 RVV_CORE_MINI_AXI_COMMON_GEN_FLAGS = [
-    "--enableFetchL0=False",
     "--fetchDataBits=128",
     "--lsuDataBits=128",
     "--enableRvv=True",
@@ -64,4 +63,19 @@ RVV_CORE_MINI_AXI_VOPTS = [
 
 VME_CORE_MINI_AXI_VOPTS = RVV_CORE_MINI_AXI_VOPTS + [
     "-DZVT_ON",
+    "-DZVTBF16FMM_ON",
+]
+
+# Ultra-high-frequency (1.0 GHz) generator flags with 5-stage FPU pipeline
+RVV_CORE_MINI_AXI_1GHZ_GEN_FLAGS = RVV_CORE_MINI_AXI_COMMON_GEN_FLAGS + [
+    "--fpuPipeRegs=5",
+]
+
+CORE_MINI_AXI_1GHZ_VOPTS = CORE_MINI_AXI_VOPTS + [
+    "-DFPU_PIPEREGS=5",
+]
+
+RVV_CORE_MINI_AXI_1GHZ_VOPTS = RVV_CORE_MINI_AXI_VOPTS + [
+    "-DFPU_PIPEREGS=5",
+    "-DFALU_PIPEREGS=5",
 ]

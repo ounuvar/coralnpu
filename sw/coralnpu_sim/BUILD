@@ -14,6 +14,7 @@
 
 load("@coralnpu_hw//third_party/python:requirements.bzl", "requirement")
 load("@pybind11_bazel//:build_defs.bzl", "pybind_extension")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
 load("//rules:mpact.bzl", "mpact_binary")
 
 package(default_visibility = ["//visibility:public"])
@@ -56,6 +57,7 @@ cc_library(
     name = "spike_simulator",
     srcs = ["spike_simulator.cc"],
     hdrs = ["spike_simulator.h"],
+    linkopts = ["-ldl"],
     deps = [
         "@riscv_isa_sim",
     ],

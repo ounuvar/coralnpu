@@ -78,8 +78,6 @@ package coralnpu_cosim_checker_pkg;
     int unsigned entry_point = 0;
 
     spike_cosim_checker spike_checker;
-    bit mpact_enabled = 1;
-    bit spike_enabled = 1;
     bit trace_logging_enabled = 0;
     bit mismatch_detected = 0;
     bit [31:0] dirty_gprs = 0;
@@ -289,37 +287,33 @@ package coralnpu_cosim_checker_pkg;
       int unsigned pre_step_sp;
 
       // 1. Align retired RTL queue with current simulator PC
-      if (mpact_enabled) begin
-        if (mpact_get_register("pc", mpact_pc) != 0) begin
-          `uvm_error("COSIM_API_FAIL", "Failed to get PC from MPACT simulator.")
-        end
+      if (mpact_get_register("pc", mpact_pc) != 0) begin
+        `uvm_error("COSIM_API_FAIL", "Failed to get PC from MPACT simulator.")
+      end
 
+      foreach (retired_instr_q[j]) begin
+        if (retired_instr_q[j].pc == mpact_pc) begin
+          match_index = j;
+          break;
+        end
+      end
+
+      if (match_index == -1) begin
+        string rtl_pcs_str = "[ ";
         foreach (retired_instr_q[j]) begin
-          if (retired_instr_q[j].pc == mpact_pc) begin
-            match_index = j;
-            break;
-          end
+          rtl_pcs_str = $sformatf("%s0x%h ", rtl_pcs_str, retired_instr_q[j].pc);
         end
-
-        if (match_index == -1) begin
-          string rtl_pcs_str = "[ ";
-          foreach (retired_instr_q[j]) begin
-            rtl_pcs_str = $sformatf("%s0x%h ", rtl_pcs_str, retired_instr_q[j].pc);
-          end
-          rtl_pcs_str = {rtl_pcs_str, "]"};
-          `uvm_error("COSIM_PC_MISMATCH", $sformatf("MPACT PC 0x%h mismatches retired RTL PCs: %s",
-                                                    mpact_pc, rtl_pcs_str))
-          mismatch_detected = 1;
-          return;
-        end
-      end else begin
-        match_index = 0;
+        rtl_pcs_str = {rtl_pcs_str, "]"};
+        `uvm_error("COSIM_PC_MISMATCH", $sformatf("MPACT PC 0x%h mismatches retired RTL PCs: %s",
+                                                  mpact_pc, rtl_pcs_str))
+        mismatch_detected = 1;
+        return;
       end
 
       rtl_instr = retired_instr_q[match_index].insn;
 
       // 2. Align and Step Spike
-      if (spike_enabled && spike_checker.spike_enabled) begin
+      begin
         int unsigned sync_attempts = 0;
         int unsigned initial_spike_pc = 0;
         if (irq_vif != null) begin
@@ -365,21 +359,19 @@ package coralnpu_cosim_checker_pkg;
       end
 
       // 3. Step MPACT
-      if (mpact_enabled) begin
-        if (mpact_get_register("sp", pre_step_sp) != 0) begin
-          `uvm_error("COSIM_API_FAIL", "Failed to get pre-step SP from MPACT.")
-        end
-        if (mpact_step(rtl_instr) != 0) begin
-          `uvm_error("COSIM_STEP_FAIL", "mpact_step() DPI call failed.")
-          mismatch_detected = 1;
-          retired_instr_q.delete(match_index);
-          return;
-        end
+      if (mpact_get_register("sp", pre_step_sp) != 0) begin
+        `uvm_error("COSIM_API_FAIL", "Failed to get pre-step SP from MPACT.")
+      end
+      if (mpact_step(rtl_instr) != 0) begin
+        `uvm_error("COSIM_STEP_FAIL", "mpact_step() DPI call failed.")
+        mismatch_detected = 1;
+        retired_instr_q.delete(match_index);
+        return;
       end
 
       // 4. Update dirty registers and synchronize varying CSRs
       skip_mask = update_dirty_registers(retired_instr_q[match_index], pre_step_sp);
-      if (skip_mask != 0 && spike_enabled && spike_checker.spike_enabled) begin
+      if (skip_mask != 0) begin
         for (int r = 1; r < 32; r++) begin
           if (skip_mask[r]) begin
             logic [31:0] rtl_val = rvvi_vif.x_wdata[0][retired_instr_q[match_index].retire_index][r];
@@ -425,7 +417,15 @@ package coralnpu_cosim_checker_pkg;
       itcm_start_address = memory_map_pkg::ITCM_START_ADDR;
       itcm_length = memory_map_pkg::ITCM_LENGTH;
 
+      // sim_config_t is a packed struct passed to C via DPI. In SV packed structs,
+      // the first field is at MSB (bits 127:96) while in C (little-endian) the first
+      // member is at byte offset 0. Streaming operator {<<32{...}} packs 32-bit slices
+      // in reverse order so that itcm_start_address aligns with C struct byte offset 0.
+`ifdef ZVT_ON
+      dpi_cfg_s = {<<32{itcm_start_address, itcm_length, initial_misa_value, 32'd2}};
+`else
       dpi_cfg_s = {<<32{itcm_start_address, itcm_length, initial_misa_value, 32'd1}};
+`endif
 
       test_start_event.wait_trigger();
       forever begin
@@ -446,58 +446,42 @@ package coralnpu_cosim_checker_pkg;
         if (!has_entry_point) begin
           entry_point = 0;
         end
-        if (!uvm_config_db#(bit)::get(this, "", "spike_enabled", spike_enabled)) begin
-          spike_enabled = 1;
-        end
-        if (!uvm_config_db#(bit)::get(this, "", "mpact_enabled", mpact_enabled)) begin
-          if ($test$plusargs("DISABLE_MPACT")) begin
-            mpact_enabled = 0;
-          end else if (mem_patch_file != "") begin
-            // TODO(b/563400507): MPACT's DPI wrapper (@coralnpu_mpact) currently only supports
-            // loading static ELF binaries via mpact_load_program() and lacks a runtime backdoor
-            // memory patching interface (e.g. mpact_apply_memory_patch). When memory patches
-            // (+MEM_PATCH=) are applied, MPACT retains unpatched memory, triggering false co-sim
-            // mismatches on load instructions. Temporarily disable MPACT when mem_patch_file is
-            // active until MPACT's DPI wrapper is extended to support memory patch injection.
-            `uvm_info(
-                get_type_name(),
-                "Memory patch active (+MEM_PATCH); disabling MPACT co-simulation due to missing patch DPI support (Spike active).",
-                UVM_LOW)
-            mpact_enabled = 0;
-          end else begin
-            mpact_enabled = 1;
-          end
-        end
-
         `uvm_info(get_type_name(), $sformatf(
-                  "Initializing Multi-ISS Co-Sim for %s (entry: 0x%h, custom: %0d, spike: %0d, mpact: %0d)",
+                  "Initializing Multi-ISS Co-Sim for %s (entry: 0x%h, custom: %0d)",
                   test_elf,
                   entry_point,
-                  has_entry_point,
-                  spike_enabled,
-                  mpact_enabled
+                  has_entry_point
                   ), UVM_LOW)
 
         // Initialize MPACT
-        if (mpact_enabled) begin
-          void'(mpact_fini());
-          if (mpact_init() != 0) `uvm_error(get_type_name(), "MPACT simulator DPI init failed.")
-          if (mpact_config(dpi_cfg_s) != 0) `uvm_error(get_type_name(), "MPACT DPI config failed.")
-          if (mpact_load_program(test_elf) != 0)
-            `uvm_error(get_type_name(), "MPACT DPI load program failed.")
+        void'(mpact_fini());
+        itcm_start_address = memory_map_pkg::ITCM_START_ADDR;
+        itcm_length = memory_map_pkg::ITCM_LENGTH;
+`ifdef ZVT_ON
+        dpi_cfg_s = {<<32{itcm_start_address, itcm_length, initial_misa_value, 32'd2}};
+`else
+        dpi_cfg_s = {<<32{itcm_start_address, itcm_length, initial_misa_value, 32'd1}};
+`endif
+        if (mpact_init() != 0) `uvm_fatal(get_type_name(), "MPACT simulator DPI init failed.")
+        if (mpact_config(dpi_cfg_s) != 0) `uvm_fatal(get_type_name(), "MPACT DPI config failed.")
+        if (mpact_load_program(test_elf) != 0) begin
+          `uvm_fatal(get_type_name(), "MPACT DPI load program failed.")
+        end
+        if (has_entry_point) begin
+          if (mpact_set_register("pc", entry_point) != 0) begin
+            `uvm_fatal(get_type_name(), $sformatf("MPACT DPI failed to set entry point 0x%h.",
+                                                  entry_point))
+          end
+        end
+        if (mem_patch_file != "") begin
+          if (mpact_apply_memory_patch(mem_patch_file) != 0) begin
+            `uvm_fatal(get_type_name(), $sformatf("MPACT DPI failed to apply memory patch: %s",
+                                                  mem_patch_file))
+          end
         end
 
         // Initialize Spike
-        if (spike_enabled) begin
-          if (!spike_checker.initialize(
-                  test_elf, entry_point, has_entry_point, mem_patch_file
-              )) begin
-            `uvm_warning(get_type_name(),
-                         "Spike in-process initialization failed. Continuing with MPACT.")
-          end
-        end else begin
-          spike_checker.finalize();
-        end
+        spike_checker.initialize(test_elf, entry_point, has_entry_point, mem_patch_file);
 
         fork
           begin : cosim_process_loop
@@ -535,27 +519,18 @@ package coralnpu_cosim_checker_pkg;
         string reg_name, logic [31:0] pc, logic [31:0] insn, string rtl_str, string mpact_str,
         string spike_str, bit rtl_eq_mpact, bit rtl_eq_spike, bit mpact_eq_spike);
       string diagnosis;
-      bit has_spike = spike_enabled && spike_checker.spike_enabled;
 
-      if (mpact_enabled && has_spike) begin
-        if (mpact_eq_spike && !rtl_eq_mpact) begin
-          diagnosis = "🔴 RTL BUG (MPACT and Spike agree; RTL state differs)";
-        end else if (rtl_eq_spike && !rtl_eq_mpact) begin
-          diagnosis = "🟡 MPACT DIVERGENCE (RTL and Spike agree; MPACT differs)";
-        end else if (rtl_eq_mpact && !rtl_eq_spike) begin
-          diagnosis = "🟡 SPIKE DIVERGENCE (RTL and MPACT agree; Spike differs)";
-        end else begin
-          diagnosis = "⚠️ MULTI-WAY DIVERGENCE (All three models report differing values)";
-        end
-      end else if (mpact_enabled && !rtl_eq_mpact) begin
-        diagnosis = "🟡 MPACT DIVERGENCE (Spike disabled; RTL and MPACT differ)";
-      end else if (has_spike && !rtl_eq_spike) begin
-        diagnosis = "🟡 SPIKE DIVERGENCE (MPACT disabled; RTL and Spike differ)";
+      if (mpact_eq_spike && !rtl_eq_mpact) begin
+        diagnosis = "🔴 RTL BUG (MPACT and Spike agree; RTL state differs)";
+      end else if (rtl_eq_spike && !rtl_eq_mpact) begin
+        diagnosis = "🟡 MPACT DIVERGENCE (RTL and Spike agree; MPACT differs)";
+      end else if (rtl_eq_mpact && !rtl_eq_spike) begin
+        diagnosis = "🟡 SPIKE DIVERGENCE (RTL and MPACT agree; Spike differs)";
       end else begin
-        diagnosis = "⚠️ UNEXPECTED CO-SIMULATION MISMATCH";
+        diagnosis = "⚠️ MULTI-WAY DIVERGENCE (All three models report differing values)";
       end
 
-      `uvm_error("3WAY_COSIM_MISMATCH", $sformatf(
+      `uvm_error("COSIM_MISMATCH", $sformatf(
                  {
                    "\n========================= [3-WAY CO-SIM MISMATCH] =========================\n",
                    "  PC:          0x%08h\n",
@@ -588,7 +563,6 @@ package coralnpu_cosim_checker_pkg;
                                                input bit [31:0] skip_mask);
       int unsigned rd_index;
       string reg_name;
-      bit has_spike = spike_enabled && spike_checker.spike_enabled;
 
       // 1. GPR Writeback Verification
       if (rtl_info.x_wb != 0) begin
@@ -618,18 +592,14 @@ package coralnpu_cosim_checker_pkg;
           bit mpact_ok = 1;
           bit spike_ok = 1;
 
-          if (mpact_enabled) begin
-            if (mpact_get_register(reg_name, mpact_val) != 0) begin
-              `uvm_error("COSIM_API_FAIL", $sformatf("Failed to get MPACT GPR %s", reg_name));
-              mpact_ok = 0;
-            end
+          if (mpact_get_register(reg_name, mpact_val) != 0) begin
+            `uvm_error("COSIM_API_FAIL", $sformatf("Failed to get MPACT GPR %s", reg_name));
+            mpact_ok = 0;
           end
 
-          if (has_spike) begin
-            if (!spike_checker.get_gpr(reg_name, spike_val)) begin
-              `uvm_error("COSIM_API_FAIL", $sformatf("Failed to get Spike GPR %s", reg_name));
-              spike_ok = 0;
-            end
+          if (!spike_checker.get_gpr(reg_name, spike_val)) begin
+            `uvm_error("COSIM_API_FAIL", $sformatf("Failed to get Spike GPR %s", reg_name));
+            spike_ok = 0;
           end
 
           if (trace_logging_enabled) begin
@@ -640,14 +610,11 @@ package coralnpu_cosim_checker_pkg;
                       UVM_NONE)
           end
 
-          if ((mpact_enabled && mpact_ok && mpact_val != rtl_val) ||
-              (has_spike && spike_ok && spike_val != rtl_val)) begin
+          if ((mpact_ok && mpact_val != rtl_val) || (spike_ok && spike_val != rtl_val)) begin
             report_3way_mismatch(reg_name, rtl_info.pc, rtl_info.insn, $sformatf("0x%08h", rtl_val),
-                                 mpact_enabled ? $sformatf("0x%08h", mpact_val) : "DISABLED",
-                                 has_spike ? $sformatf("0x%08h", spike_val) : "DISABLED",
-                                 mpact_enabled ? (mpact_val == rtl_val) : 1'b1,
-                                 has_spike ? (spike_val == rtl_val) : 1'b1,
-                                 (mpact_enabled && has_spike) ? (mpact_val == spike_val) : 1'b1);
+                                 $sformatf("0x%08h", mpact_val), $sformatf("0x%08h", spike_val),
+                                 (mpact_val == rtl_val), (spike_val == rtl_val),
+                                 (mpact_val == spike_val));
             return 0;
           end
         end
@@ -672,18 +639,14 @@ package coralnpu_cosim_checker_pkg;
           bit mpact_ok = 1;
           bit spike_ok = 1;
 
-          if (mpact_enabled) begin
-            if (mpact_get_register(reg_name, mpact_val) != 0) begin
-              `uvm_error("COSIM_API_FAIL", $sformatf("Failed to get MPACT FPR %s", reg_name));
-              mpact_ok = 0;
-            end
+          if (mpact_get_register(reg_name, mpact_val) != 0) begin
+            `uvm_error("COSIM_API_FAIL", $sformatf("Failed to get MPACT FPR %s", reg_name));
+            mpact_ok = 0;
           end
 
-          if (has_spike) begin
-            if (!spike_checker.get_fpr(reg_name, spike_val)) begin
-              `uvm_error("COSIM_API_FAIL", $sformatf("Failed to get Spike FPR %s", reg_name));
-              spike_ok = 0;
-            end
+          if (!spike_checker.get_fpr(reg_name, spike_val)) begin
+            `uvm_error("COSIM_API_FAIL", $sformatf("Failed to get Spike FPR %s", reg_name));
+            spike_ok = 0;
           end
 
           if (trace_logging_enabled) begin
@@ -694,14 +657,11 @@ package coralnpu_cosim_checker_pkg;
                       UVM_NONE)
           end
 
-          if ((mpact_enabled && mpact_ok && mpact_val != rtl_val) ||
-              (has_spike && spike_ok && spike_val != rtl_val)) begin
+          if ((mpact_ok && mpact_val != rtl_val) || (spike_ok && spike_val != rtl_val)) begin
             report_3way_mismatch(reg_name, rtl_info.pc, rtl_info.insn, $sformatf("0x%08h", rtl_val),
-                                 mpact_enabled ? $sformatf("0x%08h", mpact_val) : "DISABLED",
-                                 has_spike ? $sformatf("0x%08h", spike_val) : "DISABLED",
-                                 mpact_enabled ? (mpact_val == rtl_val) : 1'b1,
-                                 has_spike ? (spike_val == rtl_val) : 1'b1,
-                                 (mpact_enabled && has_spike) ? (mpact_val == spike_val) : 1'b1);
+                                 $sformatf("0x%08h", mpact_val), $sformatf("0x%08h", spike_val),
+                                 (mpact_val == rtl_val), (spike_val == rtl_val),
+                                 (mpact_val == spike_val));
             return 0;
           end
         end
@@ -719,18 +679,14 @@ package coralnpu_cosim_checker_pkg;
               bit mpact_ok = 1;
               bit spike_ok = 1;
 
-              if (mpact_enabled) begin
-                if (mpact_get_vector_register(reg_name, mpact_vval) != 0) begin
-                  `uvm_error("COSIM_API_FAIL", $sformatf("Failed to get MPACT VPR %s", reg_name));
-                  mpact_ok = 0;
-                end
+              if (mpact_get_vector_register(reg_name, mpact_vval) != 0) begin
+                `uvm_error("COSIM_API_FAIL", $sformatf("Failed to get MPACT VPR %s", reg_name));
+                mpact_ok = 0;
               end
 
-              if (has_spike) begin
-                if (!spike_checker.get_vpr(reg_name, spike_vval)) begin
-                  `uvm_error("COSIM_API_FAIL", $sformatf("Failed to get Spike VPR %s", reg_name));
-                  spike_ok = 0;
-                end
+              if (!spike_checker.get_vpr(reg_name, spike_vval)) begin
+                `uvm_error("COSIM_API_FAIL", $sformatf("Failed to get Spike VPR %s", reg_name));
+                spike_ok = 0;
               end
 
               if (trace_logging_enabled) begin
@@ -742,15 +698,11 @@ package coralnpu_cosim_checker_pkg;
                     UVM_NONE)
               end
 
-              if ((mpact_enabled && mpact_ok && mpact_vval != rtl_vval) ||
-                  (has_spike && spike_ok && spike_vval != rtl_vval)) begin
-                report_3way_mismatch(
-                    reg_name, rtl_info.pc, rtl_info.insn, $sformatf("0x%032h", rtl_vval),
-                    mpact_enabled ? $sformatf("0x%032h", mpact_vval) : "DISABLED",
-                    has_spike ? $sformatf("0x%032h", spike_vval) : "DISABLED",
-                    mpact_enabled ? (mpact_vval == rtl_vval) : 1'b1,
-                    has_spike ? (spike_vval == rtl_vval) : 1'b1,
-                    (mpact_enabled && has_spike) ? (mpact_vval == spike_vval) : 1'b1);
+              if ((mpact_ok && mpact_vval != rtl_vval) || (spike_ok && spike_vval != rtl_vval)) begin
+                report_3way_mismatch(reg_name, rtl_info.pc, rtl_info.insn, $sformatf(
+                                     "0x%032h", rtl_vval), $sformatf("0x%032h", mpact_vval),
+                                     $sformatf("0x%032h", spike_vval), (mpact_vval == rtl_vval),
+                                     (spike_vval == rtl_vval), (mpact_vval == spike_vval));
                 return 0;
               end
             end
@@ -758,7 +710,7 @@ package coralnpu_cosim_checker_pkg;
         end
       end
 
-      // 4. Tile Writeback Detection
+      // 4. Tile Writeback Detection and Verification
       if (rtl_info.t_wb != 0) begin
         for (int i = 0; i < 16; i++) begin
           if (rtl_info.t_wb[i]) begin
@@ -769,55 +721,142 @@ package coralnpu_cosim_checker_pkg;
                                   rtl_info.pc, rtl_info.insn, reg_name, rtl_info.retire_index),
                         UVM_NONE)
             end
+
+            begin
+              logic [1023:0][31:0] mpact_words;
+              logic [1023:0][31:0] spike_words;
+              int unsigned mpact_tew = 0;
+              int unsigned spike_tew = 0;
+              int unsigned mpact_word_count = 0;
+              int unsigned spike_word_count = 0;
+              bit mpact_ok = 1;
+              bit spike_ok = 1;
+
+              if (mpact_get_current_matrix_tile(
+                      i, mpact_words, mpact_tew, mpact_word_count
+                  ) != 0) begin
+                `uvm_error("COSIM_API_FAIL", $sformatf(
+                                                 "Failed to get MPACT matrix tile %s at PC 0x%08h",
+                                                 reg_name, rtl_info.pc))
+                mpact_ok = 0;
+              end
+
+              if (!spike_checker.get_current_matrix_tile(
+                      i, spike_words, spike_tew, spike_word_count
+                  )) begin
+                `uvm_error("COSIM_API_FAIL", $sformatf(
+                                                 "Failed to get Spike matrix tile %s at PC 0x%08h",
+                                                 reg_name, rtl_info.pc))
+                spike_ok = 0;
+              end
+
+              begin
+                int unsigned valid_word_count = mpact_ok ? mpact_word_count :
+                                                spike_ok ? spike_word_count : 0;
+                int unsigned current_tew = mpact_ok ? mpact_tew : spike_tew;
+                if (valid_word_count > 0) begin
+                  int num_128b_chunks = valid_word_count / 4;
+                  for (int chunk = 0; chunk < num_128b_chunks && chunk < 16; chunk++) begin
+                    logic [127:0] rtl_chunk = rvvi_vif.t_wdata[0][rtl_info.retire_index][i][chunk];
+                    logic [127:0] mpact_chunk = {
+                      mpact_words[chunk*4+3],
+                      mpact_words[chunk*4+2],
+                      mpact_words[chunk*4+1],
+                      mpact_words[chunk*4+0]
+                    };
+                    logic [127:0] spike_chunk = {
+                      spike_words[chunk*4+3],
+                      spike_words[chunk*4+2],
+                      spike_words[chunk*4+1],
+                      spike_words[chunk*4+0]
+                    };
+
+                    if ((mpact_ok && mpact_chunk != rtl_chunk) ||
+                        (spike_ok && spike_chunk != rtl_chunk)) begin
+                      string tile_reg_name = $sformatf(
+                          "%s (chunk %0d / %0d, TEW=%0d)",
+                          reg_name,
+                          chunk,
+                          num_128b_chunks,
+                          current_tew
+                      );
+                      report_3way_mismatch(tile_reg_name, rtl_info.pc, rtl_info.insn, $sformatf(
+                                           "0x%032h", rtl_chunk), $sformatf("0x%032h", mpact_chunk),
+                                           $sformatf("0x%032h", spike_chunk),
+                                           (mpact_chunk == rtl_chunk), (spike_chunk == rtl_chunk),
+                                           (mpact_chunk == spike_chunk));
+                      return 0;
+                    end
+                  end
+                end
+              end
+            end
           end
         end
       end
 
       // CSR Writeback Detection
       if (rvvi_vif.csr_wb[0][rtl_info.retire_index] != 0) begin
-        logic [31:0] mpact_csr_val;
-        logic [31:0] rtl_csr_wdata;
-        logic [31:0] check_mask;
         for (int i = 0; i < 4096; i++) begin
           if (rvvi_vif.csr_wb[0][rtl_info.retire_index][i]) begin
             string csr_name = get_csr_name(i);
-            if (mpact_enabled) begin
-              if (mpact_get_register(csr_name, mpact_csr_val) != 0) begin
-                `uvm_warning("COSIM_CSR_UNKNOWN",
-                             $sformatf("Cannot check CSR '%s' (0x%03x) - not in MPACT", csr_name,
-                                       i))
-              end else begin
-                rtl_csr_wdata = rvvi_vif.csr[0][rtl_info.retire_index][i];
-                check_mask    = get_csr_compare_mask(i);
+            string csr_label = $sformatf("CSR[0x%03x] (%s)", i, csr_name);
+            logic [31:0] rtl_csr_wdata = rvvi_vif.csr[0][rtl_info.retire_index][i];
+            logic [31:0] check_mask = get_csr_compare_mask(i);
+            logic [31:0] mpact_csr_val = 0;
+            logic [31:0] spike_csr_val = 0;
+            bit mpact_ok = 1;
+            bit spike_ok = 1;
 
-                if ((mpact_csr_val & check_mask) != (rtl_csr_wdata & check_mask)) begin
-                  string msg;
-                  msg = $sformatf(
-                      "CSR[0x%03x] %s mismatch at PC 0x%08x, Insn=0x%08x. RTL: 0x%08x, MPACT: 0x%08x (mask: 0x%08x)",
-                      i,
-                      csr_name,
-                      rtl_info.pc,
-                      rtl_info.insn,
-                      rtl_csr_wdata,
-                      mpact_csr_val,
-                      check_mask
-                  );
-                  `uvm_error("COSIM_CSR_MISMATCH", msg)
-                  return 0;  // FAIL
-                end
+            if (check_mask == 32'h0000_0000) begin
+              continue;
+            end
 
-                `uvm_info("COSIM_CSR_MATCH", $sformatf(
-                          "CSR[0x%03x] %s compare success at PC 0x%08x, Insn=0x%08x. RTL: 0x%08x, MPACT: 0x%08x (mask: 0x%08x)",
-                          i,
-                          csr_name,
-                          rtl_info.pc,
-                          rtl_info.insn,
-                          rtl_csr_wdata,
-                          mpact_csr_val,
-                          check_mask
-                          ), UVM_HIGH)
+            if (mpact_get_register(csr_name, mpact_csr_val) != 0) begin
+              `uvm_warning("COSIM_CSR_UNKNOWN",
+                           $sformatf("Cannot check CSR '%s' (0x%03x) - not in MPACT", csr_name, i))
+              mpact_ok = 0;
+            end
+
+            if (!spike_checker.get_gpr(csr_name, spike_csr_val)) begin
+              `uvm_warning("COSIM_CSR_UNKNOWN",
+                           $sformatf("Cannot check CSR '%s' (0x%03x) - not in Spike", csr_name, i))
+              spike_ok = 0;
+            end
+
+            if (trace_logging_enabled) begin
+              `uvm_info(
+                  "COSIM_TRACE",
+                  $sformatf(
+                      "PC=0x%08h Insn=0x%08h | RTL: %s=0x%08h | MPACT: 0x%08h | Spike: 0x%08h (mask: 0x%08h)",
+                      rtl_info.pc, rtl_info.insn, csr_label, rtl_csr_wdata, mpact_csr_val,
+                      spike_csr_val, check_mask), UVM_NONE)
+            end
+
+            begin
+              bit rtl_eq_mpact = mpact_ok ?
+                  ((mpact_csr_val & check_mask) == (rtl_csr_wdata & check_mask)) : 1'b1;
+              bit rtl_eq_spike = spike_ok ?
+                  ((spike_csr_val & check_mask) == (rtl_csr_wdata & check_mask)) : 1'b1;
+              bit mpact_eq_spike = (mpact_ok && spike_ok) ?
+                  ((mpact_csr_val & check_mask) == (spike_csr_val & check_mask)) : 1'b1;
+
+              if (!rtl_eq_mpact || !rtl_eq_spike) begin
+                report_3way_mismatch(csr_label, rtl_info.pc, rtl_info.insn, $sformatf(
+                                     "0x%08h (mask: 0x%08h)", rtl_csr_wdata, check_mask),
+                                     mpact_ok ? $sformatf("0x%08h", mpact_csr_val) : "UNKNOWN",
+                                     spike_ok ? $sformatf("0x%08h", spike_csr_val) : "UNKNOWN",
+                                     rtl_eq_mpact, rtl_eq_spike, mpact_eq_spike);
+                return 0;  // FAIL
               end
             end
+
+            `uvm_info(
+                "COSIM_CSR_MATCH",
+                $sformatf(
+                    "%s compare success at PC 0x%08x, Insn=0x%08x. RTL: 0x%08x, MPACT: 0x%08x, Spike: 0x%08x (mask: 0x%08x)",
+                    csr_label, rtl_info.pc, rtl_info.insn, rtl_csr_wdata, mpact_csr_val,
+                    spike_csr_val, check_mask), UVM_HIGH)
           end
         end
       end
@@ -831,6 +870,11 @@ package coralnpu_cosim_checker_pkg;
         // mip (0x344):
         // Interrupt pending bits reflect asynchronous external signals (PLIC/timer)
         12'h344: return 32'h0000_0000;
+
+        // Custom machine CSRs (0x7c0-0x7c7 mcontext0-mcontext7, 0x7e0-0x7e1 mpc/msp):
+        // CoralNPU custom registers are not modeled in MPACT or Spike.
+        12'h7c0, 12'h7c1, 12'h7c2, 12'h7c3, 12'h7c4, 12'h7c5, 12'h7c6, 12'h7c7, 12'h7e0, 12'h7e1:
+        return 32'h0000_0000;
 
         // Default: Exact bit-for-bit check on all standard architectural CSRs
         // (mstatus, mscratch, mepc, mcause, mtval, misa, fflags, frm, fcsr, vstart, vxrm, vxsat, tdata1/2, etc.)

@@ -97,38 +97,33 @@ The UVM testbench models and regressions are built and run directly using Bazel.
   bazel build --config=vcs //tests/uvm:uvm_sim_vcs
   ```
 
-**2. Running UVM Regressions via Bazel:**
+**2. Running UVM Tests via CoralFlow (Bazel):**
 
-* **Verilator Single Test:**
-
-  ```bash
-  bazel test //tests/cocotb:uvm_regression_nop_test
-  ```
-
-* **VCS Single Test:**
-
-  ```bash
-  bazel test --config=vcs //tests/cocotb:vcs_uvm_regression_nop_test
-  ```
-
-* **Full Regression Suite:**
+* **Single Test (Verilator default / VCS):**
 
   ```bash
   # Verilator
-  bazel test --test_tag_filters=uvm-regression //tests/cocotb:all
+  bazel test //tests/cocotb:nop_stress_test_uvm
 
   # VCS
-  bazel test --config=vcs --test_tag_filters=vcs-uvm-regression //tests/cocotb:all
+  bazel test --config=vcs --define=uvm_simulator=vcs //tests/cocotb:nop_stress_test_uvm
   ```
 
-**3. Running Regressions via `run_uvm_regression.py`:**
+* **Full UVM Suite (Verilator default / VCS):**
 
-You can also run batch or targeted regressions using the Python runner:
+  ```bash
+  # Verilator
+  bazel test --test_tag_filters=uvm //...
 
-```bash
-# Run with Verilator
-python3 utils/run_uvm_regression.py --simulator=verilator --target=//tests/cocotb:nop_test
+  # VCS
+  bazel test --config=vcs --build_tests_only --build_tag_filters=uvm --test_tag_filters=uvm --define=uvm_simulator=vcs //...
+  ```
 
-# Run with VCS
-python3 utils/run_uvm_regression.py --simulator=vcs --target=//tests/cocotb:nop_test
-```
+**3. Building the VME (Zvt) Toplevel:**
+
+The bench can instantiate `VmeCoreMiniVerificationAxi` (RVV plus the Zvt
+matrix extension) instead of `RvvCoreMiniVerificationAxi`. The VME models
+(`//tests/uvm:uvm_sim_verilator_vme`, `//tests/uvm:uvm_sim_vcs_vme`) are built
+with `+define+ZVT_ON`, which enables the Zvt datapath in the RTL, selects the
+VME DUT in `coralnpu_tb_top`, and configures the MPACT co-simulator for the
+M4 (Zvt) architecture.

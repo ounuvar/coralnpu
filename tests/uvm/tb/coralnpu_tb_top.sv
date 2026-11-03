@@ -85,7 +85,8 @@ module coralnpu_tb_top;
 
 
   //--------------------------------------------------------------------------
-  // Debug Port Binding Macros for RvvCoreMiniVerificationAxi
+  // Debug Port Binding Macros for RvvCoreMiniVerificationAxi /
+  // VmeCoreMiniVerificationAxi
   // Collapses ~300 lines of repetitive unconnected debug ports
   //--------------------------------------------------------------------------
   `define DEBUG_RB_VEC_WRITE(lane, vw) \
@@ -103,6 +104,42 @@ module coralnpu_tb_top;
       `DEBUG_RB_VEC_WRITE(lane, 6), \
       `DEBUG_RB_VEC_WRITE(lane, 7)
 
+`ifdef ZVT_ON
+  // VME adds per-lane Zvt tile-register writes and mtype updates.
+  `define DEBUG_RB_TILE_WRITE_DATA(lane, tw) \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_0(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_1(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_2(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_3(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_4(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_5(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_6(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_7(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_8(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_9(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_10(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_11(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_12(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_13(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_14(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_data_15()
+
+  `define DEBUG_RB_TILE_WRITE(lane, tw) \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_valid(), \
+      .io_debug_rb_inst_``lane``_bits_tileWrites_``tw``_bits_idx(), \
+      `DEBUG_RB_TILE_WRITE_DATA(lane, tw)
+
+  `define DEBUG_RB_ZVT_PORTS(lane) \
+      `DEBUG_RB_TILE_WRITE(lane, 0), \
+      `DEBUG_RB_TILE_WRITE(lane, 1), \
+      `DEBUG_RB_TILE_WRITE(lane, 2), \
+      `DEBUG_RB_TILE_WRITE(lane, 3), \
+      .io_debug_rb_inst_``lane``_bits_mtype_valid(), \
+      .io_debug_rb_inst_``lane``_bits_mtype_bits(),
+`else
+  `define DEBUG_RB_ZVT_PORTS(lane)
+`endif
+
   `define DEBUG_RB_LANE(lane) \
       .io_debug_rb_inst_``lane``_valid(), \
       .io_debug_rb_inst_``lane``_bits_pc(), \
@@ -110,6 +147,7 @@ module coralnpu_tb_top;
       .io_debug_rb_inst_``lane``_bits_idx(), \
       .io_debug_rb_inst_``lane``_bits_data(), \
       `DEBUG_RB_VEC_WRITES(lane), \
+      `DEBUG_RB_ZVT_PORTS(lane) \
       .io_debug_rb_inst_``lane``_bits_trap()
 
   `define DEBUG_RB_ALL_LANES \
@@ -179,7 +217,15 @@ module coralnpu_tb_top;
   //--------------------------------------------------------------------------
   // DUT Instantiation
   //--------------------------------------------------------------------------
-  RvvCoreMiniVerificationAxi u_dut (
+`ifndef DUT_MODULE
+`ifdef ZVT_ON
+  `define DUT_MODULE VmeCoreMiniVerificationAxi
+`else
+  `define DUT_MODULE RvvCoreMiniVerificationAxi
+`endif
+`endif
+
+  `DUT_MODULE u_dut (
       .io_aclk                             (clk),
       .io_aresetn                          (resetn),
       .io_axi_slave_write_addr_ready       (master_axi_if.awready),
@@ -282,6 +328,11 @@ module coralnpu_tb_top;
 
   `undef DEBUG_RB_VEC_WRITE
   `undef DEBUG_RB_VEC_WRITES
+`ifdef ZVT_ON
+  `undef DEBUG_RB_TILE_WRITE_DATA
+  `undef DEBUG_RB_TILE_WRITE
+`endif
+  `undef DEBUG_RB_ZVT_PORTS
   `undef DEBUG_RB_LANE
   `undef DEBUG_RB_ALL_LANES
   `undef DEBUG_DISPATCH_LANE
@@ -289,6 +340,7 @@ module coralnpu_tb_top;
   `undef DEBUG_REGFILE_WRITE_DATA
   `undef DEBUG_FLOAT_WRITE_DATA
   `undef DEBUG_CORE_PORTS
+  `undef DUT_MODULE
 
 
   //--------------------------------------------------------------------------
@@ -395,7 +447,7 @@ module coralnpu_tb_top;
         forever begin
           @(posedge clk);
           // Check internal data bus (dbus)
-          if (u_dut.core.io_dbus_valid && u_dut.core.io_dbus_write &&
+          if (tohost_addr != 32'h0 && u_dut.core.io_dbus_valid && u_dut.core.io_dbus_write &&
               u_dut.core.io_dbus_addr == tohost_addr) begin
             if (u_dut.core.io_dbus_wdata[0] == 1'b1) begin
               `uvm_info("TB_TOP_MONITOR", "tohost write detected on DBUS.", UVM_LOW)
@@ -407,8 +459,9 @@ module coralnpu_tb_top;
           end
 
           // Check external bus (ebus)
-          if (u_dut.core.io_ebus_dbus_valid && u_dut.core.io_ebus_dbus_ready &&
-              u_dut.core.io_ebus_dbus_write && u_dut.core.io_ebus_dbus_addr == tohost_addr) begin
+          if (tohost_addr != 32'h0 && u_dut.core.io_ebus_dbus_valid &&
+              u_dut.core.io_ebus_dbus_ready && u_dut.core.io_ebus_dbus_write &&
+              u_dut.core.io_ebus_dbus_addr == tohost_addr) begin
             if (u_dut.core.io_ebus_dbus_wdata[0] == 1'b1) begin
               `uvm_info("TB_TOP_MONITOR", "tohost write detected on EBUS.", UVM_LOW)
               uvm_config_db#(logic [127:0])::set(null, "*", "final_tohost_data",

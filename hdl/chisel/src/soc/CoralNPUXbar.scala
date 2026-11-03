@@ -188,6 +188,20 @@ class CoralNPUXbar(
           fifo.io.rst_d_i := domainPorts.reset.asBool
           fifo.io.tl_h <> currentIface
           currentIface = fifo.io.tl_d
+        } else if (device.name == "clk_table") {
+          val buf = Module(
+            new TlulFifoSync(
+              commonParams,
+              reqDepth = 2,
+              rspDepth = 2,
+              reqPass = false,
+              rspPass = false
+            )
+          ).suggestName(s"${device.name}_buf")
+          buf.io.spare_req_i := 0.U
+          buf.io.spare_rsp_i := 0.U
+          buf.io.host <> currentIface
+          currentIface = buf.io.device
         }
 
         // Step 2: Width Conversion (if necessary)
@@ -308,17 +322,14 @@ class CoralNPUXbar(
   }
 }
 
-import _root_.circt.stage.{ChiselStage, FirtoolOption}
-import chisel3.stage.ChiselGeneratorAnnotation
+import common.ChiselEmitter
 import coralnpu.Parameters
-import scala.annotation.nowarn
 import coralnpu.MemorySize
 
 /** A standalone main object to generate the SystemVerilog for the CoralNPUXbar.
   *
   * This can be run via Bazel to produce the final Verilog output.
   */
-@nowarn
 object CoralNPUXbarEmitter extends App {
   // Basic argument parsing for --enableTestHarness
   val enableTestHarness = args.contains("--enableTestHarness")
@@ -332,19 +343,14 @@ object CoralNPUXbarEmitter extends App {
     new bus.TLULParameters(dataBits = device.width, addrBits = 32, idBits = 10)
   }
 
-  // Use ChiselStage to generate the Verilog.
-  (new ChiselStage).execute(
-    Array("--target", "systemverilog") ++ chiselArgs,
-    Seq(
-      ChiselGeneratorAnnotation(() =>
-        new CoralNPUXbar(
-          hostParams,
-          deviceParams,
-          enableTestHarness,
-          MemorySize.fromKBytes(Parameters.itcmSizeKBytesDefault),
-          MemorySize.fromKBytes(Parameters.dtcmSizeKBytesDefault)
-        )
-      )
-    ) ++ Seq(FirtoolOption("-enable-layers=Verification"))
+  ChiselEmitter.emit(
+    new CoralNPUXbar(
+      hostParams,
+      deviceParams,
+      enableTestHarness,
+      MemorySize.fromKBytes(Parameters.itcmSizeKBytesDefault),
+      MemorySize.fromKBytes(Parameters.dtcmSizeKBytesDefault)
+    ),
+    chiselArgs
   )
 }
