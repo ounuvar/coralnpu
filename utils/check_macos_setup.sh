@@ -146,11 +146,14 @@ else
   HAVE_BREW=0
 fi
 
+# Spike is configured with DTC=/opt/homebrew/bin/dtc, but it only runs dtc to
+# build a device tree, which spike_simulator disables (dtb_enabled=false). So
+# a missing dtc only matters for running the standalone spike binary.
 if [[ -x /opt/homebrew/bin/dtc ]]; then
   ok "dtc ($(/opt/homebrew/bin/dtc --version 2>/dev/null | head -1)) for Spike"
 else
-  fail "dtc (device-tree compiler) not at /opt/homebrew/bin/dtc; Spike runs it during simulation" \
-    "brew install dtc"
+  warn "dtc not at /opt/homebrew/bin/dtc; only needed to run the standalone spike binary" \
+    "brew install dtc (optional)"
 fi
 
 BAZEL=""

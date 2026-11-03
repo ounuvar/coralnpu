@@ -17,7 +17,7 @@ Intel Macs are not supported.
 2. **Homebrew packages** (from [brew.sh](https://brew.sh))
 
    ```sh
-   brew install bazelisk dtc
+   brew install bazelisk
    brew tap riscv-software-src/riscv
    brew trust --formula riscv-software-src/riscv/riscv-gnu-toolchain
    brew install riscv-software-src/riscv/riscv-gnu-toolchain
@@ -27,6 +27,10 @@ Intel Macs are not supported.
    libstdc++). Homebrew's prebuilt bottle needs macOS 15 or newer; on older
    versions it builds from source, which can take an hour or more. Homebrew
    core's `riscv64-elf-gcc` will not work: it ships no C library.
+
+   `dtc` (`brew install dtc`) is optional. The Bazel flows embed Spike with
+   device-tree generation disabled, so they never run it; only the standalone
+   `spike` binary needs it.
 
 3. **Check the setup**
 
