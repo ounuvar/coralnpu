@@ -113,6 +113,7 @@ def define_mpact_repos():
             "@coralnpu_hw//third_party/coralnpu_mpact:0007-Add-matrix-tile-DPI-accessors.patch",
             "@coralnpu_hw//third_party/coralnpu_mpact:0008-CoralNPU-M4-alignment.patch",
             "@coralnpu_hw//third_party/coralnpu_mpact:0009-Validate-rvv-lsu-legality.patch",
+            "@coralnpu_hw//third_party/coralnpu_mpact:0100-idea2-fused-requant.patch",
         ],
         patch_args = ["-p1"],
     )
@@ -580,6 +581,7 @@ filegroup(
             "@coralnpu_hw//third_party/spike:0007-Rename-yield-macro-avoid-boost-std-conflict.patch",
             "@coralnpu_hw//third_party/spike:0008-Link-libstdc-explicitly-in-LIBS.patch",
             "@coralnpu_hw//third_party/spike:0009-Fix-Zvt-and-CoralNPU-mstatus-alignment.patch",
+            "@coralnpu_hw//third_party/spike:0100-idea2-fused-requant.patch",
         ],
         patch_args = ["-p1"],
         urls = [
