@@ -45,6 +45,18 @@ Upstream has no dedicated dot-product or requantization instruction. Confirm thi
 - **Results and decisions go on the issue.** Post each measurement as a comment on its issue: configuration, commit, and the numbers. Record decisions (encodings, target clock, whether to build a depthwise unit) the same way.
 - **One branch per issue, merged by pull request** into `main` with `Closes #N`, after CI passes. Keep pull requests small and rebase on `main` often.
 
+## Working on an issue
+
+1. **Pick it up.** Assign yourself and move the card to In progress on the board.
+2. **Branch from fresh `main`:** `git switch main && git pull && git switch -c <issue>-<short-name>` (for example `8-dot-product`).
+3. **Work and test locally.** Run only the tests your change touches (see Common commands); the full suite is not part of the loop.
+4. **Lint before pushing:** `BASE_BRANCH=origin/main ./utils/run_linters.sh --fix`. If the linters are not installed on your Mac, CI runs them.
+5. **Open a pull request** with `Closes #<issue>` in the description and move the card to In review. CI takes a few minutes: lint, macro signatures, and the RTL Verilog build.
+6. **Merge it yourself once CI passes.** Ask a teammate to review first only if you touched shared ground: the RVV decode or multiply files, `MODULE.bazel*`, `.bazelrc`, or `toolchain/`. Delete the branch after merging.
+7. **Report on the issue.** Post measurements (configuration, commit, numbers) and decisions as comments on the issue before closing it.
+
+Never push directly to `main`. The full `bazel test //...` (5 to 6 hours) runs only by hand: Actions > CoralNPU CI > Run workflow, for example before measuring a configuration for the report.
+
 ## Recipe for a new vector instruction (ideas 1, 2, and 3 if it becomes an instruction)
 
 Do the steps in order; each check must pass before the next step. Steps 1 to 4 need no RTL, so the instruction-count benefit is known before anyone touches hardware.
@@ -84,7 +96,7 @@ Changes to the RVV backend must build and pass tests both with and without `ZVT_
 | Apple Silicon | `ounuvar`, `AayushMerchant` | Day-to-day: Chisel, Verilator, cocotb, npusim. Setup: `doc/macos_apple_silicon.md` and `utils/check_macos_setup.sh`. No Vivado, VCS or AWS HDK; linters run in CI if not installed. |
 | x86 Linux | `Capheuss` | Upstream Linux setup as-is (prebuilt toolchain, or `utils/coralnpu.dockerfile`). Numbers for the report; long RTL runs. Under WSL2: clone in `~/` not `/mnt/c`, 16 GB+ memory in `.wslconfig`, `git config core.autocrlf false`. |
 | AWS instance | Everyone | Vivado synthesis, VU47P area and timing, F2 builds. |
-| GitHub Actions | Everyone | `ci.yml` (lint plus `bazel test //...` on Ubuntu x86) on every pull request: the shared Linux check. For quick feedback, run the specific test locally. |
+| GitHub Actions | Everyone | On every pull request and push to `main`: lint and macro signatures (`ci.yml`) and the RTL Verilog build (`main.yml`) on Ubuntu x86, a few minutes. The full `bazel test //...` runs only by hand. |
 
 ## Repo map (project-relevant parts)
 
