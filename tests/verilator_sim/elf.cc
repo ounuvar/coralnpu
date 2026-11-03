@@ -14,7 +14,7 @@
 
 #include "tests/verilator_sim/elf.h"
 
-#include <elf.h>
+#include "hdl/verilog/elf_compat.h"
 
 #include <cstdint>
 #include <cstring>

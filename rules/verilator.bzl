@@ -621,6 +621,10 @@ def verilator_model(
     native.cc_binary(
         name = name,
         deps = [":" + lib_name],
-        linkopts = kwargs.get("linkopts", []) + ["-lpthread", "-latomic", "-ldl", "-lstdc++", "-lm"],
+        linkopts = kwargs.get("linkopts", []) + ["-lpthread", "-ldl", "-lstdc++", "-lm"] + select({
+            # macOS has no libatomic; Apple clang lowers atomics inline.
+            "@platforms//os:macos": [],
+            "//conditions:default": ["-latomic"],
+        }),
         **binary_kwargs
     )

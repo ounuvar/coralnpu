@@ -14,7 +14,7 @@
 
 #include "sram_backdoor.h"
 
-#include <elf.h>
+#include "elf_compat.h"
 
 #include <algorithm>
 #include <cstdio>

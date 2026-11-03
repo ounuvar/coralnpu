@@ -155,6 +155,12 @@ common --enable_platform_specific_config
 build:linux --host_linkopt=-fuse-ld=bfd
 build:linux --linkopt=-fuse-ld=bfd
 
+# Bazel's macOS cc toolchain defaults to a 10.11 deployment target, which lacks
+# the C++17 aligned new/delete that Verilator-generated models use. 11.0 is the
+# oldest macOS that runs on Apple Silicon.
+build:macos --macos_minimum_os=11.0
+build:macos --host_macos_minimum_os=11.0
+
 # Disable LLD-specific "start-lib" optimization (incompatible with BFD)
 build --host_features=-supports_start_end_lib
 build --features=-supports_start_end_lib

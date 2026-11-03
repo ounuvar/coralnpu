@@ -14,7 +14,7 @@
 
 #include "tests/verilator_sim/coralnpu/core_mini_axi_tb.h"
 
-#include <elf.h>
+#include "hdl/verilog/elf_compat.h"
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>

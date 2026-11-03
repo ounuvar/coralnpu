@@ -47,6 +47,9 @@ def verilator_repos():
         patch_args = ["-p1"],
         patches = [
             "@coralnpu_hw//third_party/verilator:0001-Remove-autodetect-of-VERILATOR_ROOT.patch",
+            # The Bazel build always compiles against the bundled flex 2.6.4
+            # FlexLexer.h (int signatures), never Apple's (size_t on Tahoe).
+            "@coralnpu_hw//third_party/verilator:0003-flexfix-Drop-macOS-Tahoe-size_t-rewrite.patch",
         ],
     )
 
@@ -58,6 +61,10 @@ def verilator_repos():
             "https://github.com/madler/zlib/archive/v1.2.11.zip",
         ],
         build_file = "@coralnpu_hw//third_party/verilator:zlib.BUILD",
+        # Backport of the zlib 1.2.12 fix: TARGET_OS_MAC made zutil.h define
+        # fdopen() as NULL, which breaks the modern macOS SDK's <stdio.h>.
+        patch_args = ["-p1"],
+        patches = ["@coralnpu_hw//third_party/verilator:zlib-0001-Fix-fdopen-on-macOS.patch"],
     )
 
     http_archive(

@@ -33,6 +33,7 @@ cc_library(
         "elf.h",
     ],
     visibility = ["//visibility:public"],
+    deps = ["//hdl/verilog:elf_compat"],
 )
 
 cc_library(
