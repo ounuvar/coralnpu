@@ -20,6 +20,15 @@ cmake(
     ],
     install = True,
     lib_source = ":all_srcs",
+    # sc_cor_qt.cpp weak-references the ASan fiber hooks and skips them when
+    # NULL. GNU ld leaves missing weak refs as NULL; Apple's ld64 needs -U.
+    linkopts = select({
+        "@platforms//os:macos": [
+            "-Wl,-U,___sanitizer_start_switch_fiber",
+            "-Wl,-U,___sanitizer_finish_switch_fiber",
+        ],
+        "//conditions:default": [],
+    }),
     out_static_libs = ["libsystemc.a"],
     targets = ["systemc"],
     visibility = ["//visibility:public"],

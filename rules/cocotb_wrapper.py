@@ -428,6 +428,16 @@ if __name__ == "__main__":
                 test_flags['extra_env'] = {}
             test_flags['extra_env']['LD_LIBRARY_PATH'] = os.environ[
                 'LD_LIBRARY_PATH']
+            # macOS's dyld ignores LD_LIBRARY_PATH; the model's baked-in
+            # rpath points at the (now gone) build sandbox.
+            if sys.platform == "darwin":
+                cur_dyld = os.environ.get("DYLD_LIBRARY_PATH", "")
+                os.environ['DYLD_LIBRARY_PATH'] = (
+                    f"{verilator_lib_dir}:{cur_dyld}"
+                    if cur_dyld else verilator_lib_dir
+                )
+                test_flags['extra_env']['DYLD_LIBRARY_PATH'] = os.environ[
+                    'DYLD_LIBRARY_PATH']
     else:
         runner.build(**build_flags)
 

@@ -38,6 +38,8 @@ Coral NPU offers the following top-level feature set:
 See [coralnpu.dockerfile](utils/coralnpu.dockerfile) for a detailed list of
 requirements.  Our CI systems run most builds and tests using this image.
 
+On an Apple Silicon Mac, see [Building on Apple Silicon Macs](doc/macos_apple_silicon.md).
+
 ## Verification & Testing
 
 For details on our testing methodologies and how to run or write tests, see the

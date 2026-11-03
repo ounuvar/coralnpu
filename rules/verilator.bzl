@@ -621,6 +621,14 @@ def verilator_model(
     native.cc_binary(
         name = name,
         deps = [":" + lib_name],
-        linkopts = kwargs.get("linkopts", []) + ["-lpthread", "-latomic", "-ldl", "-lstdc++", "-lm"],
+        linkopts = kwargs.get("linkopts", []) + ["-lpthread", "-ldl", "-lstdc++", "-lm"] + select({
+            # macOS has no libatomic; Apple clang lowers atomics inline.
+            # Verilator's generated main() weak-references
+            # vlog_startup_routines and skips it when NULL; GNU ld allows the
+            # missing weak ref, ld64 needs -U (as Verilator's verilated.mk
+            # passes on Darwin).
+            "@platforms//os:macos": ["-Wl,-U,_vlog_startup_routines"],
+            "//conditions:default": ["-latomic"],
+        }),
         **binary_kwargs
     )

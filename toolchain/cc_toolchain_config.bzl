@@ -21,6 +21,7 @@ load(
     "flag_set",
     "tool_path",
 )
+load("@toolchain_coralnpu_v2//:defs.bzl", "BUILTIN_INCLUDE_DIRECTORIES", "HTIF_SEARCH_DIR")
 
 all_link_actions = [
     ACTION_NAMES.cpp_link_executable,
@@ -199,7 +200,11 @@ def _impl(ctx):
         actions = all_link_actions,
         flag_groups = [
             flag_group(
-                flags = [
+                flags = ([
+                    # Local toolchains: let GCC find htif_nano.specs/htif.ld.
+                    "-B",
+                    tc_root + "/" + HTIF_SEARCH_DIR + "/",
+                ] if HTIF_SEARCH_DIR else []) + [
                     "--specs=htif_nano.specs",
                     "-lsemihost",
                     "-Wl,--start-group",
@@ -395,6 +400,7 @@ def _impl(ctx):
         compiler = "clang",
         abi_version = abi,
         abi_libc_version = abi,
+        cxx_builtin_include_directories = BUILTIN_INCLUDE_DIRECTORIES,
         features = [
             includes_feature,
             printf_float_feature,

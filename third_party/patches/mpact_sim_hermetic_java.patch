@@ -1,0 +1,37 @@
+--- a/mpact/sim/decoder/antlr_cc.bzl
++++ b/mpact/sim/decoder/antlr_cc.bzl
+@@ -52,7 +52,11 @@
+         outs = out_files,
+         cmd = command,
+         heuristic_label_expansion = 0,
+-        tools = [Label("@org_antlr_tool//file")],
++        tools = [
++            Label("@org_antlr_tool//file"),
++            Label("@bazel_tools//tools/jdk:current_host_java_runtime"),
++        ],
++        toolchains = [Label("@bazel_tools//tools/jdk:current_host_java_runtime")],
+     )
+     cc_library(
+         name = name,
+@@ -121,7 +125,11 @@
+         outs = out_files,
+         cmd = command,
+         heuristic_label_expansion = 0,
+-        tools = [Label("@org_antlr_tool//file")],
++        tools = [
++            Label("@org_antlr_tool//file"),
++            Label("@bazel_tools//tools/jdk:current_host_java_runtime"),
++        ],
++        toolchains = [Label("@bazel_tools//tools/jdk:current_host_java_runtime")],
+     )
+     cc_library(
+         name = name,
+@@ -137,7 +145,7 @@
+     )
+ 
+ def _make_tool_invocation_command(package, listener = False, visitor = False):
+-    return "java -jar $(location @org_antlr_tool//file) " + \
++    return "$(JAVA) -jar $(location @org_antlr_tool//file) " + \
+            "$(SRCS)" + \
+            (" -visitor" if visitor else " -no-visitor") + \
+            (" -listener" if listener else " -no-listener") + \

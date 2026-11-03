@@ -42,8 +42,57 @@ filegroup(
 
 """.format(pypi_name = pypi_name, pypi_version = pypi_version, deps = deps)
 
-def install_deps():
-    http_archive(
+# macOS arm64 wheels for the packages that ship native code, at the same
+# versions as the manylinux x86_64 wheels pinned below.
+_MACOS_ARM64_WHEELS = {
+    "coralnpu_pip_deps_cocotb": (
+        "https://files.pythonhosted.org/packages/97/e8/d19c706dfca61c149a7c45555471d57ce127be2a65101389d3b669eb0649/cocotb-2.0.0-cp311-cp311-macosx_11_0_arm64.whl",
+        "8bc6f4e01248202a9044b07941f85f02a5224d69fa9f00b9b047d77619d5696f",
+    ),
+    "coralnpu_pip_deps_libusb_package": (
+        "https://files.pythonhosted.org/packages/bc/70/df0348c11e6aaead4a66cc59840e102ddf64baf8e4b2c1ad5cff1ca83554/libusb_package-1.0.26.3-cp311-cp311-macosx_11_0_arm64.whl",
+        "4d93a6137609cf72dc5db69bc337ddf96520231e395beeff69fa77a923090003",
+    ),
+    "coralnpu_pip_deps_markupsafe": (
+        "https://files.pythonhosted.org/packages/6c/30/316d194b093cde57d448a4c3209f22e3046c5bb2fb0820b118292b334be7/MarkupSafe-3.0.2-cp311-cp311-macosx_11_0_arm64.whl",
+        "93335ca3812df2f366e80509ae119189886b0f3c2b81325d39efdb84a1e2ae93",
+    ),
+    "coralnpu_pip_deps_ml_dtypes": (
+        "https://files.pythonhosted.org/packages/c6/5e/712092cfe7e5eb667b8ad9ca7c54442f21ed7ca8979745f1000e24cf8737/ml_dtypes-0.5.4-cp311-cp311-macosx_10_9_universal2.whl",
+        "6c7ecb74c4bd71db68a6bea1edf8da8c34f3d9fe218f038814fd1d310ac76c90",
+    ),
+    "coralnpu_pip_deps_numpy": (
+        "https://files.pythonhosted.org/packages/d0/cb/5a69293561e8819b09e34ed9e873b9a82b5f2ade23dce4c51dc507f6cfe1/numpy-2.3.4-cp311-cp311-macosx_11_0_arm64.whl",
+        "7fd09cc5d65bda1e79432859c40978010622112e9194e581e3415a3eccc7f43f",
+    ),
+    "coralnpu_pip_deps_pillow": (
+        "https://files.pythonhosted.org/packages/43/06/7264c0597e676104cc22ca73ee48f752767cd4b1fe084662620b17e10120/pillow-12.1.0-cp311-cp311-macosx_11_0_arm64.whl",
+        "b6e53e82ec2db0717eabb276aa56cf4e500c9a7cec2c2e189b55c24f65a3e8c0",
+    ),
+    "coralnpu_pip_deps_psutil": (
+        "https://files.pythonhosted.org/packages/04/8b/30f930733afe425e3cbfc0e1468a30a18942350c1a8816acfade80c005c4/psutil-7.0.0-cp36-abi3-macosx_11_0_arm64.whl",
+        "39db632f6bb862eeccf56660871433e111b6ea58f2caea825571951d4b6aa3da",
+    ),
+    "coralnpu_pip_deps_pyyaml": (
+        "https://files.pythonhosted.org/packages/16/19/13de8e4377ed53079ee996e1ab0a9c33ec2faf808a4647b7b4c0d46dd239/pyyaml-6.0.3-cp311-cp311-macosx_11_0_arm64.whl",
+        "652cb6edd41e718550aad172851962662ff2681490a8a711af6a4d288dd96824",
+    ),
+}
+
+def _wheel(macos_arm64, name, urls, sha256, **kwargs):
+    if macos_arm64 and name in _MACOS_ARM64_WHEELS:
+        url, sha256 = _MACOS_ARM64_WHEELS[name]
+        urls = [url]
+    http_archive(name = name, urls = urls, sha256 = sha256, **kwargs)
+
+def install_deps(macos_arm64 = False):
+    """Defines the pinned Python wheel repositories.
+
+    Args:
+      macos_arm64: Use macOS arm64 wheels for packages with native code.
+    """
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_tqdm",
         urls = [
             "https://files.pythonhosted.org/packages/d0/30/dc54f88dd4a2b5dc8a0279bdd7270e735851848b762aeb1c1184ed1f6b14/tqdm-4.67.1-py3-none-any.whl",
@@ -53,7 +102,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "tqdm", pypi_version = "4.67.1"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_cocotb",
         urls = [
             "https://files.pythonhosted.org/packages/bd/f7/a999492f0dc19af81b1214d8b4fd98159990062315771262d1dca39837ca/cocotb-2.0.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
@@ -70,7 +120,8 @@ def install_deps():
         ),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_find_libpython",
         urls = [
             "https://files.pythonhosted.org/packages/1d/89/6b4624122d5c61a86e8aebcebd377866338b705ce4f115c45b046dc09b99/find_libpython-0.4.0-py3-none-any.whl",
@@ -80,7 +131,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "find_libpython", pypi_version = "0.4.0"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_numpy",
         urls = [
             "https://files.pythonhosted.org/packages/bb/32/67e3b0f07b0aba57a078c4ab777a9e8e6bc62f24fb53a2337f75f9691699/numpy-2.3.4-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
@@ -90,7 +142,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "numpy", pypi_version = "2.0.0"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_ml_dtypes",
         urls = [
             "https://files.pythonhosted.org/packages/a9/80/19189ea605017473660e43762dc853d2797984b3c7bf30ce656099add30c/ml_dtypes-0.5.4-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
@@ -100,7 +153,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "ml_dtypes", pypi_version = "0.5.4", deps = ["@coralnpu_pip_deps_numpy//:pkg"]),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_pyelftools",
         urls = [
             "https://files.pythonhosted.org/packages/04/7c/867630e6e6293793f838b31034aa1875e1c3bd8c1ec34a0929a2506f350c/pyelftools-0.29-py2.py3-none-any.whl",
@@ -110,7 +164,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "pyelftools", pypi_version = "0.29"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_pytest",
         urls = [
             "https://files.pythonhosted.org/packages/30/3d/64ad57c803f1fa1e963a7946b6e0fea4a70df53c1a7fed304586539c2bac/pytest-8.3.5-py3-none-any.whl",
@@ -129,7 +184,8 @@ def install_deps():
         ),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_pluggy",
         urls = [
             "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl",
@@ -139,7 +195,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "pluggy", pypi_version = "1.6.0"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_iniconfig",
         urls = [
             "https://files.pythonhosted.org/packages/2c/e1/e6716421ea10d38022b952c159d5161ca1193197fb744506875fbb87ea7b/iniconfig-2.1.0-py3-none-any.whl",
@@ -149,7 +206,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "iniconfig", pypi_version = "2.1.0"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_packaging",
         urls = [
             "https://files.pythonhosted.org/packages/20/12/38679034af332785aac8774540895e234f4d07f7545804097de4b666afd8/packaging-25.0-py3-none-any.whl",
@@ -159,7 +217,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "packaging", pypi_version = "25.0"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_exceptiongroup",
         urls = [
             "https://files.pythonhosted.org/packages/36/f4/c6e662dade71f56cd2f3735141b265c3c79293c109549c1e6933b0651ffc/exceptiongroup-1.3.0-py3-none-any.whl",
@@ -175,7 +234,8 @@ def install_deps():
         ),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_typing_extensions",
         urls = [
             "https://files.pythonhosted.org/packages/8b/54/b1ae86c0973cc6f0210b53d508ca3641fb6d0c56823f288d108bc7ab3cc8/typing_extensions-4.13.2-py3-none-any.whl",
@@ -185,7 +245,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "typing_extensions", pypi_version = "4.13.2"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_sortedcontainers",
         urls = [
             "https://files.pythonhosted.org/packages/32/46/9cb0e58b2deb7f82b84065f37f3bffeb12413f947f9388e4cac22c4621ce/sortedcontainers-2.4.0-py2.py3-none-any.whl",
@@ -195,7 +256,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "sortedcontainers", pypi_version = "2.4.0"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_intervaltree",
         strip_prefix = "intervaltree-3.1.0",
         urls = [
@@ -211,7 +273,8 @@ def install_deps():
         ),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_pyyaml",
         urls = [
             "https://files.pythonhosted.org/packages/71/60/917329f640924b18ff085ab889a11c763e0b573da888e8404ff486657602/pyyaml-6.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
@@ -221,7 +284,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "PyYAML", pypi_version = "6.0.2"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_importlib_metadata",
         urls = [
             "https://files.pythonhosted.org/packages/20/b0/36bd937216ec521246249be3bf9855081de4c5e06a0c9b4219dbeda50373/importlib_metadata-8.7.0-py3-none-any.whl",
@@ -231,7 +295,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "importlib_metadata", pypi_version = "8.7.0"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_importlib_resources",
         urls = [
             "https://files.pythonhosted.org/packages/a4/ed/1f1afb2e9e7f38a545d628f864d562a5ae64fe6f7a10e28ffb9b185b4e89/importlib_resources-6.5.2-py3-none-any.whl",
@@ -241,7 +306,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "importlib_resources", pypi_version = "6.5.2"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_six",
         urls = [
             "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl",
@@ -251,7 +317,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "six", pypi_version = "1.17.0"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_colorama",
         urls = [
             "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl",
@@ -261,7 +328,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "colorama", pypi_version = "0.4.6"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_prettytable",
         urls = [
             "https://files.pythonhosted.org/packages/02/c7/5613524e606ea1688b3bdbf48aa64bafb6d0a4ac3750274c43b6158a390f/prettytable-3.16.0-py3-none-any.whl",
@@ -271,7 +339,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "prettytable", pypi_version = "3.16.0"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_pyusb",
         urls = [
             "https://files.pythonhosted.org/packages/28/b8/27e6312e86408a44fe16bd28ee12dd98608b39f7e7e57884a24e8f29b573/pyusb-1.3.1-py3-none-any.whl",
@@ -281,7 +350,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "pyusb", pypi_version = "1.3.1"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_intelhex",
         urls = [
             "https://files.pythonhosted.org/packages/97/78/79461288da2b13ed0a13deb65c4ad1428acb674b95278fa9abf1cefe62a2/intelhex-2.3.0-py2.py3-none-any.whl",
@@ -291,7 +361,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "intelhex", pypi_version = "2.3.0"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_lark",
         urls = [
             "https://files.pythonhosted.org/packages/2d/00/d90b10b962b4277f5e64a78b6609968859ff86889f5b898c1a778c06ec00/lark-1.2.2-py3-none-any.whl",
@@ -301,7 +372,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "lark", pypi_version = "1.2.2"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_libusb_package",
         urls = [
             "https://files.pythonhosted.org/packages/c9/0f/fd203fb1fa5eda1d446f345d84205f23533767e6ef837a7c77a2599d5783/libusb_package-1.0.26.3-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
@@ -311,7 +383,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "libusb_package", pypi_version = "1.0.26.3"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_psutil",
         urls = [
             "https://files.pythonhosted.org/packages/bf/b9/b0eb3f3cbcb734d930fdf839431606844a825b23eaf9a6ab371edac8162c/psutil-7.0.0-cp36-abi3-manylinux_2_12_x86_64.manylinux2010_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
@@ -321,7 +394,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "psutil", pypi_version = "7.0.0"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_natsort",
         urls = [
             "https://files.pythonhosted.org/packages/ef/82/7a9d0550484a62c6da82858ee9419f3dd1ccc9aa1c26a1e43da3ecd20b0d/natsort-8.4.0-py3-none-any.whl",
@@ -331,7 +405,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "natsort", pypi_version = "8.4.0"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_pylink_square",
         urls = [
             "https://files.pythonhosted.org/packages/04/3c/0e587060301ff24c67cd06d7bc3479b85dbb46d9e334aa020bef340753da/pylink_square-1.6.0-py2.py3-none-any.whl",
@@ -347,7 +422,8 @@ def install_deps():
         ),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_pyocd",
         urls = [
             "https://files.pythonhosted.org/packages/94/9b/9ee42675ecc933f1ac6a2b518bdc8d3b77eb8eef49e5e342c88562ab8533/pyocd-0.36.0-py3-none-any.whl",
@@ -377,7 +453,8 @@ def install_deps():
     )
 
     # FPGA
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_mako",
         urls = [
             "https://files.pythonhosted.org/packages/87/fb/99f81ac72ae23375f22b7afdb7642aba97c00a713c217124420147681a2f/mako-1.3.10-py3-none-any.whl",
@@ -387,7 +464,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "mako", pypi_version = "1.3.10"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_hjson",
         urls = [
             "https://files.pythonhosted.org/packages/1f/7f/13cd798d180af4bf4c0ceddeefba2b864a63c71645abc0308b768d67bb81/hjson-3.1.0-py3-none-any.whl",
@@ -397,7 +475,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "hjson", pypi_version = "3.1.0"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_fusesoc",
         urls = [
             "https://files.pythonhosted.org/packages/cb/a8/10f62458dda2ca07c49477448e643b10f30825b7741fdb6ec3e6188b6999/fusesoc-2.4.3-py3-none-any.whl",
@@ -419,7 +498,8 @@ def install_deps():
         ),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_argcomplete",
         urls = [
             "https://files.pythonhosted.org/packages/f5/c8/9fa0e6fa97c328d44e089278399b0a1a08268b06a4a71f7448c6b6effb9f/argcomplete-3.6.1-py3-none-any.whl",
@@ -429,7 +509,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "argcomplete", pypi_version = "3.6.1"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_markupsafe",
         urls = [
             "https://files.pythonhosted.org/packages/f1/a4/aefb044a2cd8d7334c8a47d3fb2c9f328ac48cb349468cc31c20b539305f/MarkupSafe-3.0.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
@@ -439,7 +520,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "MarkupSafe", pypi_version = "3.0.2"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_jinja2",
         urls = [
             "https://files.pythonhosted.org/packages/62/a1/3d680cbfd5f4b8f15abc1d571870c5fc3e594bb582bc3b64ea099db13e56/jinja2-3.1.6-py3-none-any.whl",
@@ -455,7 +537,8 @@ def install_deps():
         ),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_edalize",
         urls = [
             "https://files.pythonhosted.org/packages/a3/16/47dc8bbbefb395c275c4ba8b2e46a0b54f8c37ba6ca0757478f8139aedc8/edalize-0.6.1-py3-none-any.whl",
@@ -471,7 +554,8 @@ def install_deps():
         ),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_pyparsing",
         urls = [
             "https://files.pythonhosted.org/packages/05/e7/df2285f3d08fee213f2d041540fa4fc9ca6c2d44cf36d3a035bf2a8d2bcc/pyparsing-3.2.3-py3-none-any.whl",
@@ -481,7 +565,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "pyparsing", pypi_version = "3.2.3"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_attrs",
         urls = [
             "https://files.pythonhosted.org/packages/77/06/bb80f5f86020c4551da315d78b3ab75e8228f89f0162f2c3a819e407941a/attrs-25.3.0-py3-none-any.whl",
@@ -491,7 +576,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "attrs", pypi_version = "25.3.0"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_okonomiyaki",
         urls = [
             "https://files.pythonhosted.org/packages/6e/d2/c7e021fb8e591fa586a8aa8fd8728ffded2f80deebf6198cd1bd92c68447/okonomiyaki-3.0.0-py2.py3-none-any.whl",
@@ -501,7 +587,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "okonomiyaki", pypi_version = "3.0.0"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_simplesat",
         urls = [
             "https://files.pythonhosted.org/packages/76/d0/1dd0d4adb376ad1076331e9f5f38641fd58890d134f8050ab00160836988/simplesat-0.9.1-py3-none-any.whl",
@@ -519,7 +606,8 @@ def install_deps():
         ),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_fastjsonschema",
         urls = [
             "https://files.pythonhosted.org/packages/90/2b/0817a2b257fe88725c25589d89aec060581aabf668707a8d03b2e9e0cb2a/fastjsonschema-2.21.1-py3-none-any.whl",
@@ -529,7 +617,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "fastjsonschema", pypi_version = "2.21.1"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_pyserial",
         urls = [
             "https://files.pythonhosted.org/packages/07/bc/587a445451b253b285629263eb51c2d8e9bcea4fc97826266d186f96f558/pyserial-3.5-py2.py3-none-any.whl",
@@ -539,7 +628,8 @@ def install_deps():
         build_file_content = _build_file_content(pypi_name = "pyserial", pypi_version = "3.5"),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_pyftdi",
         urls = [
             "https://files.pythonhosted.org/packages/16/cd/0731490946e037e954ef83719f07c7672cf32bc90dd9c75201c40b827664/pyftdi-0.57.1-py3-none-any.whl",
@@ -556,7 +646,8 @@ def install_deps():
         ),
     )
 
-    http_archive(
+    _wheel(
+        macos_arm64,
         name = "coralnpu_pip_deps_pillow",
         urls = [
             "https://files.pythonhosted.org/packages/5c/1f/8e66ab9be3aaf1435bc03edd1ebdf58ffcd17f7349c1d970cafe87af27d9/pillow-12.1.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",

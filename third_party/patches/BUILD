@@ -17,6 +17,7 @@ load(":patches.bzl", "MPACT_RISCV_PATCH_FILES")
 package(default_visibility = ["//visibility:public"])
 
 exports_files(MPACT_RISCV_PATCH_FILES + [
+    "mpact_sim_hermetic_java.patch",
     "mpact_sim_isa_includes.patch",
     "patches.bzl",
 ])

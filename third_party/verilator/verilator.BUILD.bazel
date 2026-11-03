@@ -115,10 +115,13 @@ verilator_build_template(
         "@CFG_CXXFLAGS_PCH_I@": "-include",
         "@CFG_GCH_IF_CLANG@": "",
         "@CFG_LDFLAGS_VERILATED@": "",
-        "@CFG_LDLIBS_THREADS@": "-lpthread -latomic -ldl -lstdc++ -lm",
         "@CFG_LDFLAGS_DYNAMIC@": "",
         "@CFG_LDLIBS_DYNAMIC@": "-ldl",
-    },
+    } | select({
+        # macOS has no libatomic; Apple clang lowers atomics inline.
+        "@platforms//os:macos": {"@CFG_LDLIBS_THREADS@": "-lpthread -ldl -lstdc++ -lm"},
+        "//conditions:default": {"@CFG_LDLIBS_THREADS@": "-lpthread -latomic -ldl -lstdc++ -lm"},
+    }),
     template = "include/verilated.mk.in",
     version = ":version",
 )
@@ -397,8 +400,11 @@ cc_library(
     linkopts = [
         "-lpthread",
         "-ldl",
-        "-llz4",
-    ],
+    ] + select({
+        # macOS has no system liblz4 or libatomic; use the BCR lz4 module.
+        "@platforms//os:macos": [],
+        "//conditions:default": ["-llz4"],
+    }),
     strip_include_prefix = "include/",
     textual_hdrs = [
         "include/fstcpp/fstcpp_variable_info.cpp",
@@ -410,7 +416,10 @@ cc_library(
         ":vltstd",
         "@accellera_systemc//:systemc",
         "@net_zlib//:zlib",
-    ],
+    ] + select({
+        "@platforms//os:macos": ["@lz4"],
+        "//conditions:default": [],
+    }),
 )
 
 # This alias is for supporting the legacy name but while allowing the
@@ -483,10 +492,15 @@ cc_library(
     ],
     linkopts = [
         "-lpthread",
-        "-latomic",
         "-ldl",
-        "-llz4",
-    ],
+    ] + select({
+        # macOS has no system liblz4 or libatomic; use the BCR lz4 module.
+        "@platforms//os:macos": [],
+        "//conditions:default": [
+            "-latomic",
+            "-llz4",
+        ],
+    }),
     strip_include_prefix = "include",
     textual_hdrs = [
         "include/fstcpp/fstcpp_variable_info.cpp",
@@ -497,7 +511,10 @@ cc_library(
         ":verilatedos",
         ":vltstd",
         "@net_zlib//:zlib",
-    ],
+    ] + select({
+        "@platforms//os:macos": ["@lz4"],
+        "//conditions:default": [],
+    }),
 )
 
 cc_library(
@@ -516,10 +533,10 @@ cc_binary(
         "-std=c++17",
         "-ffp-contract=off",
     ],
-    linkopts = [
-        "-lpthread",
-        "-latomic",
-    ],
+    linkopts = ["-lpthread"] + select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["-latomic"],
+    }),
     visibility = ["//visibility:public"],
     deps = [":verilator_libV3"],
 )
@@ -542,10 +559,10 @@ cc_binary(
         "include/**/*.sv",
         "include/**/*.vlt",
     ]),
-    linkopts = [
-        "-lpthread",
-        "-latomic",
-    ],
+    linkopts = ["-lpthread"] + select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["-latomic"],
+    }),
     visibility = ["//visibility:public"],
     deps = [":verilator_libV3"],
 )

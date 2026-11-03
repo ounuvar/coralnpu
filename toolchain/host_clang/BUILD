@@ -129,11 +129,27 @@ toolchain(
     toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
 )
 
-platform(
-    name = "host_clang_platform",
-    constraint_values = [
-        "@platforms//cpu:x86_64",
-        "@platforms//os:linux",
+# Toolchain for Apple Silicon hosts: Bazel's auto-configured Apple clang
+# (the Linux wrappers above rely on lld and GNU ld flags).
+toolchain(
+    name = "host_clang_toolchain_def_macos_arm64",
+    exec_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
         ":clang_compiler",
     ],
+    toolchain = "@local_config_cc//:cc-compiler-darwin_arm64",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+)
+
+# The host's own OS/CPU plus the clang constraint. On x86_64 Linux this is
+# the same as before (x86_64 + linux + clang_compiler).
+platform(
+    name = "host_clang_platform",
+    constraint_values = [":clang_compiler"],
+    parents = ["@platforms//host"],
 )

@@ -215,8 +215,14 @@ def _verilator_cocotb_model_impl(ctx):
     def _abs(p):
         return p if p.startswith("/") else "$PWD/" + p
 
+    # On macOS Bazel's archiver is Apple libtool, which rejects the
+    # `$(AR) -rcs` call in Verilator's makefiles; use the sibling ar instead.
+    if ar_executable.endswith("/libtool"):
+        ar_executable = ar_executable[:-len("libtool")] + "ar"
+
     # USER_LDLIBS=-ldl: on glibc < 2.34 (e.g. RHEL 8), dlsym is in libdl and
-    # verilated.o fails to link without it. Harmless on newer glibc.
+    # verilated.o fails to link without it. Harmless on newer glibc, and macOS
+    # provides libdl as a stub of libSystem.
     make_cmd = "PATH=`dirname {ld}`:$PATH make -j {parallelism} -C {outdir} -f Vtop.mk OPT_FAST=-O3 USER_LDLIBS=-ldl {trace} CXX={cxx} AR={ar} LINK={cxx} > {make_log} 2>&1".format(
         outdir = outdir,
         cocotb_lib_path = cocotb_lib_path,
