@@ -233,6 +233,10 @@ build --repo_env=LIBRARY_PATH=${ROOT}/local/lib
 build --linkopt=-Wl,-rpath,${ROOT}/local/lib
 test --test_env=LD_LIBRARY_PATH=${ROOT}/local/lib
 
+# Keep Bazel's convenience symlinks out of the workspace: bazel-<name> points at execroot/_main, which
+# contains a .git link, so editors (VS Code) detect it as a repository with thousands of "changes".
+build --symlink_prefix=${ROOT}/links/$(basename "${REPO_DIR}")-
+
 # Bump this to force a rebuild after the clang wrapper changes (Bazel does not hash it). Also run:
 #   bazel fetch --force --repo=@@rules_cc++cc_configure_extension+local_config_cc
 build --action_env=CLANG_WRAPPER_REV=1
@@ -241,6 +245,7 @@ EOF
 
 write_bazelrc() {
   local dest="${REPO_DIR}/.bazelrc.user"
+  mkdir -p "${ROOT}/links"
   if [[ -e "${dest}" ]]; then
     bazelrc_contents > "${dest}.generated"
     log "${dest} exists; wrote ${dest}.generated instead (compare and merge by hand)"
