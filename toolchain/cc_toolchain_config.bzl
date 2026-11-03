@@ -21,6 +21,7 @@ load(
     "flag_set",
     "tool_path",
 )
+load("@toolchain_coralnpu_v2//:defs.bzl", "BUILTIN_INCLUDE_DIRECTORIES")
 
 all_link_actions = [
     ACTION_NAMES.cpp_link_executable,
@@ -395,6 +396,7 @@ def _impl(ctx):
         compiler = "clang",
         abi_version = abi,
         abi_libc_version = abi,
+        cxx_builtin_include_directories = BUILTIN_INCLUDE_DIRECTORIES,
         features = [
             includes_feature,
             printf_float_feature,

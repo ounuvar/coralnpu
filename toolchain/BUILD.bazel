@@ -113,6 +113,36 @@ toolchain(
     toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
 )
 
+# Apple Silicon hosts: same cc_toolchains, backed by a local
+# riscv-gnu-toolchain install (see rules/coralnpu_toolchain.bzl).
+toolchain(
+    name = "cc_coralnpu_v2_toolchain_macos_arm64",
+    exec_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+    target_compatible_with = [
+        "//platforms/cpu:coralnpu_v2",
+        "@platforms//os:none",
+    ],
+    toolchain = ":coralnpu_v2_toolchain",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+)
+
+toolchain(
+    name = "cc_coralnpu_v2_semihosting_toolchain_macos_arm64",
+    exec_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+    target_compatible_with = [
+        "//platforms/cpu:coralnpu_v2",
+        "//platforms/os:semihosting",
+    ],
+    toolchain = ":coralnpu_v2_semihosting_toolchain",
+    toolchain_type = "@bazel_tools//tools/cpp:toolchain_type",
+)
+
 sh_binary(
     name = "gdb",
     srcs = [

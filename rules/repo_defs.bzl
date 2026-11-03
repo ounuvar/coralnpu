@@ -17,23 +17,19 @@
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive", "http_file")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 load("//rules:check_folder.bzl", "check_folder")
+load("//rules:coralnpu_toolchain.bzl", "coralnpu_toolchain_repo")
 load("//rules:nonhermetic.bzl", "nonhermetic_repo")
 load("//third_party/patches:patches.bzl", "MPACT_RISCV_PATCHES")
 
 def define_coralnpu_toolchain():
-    """Defines the prebuilt CoralNPU V2 GCC cross compiler toolchain."""
+    """Defines the CoralNPU V2 GCC cross compiler toolchain.
+
+    Downloads the prebuilt x86_64 Linux toolchain, or uses a local
+    riscv-gnu-toolchain on Apple Silicon (see rules/coralnpu_toolchain.bzl).
+    """
     maybe(
-        http_archive,
+        coralnpu_toolchain_repo,
         name = "toolchain_coralnpu_v2",
-        build_file_content = """
-licenses(["notice"])
-exports_files(glob(["**"]))
-package(default_visibility = ["//visibility:public"])
-filegroup(
-    name = "all_files",
-    srcs = glob(["**"]),
-)
-""",
         sha256 = "de06690c2da5cd783d76b2998208bd4db4dcdc22dec146c7b0a5ee1af40d3db7",
         strip_prefix = "toolchain_coralnpu_v2",
         urls = [
