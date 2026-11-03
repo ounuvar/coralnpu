@@ -80,6 +80,8 @@
     "https://bcr.bazel.build/modules/jsoncpp/1.9.6/MODULE.bazel": "2f8d20d3b7d54143213c4dfc3d98225c42de7d666011528dc8fe91591e2e17b0",
     "https://bcr.bazel.build/modules/jsoncpp/1.9.6/source.json": "a04756d367a2126c3541682864ecec52f92cdee80a35735a3cb249ce015ca000",
     "https://bcr.bazel.build/modules/libpfm/4.11.0/MODULE.bazel": "45061ff025b301940f1e30d2c16bea596c25b176c8b6b3087e92615adbd52902",
+    "https://bcr.bazel.build/modules/lz4/1.10.0.bcr.2/MODULE.bazel": "bf2d9ac92dd3b792e514ca412965d78863ba3a05344c77f4109b4daa8dd81dab",
+    "https://bcr.bazel.build/modules/lz4/1.10.0.bcr.2/source.json": "df2bfdef9a81a69eb2fc597ad5e311f6538beee714b51e137d4a8cbaeb6ecbe1",
     "https://bcr.bazel.build/modules/nlohmann_json/3.6.1/MODULE.bazel": "6f7b417dcc794d9add9e556673ad25cb3ba835224290f4f848f8e2db1e1fca74",
     "https://bcr.bazel.build/modules/nlohmann_json/3.6.1/source.json": "f448c6e8963fdfa7eb831457df83ad63d3d6355018f6574fb017e8169deb43a9",
     "https://bcr.bazel.build/modules/platforms/0.0.10/MODULE.bazel": "8cb8efaf200bdeb2150d93e162c40f388529a25852b332cec879373771e48ed5",
@@ -234,7 +236,7 @@
   "moduleExtensions": {
     "//rules:extensions.bzl%coralnpu_deps_ext": {
       "general": {
-        "bzlTransitiveDigest": "SVX2mlI833n7+y0HN1pUjV9CoiOcChXNIUii8N3E/Z8=",
+        "bzlTransitiveDigest": "Su6l4czG4g1KBfc9N0sNAq91lkLhyIMo7Ee3qZl0y6Q=",
         "usagesDigest": "1CqV4EO7uDyVS9gQSAvjLugLlCTYAZrVJ16YUY5hgpI=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools",
@@ -324,7 +326,8 @@
                 "-p1"
               ],
               "patches": [
-                "@@//third_party/verilator:0001-Remove-autodetect-of-VERILATOR_ROOT.patch"
+                "@@//third_party/verilator:0001-Remove-autodetect-of-VERILATOR_ROOT.patch",
+                "@@//third_party/verilator:0003-flexfix-Drop-macOS-Tahoe-size_t-rewrite.patch"
               ]
             }
           },
@@ -336,7 +339,13 @@
               "urls": [
                 "https://github.com/madler/zlib/archive/v1.2.11.zip"
               ],
-              "build_file": "@@//third_party/verilator:zlib.BUILD"
+              "build_file": "@@//third_party/verilator:zlib.BUILD",
+              "patch_args": [
+                "-p1"
+              ],
+              "patches": [
+                "@@//third_party/verilator:zlib-0001-Fix-fdopen-on-macOS.patch"
+              ]
             }
           },
           "org_gnu_m4": {
@@ -383,9 +392,8 @@
             "attributes": {}
           },
           "toolchain_coralnpu_v2": {
-            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "repoRuleId": "@@//rules:coralnpu_toolchain.bzl%coralnpu_toolchain_repo",
             "attributes": {
-              "build_file_content": "\nlicenses([\"notice\"])\nexports_files(glob([\"**\"]))\npackage(default_visibility = [\"//visibility:public\"])\nfilegroup(\n    name = \"all_files\",\n    srcs = glob([\"**\"]),\n)\n",
               "sha256": "de06690c2da5cd783d76b2998208bd4db4dcdc22dec146c7b0a5ee1af40d3db7",
               "strip_prefix": "toolchain_coralnpu_v2",
               "urls": [
@@ -835,9 +843,9 @@
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
               "urls": [
-                "https://files.pythonhosted.org/packages/bd/f7/a999492f0dc19af81b1214d8b4fd98159990062315771262d1dca39837ca/cocotb-2.0.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+                "https://files.pythonhosted.org/packages/97/e8/d19c706dfca61c149a7c45555471d57ce127be2a65101389d3b669eb0649/cocotb-2.0.0-cp311-cp311-macosx_11_0_arm64.whl"
               ],
-              "sha256": "3b8f38037988e1b52e5f44547be748ccce2d8e955d349fb510434a27ad6230b2",
+              "sha256": "8bc6f4e01248202a9044b07941f85f02a5224d69fa9f00b9b047d77619d5696f",
               "type": "zip",
               "build_file_content": "\npackage(default_visibility = [\"//visibility:public\"])\npy_library(\n    name = \"pkg\",\n    srcs = glob([\"**/*.py\"]),\n    data = [] + glob([\"**/*\"], exclude=[\"**/* *\", \"**/*.dist-info/RECORD\", \"**/*.py\", \"**/*.pyc\"]),\n    imports = [\".\"],\n    deps = [\"@coralnpu_pip_deps_find_libpython//:pkg\", \"@coralnpu_pip_deps_pytest//:pkg\"],\n    tags = [\"pypi_name=cocotb\",\"pypi_version=20.0.0.dev0\"],\n)\nfilegroup(\n    name = \"verilator_srcs\",\n    srcs = glob([\"cocotb/share/lib/verilator/*.cpp\"]),\n)\nfilegroup(\n    name = \"cocotb_libs\",\n    srcs = glob([\"cocotb/libs/*.so\"]),\n)\n\n"
             }
@@ -857,9 +865,9 @@
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
               "urls": [
-                "https://files.pythonhosted.org/packages/bb/32/67e3b0f07b0aba57a078c4ab777a9e8e6bc62f24fb53a2337f75f9691699/numpy-2.3.4-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+                "https://files.pythonhosted.org/packages/d0/cb/5a69293561e8819b09e34ed9e873b9a82b5f2ade23dce4c51dc507f6cfe1/numpy-2.3.4-cp311-cp311-macosx_11_0_arm64.whl"
               ],
-              "sha256": "a7b2f9a18b5ff9824a6af80de4f37f4ec3c2aab05ef08f51c77a093f5b89adda",
+              "sha256": "7fd09cc5d65bda1e79432859c40978010622112e9194e581e3415a3eccc7f43f",
               "type": "zip",
               "build_file_content": "\npackage(default_visibility = [\"//visibility:public\"])\npy_library(\n    name = \"pkg\",\n    srcs = glob([\"**/*.py\"]),\n    data = [] + glob([\"**/*\"], exclude=[\"**/* *\", \"**/*.dist-info/RECORD\", \"**/*.py\", \"**/*.pyc\"]),\n    imports = [\".\"],\n    deps = [],\n    tags = [\"pypi_name=numpy\",\"pypi_version=2.0.0\"],\n)\nfilegroup(\n    name = \"verilator_srcs\",\n    srcs = glob([\"cocotb/share/lib/verilator/*.cpp\"]),\n)\nfilegroup(\n    name = \"cocotb_libs\",\n    srcs = glob([\"cocotb/libs/*.so\"]),\n)\n\n"
             }
@@ -868,9 +876,9 @@
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
               "urls": [
-                "https://files.pythonhosted.org/packages/a9/80/19189ea605017473660e43762dc853d2797984b3c7bf30ce656099add30c/ml_dtypes-0.5.4-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+                "https://files.pythonhosted.org/packages/c6/5e/712092cfe7e5eb667b8ad9ca7c54442f21ed7ca8979745f1000e24cf8737/ml_dtypes-0.5.4-cp311-cp311-macosx_10_9_universal2.whl"
               ],
-              "sha256": "19b9a53598f21e453ea2fbda8aa783c20faff8e1eeb0d7ab899309a0053f1483",
+              "sha256": "6c7ecb74c4bd71db68a6bea1edf8da8c34f3d9fe218f038814fd1d310ac76c90",
               "type": "zip",
               "build_file_content": "\npackage(default_visibility = [\"//visibility:public\"])\npy_library(\n    name = \"pkg\",\n    srcs = glob([\"**/*.py\"]),\n    data = [] + glob([\"**/*\"], exclude=[\"**/* *\", \"**/*.dist-info/RECORD\", \"**/*.py\", \"**/*.pyc\"]),\n    imports = [\".\"],\n    deps = [\"@coralnpu_pip_deps_numpy//:pkg\"],\n    tags = [\"pypi_name=ml_dtypes\",\"pypi_version=0.5.4\"],\n)\nfilegroup(\n    name = \"verilator_srcs\",\n    srcs = glob([\"cocotb/share/lib/verilator/*.cpp\"]),\n)\nfilegroup(\n    name = \"cocotb_libs\",\n    srcs = glob([\"cocotb/libs/*.so\"]),\n)\n\n"
             }
@@ -966,11 +974,11 @@
           "coralnpu_pip_deps_intervaltree": {
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
-              "strip_prefix": "intervaltree-3.1.0",
               "urls": [
                 "https://files.pythonhosted.org/packages/50/fb/396d568039d21344639db96d940d40eb62befe704ef849b27949ded5c3bb/intervaltree-3.1.0.tar.gz"
               ],
               "sha256": "902b1b88936918f9b2a19e0e5eb7ccb430ae45cde4f39ea4b36932920d33952d",
+              "strip_prefix": "intervaltree-3.1.0",
               "build_file_content": "\npackage(default_visibility = [\"//visibility:public\"])\npy_library(\n    name = \"pkg\",\n    srcs = glob([\"**/*.py\"]),\n    data = [] + glob([\"**/*\"], exclude=[\"**/* *\", \"**/*.dist-info/RECORD\", \"**/*.py\", \"**/*.pyc\"]),\n    imports = [\".\"],\n    deps = [\"@coralnpu_pip_deps_sortedcontainers//:pkg\"],\n    tags = [\"pypi_name=intervaltree\",\"pypi_version=3.1.0\"],\n)\nfilegroup(\n    name = \"verilator_srcs\",\n    srcs = glob([\"cocotb/share/lib/verilator/*.cpp\"]),\n)\nfilegroup(\n    name = \"cocotb_libs\",\n    srcs = glob([\"cocotb/libs/*.so\"]),\n)\n\n"
             }
           },
@@ -978,9 +986,9 @@
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
               "urls": [
-                "https://files.pythonhosted.org/packages/71/60/917329f640924b18ff085ab889a11c763e0b573da888e8404ff486657602/pyyaml-6.0.3-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl"
+                "https://files.pythonhosted.org/packages/16/19/13de8e4377ed53079ee996e1ab0a9c33ec2faf808a4647b7b4c0d46dd239/pyyaml-6.0.3-cp311-cp311-macosx_11_0_arm64.whl"
               ],
-              "sha256": "b8bb0864c5a28024fac8a632c443c87c5aa6f215c0b126c449ae1a150412f31d",
+              "sha256": "652cb6edd41e718550aad172851962662ff2681490a8a711af6a4d288dd96824",
               "type": "zip",
               "build_file_content": "\npackage(default_visibility = [\"//visibility:public\"])\npy_library(\n    name = \"pkg\",\n    srcs = glob([\"**/*.py\"]),\n    data = [] + glob([\"**/*\"], exclude=[\"**/* *\", \"**/*.dist-info/RECORD\", \"**/*.py\", \"**/*.pyc\"]),\n    imports = [\".\"],\n    deps = [],\n    tags = [\"pypi_name=PyYAML\",\"pypi_version=6.0.2\"],\n)\nfilegroup(\n    name = \"verilator_srcs\",\n    srcs = glob([\"cocotb/share/lib/verilator/*.cpp\"]),\n)\nfilegroup(\n    name = \"cocotb_libs\",\n    srcs = glob([\"cocotb/libs/*.so\"]),\n)\n\n"
             }
@@ -1077,9 +1085,9 @@
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
               "urls": [
-                "https://files.pythonhosted.org/packages/c9/0f/fd203fb1fa5eda1d446f345d84205f23533767e6ef837a7c77a2599d5783/libusb_package-1.0.26.3-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+                "https://files.pythonhosted.org/packages/bc/70/df0348c11e6aaead4a66cc59840e102ddf64baf8e4b2c1ad5cff1ca83554/libusb_package-1.0.26.3-cp311-cp311-macosx_11_0_arm64.whl"
               ],
-              "sha256": "80a2041331c087d5887969405837f86c8422120fe9ba3e6faa44bf4810f07b71",
+              "sha256": "4d93a6137609cf72dc5db69bc337ddf96520231e395beeff69fa77a923090003",
               "type": "zip",
               "build_file_content": "\npackage(default_visibility = [\"//visibility:public\"])\npy_library(\n    name = \"pkg\",\n    srcs = glob([\"**/*.py\"]),\n    data = [] + glob([\"**/*\"], exclude=[\"**/* *\", \"**/*.dist-info/RECORD\", \"**/*.py\", \"**/*.pyc\"]),\n    imports = [\".\"],\n    deps = [],\n    tags = [\"pypi_name=libusb_package\",\"pypi_version=1.0.26.3\"],\n)\nfilegroup(\n    name = \"verilator_srcs\",\n    srcs = glob([\"cocotb/share/lib/verilator/*.cpp\"]),\n)\nfilegroup(\n    name = \"cocotb_libs\",\n    srcs = glob([\"cocotb/libs/*.so\"]),\n)\n\n"
             }
@@ -1088,9 +1096,9 @@
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
               "urls": [
-                "https://files.pythonhosted.org/packages/bf/b9/b0eb3f3cbcb734d930fdf839431606844a825b23eaf9a6ab371edac8162c/psutil-7.0.0-cp36-abi3-manylinux_2_12_x86_64.manylinux2010_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+                "https://files.pythonhosted.org/packages/04/8b/30f930733afe425e3cbfc0e1468a30a18942350c1a8816acfade80c005c4/psutil-7.0.0-cp36-abi3-macosx_11_0_arm64.whl"
               ],
-              "sha256": "4b1388a4f6875d7e2aff5c4ca1cc16c545ed41dd8bb596cefea80111db353a34",
+              "sha256": "39db632f6bb862eeccf56660871433e111b6ea58f2caea825571951d4b6aa3da",
               "type": "zip",
               "build_file_content": "\npackage(default_visibility = [\"//visibility:public\"])\npy_library(\n    name = \"pkg\",\n    srcs = glob([\"**/*.py\"]),\n    data = [] + glob([\"**/*\"], exclude=[\"**/* *\", \"**/*.dist-info/RECORD\", \"**/*.py\", \"**/*.pyc\"]),\n    imports = [\".\"],\n    deps = [],\n    tags = [\"pypi_name=psutil\",\"pypi_version=7.0.0\"],\n)\nfilegroup(\n    name = \"verilator_srcs\",\n    srcs = glob([\"cocotb/share/lib/verilator/*.cpp\"]),\n)\nfilegroup(\n    name = \"cocotb_libs\",\n    srcs = glob([\"cocotb/libs/*.so\"]),\n)\n\n"
             }
@@ -1176,9 +1184,9 @@
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
               "urls": [
-                "https://files.pythonhosted.org/packages/f1/a4/aefb044a2cd8d7334c8a47d3fb2c9f328ac48cb349468cc31c20b539305f/MarkupSafe-3.0.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+                "https://files.pythonhosted.org/packages/6c/30/316d194b093cde57d448a4c3209f22e3046c5bb2fb0820b118292b334be7/MarkupSafe-3.0.2-cp311-cp311-macosx_11_0_arm64.whl"
               ],
-              "sha256": "a123e330ef0853c6e822384873bef7507557d8e4a082961e1defa947aa59ba84",
+              "sha256": "93335ca3812df2f366e80509ae119189886b0f3c2b81325d39efdb84a1e2ae93",
               "type": "zip",
               "build_file_content": "\npackage(default_visibility = [\"//visibility:public\"])\npy_library(\n    name = \"pkg\",\n    srcs = glob([\"**/*.py\"]),\n    data = [] + glob([\"**/*\"], exclude=[\"**/* *\", \"**/*.dist-info/RECORD\", \"**/*.py\", \"**/*.pyc\"]),\n    imports = [\".\"],\n    deps = [],\n    tags = [\"pypi_name=MarkupSafe\",\"pypi_version=3.0.2\"],\n)\nfilegroup(\n    name = \"verilator_srcs\",\n    srcs = glob([\"cocotb/share/lib/verilator/*.cpp\"]),\n)\nfilegroup(\n    name = \"cocotb_libs\",\n    srcs = glob([\"cocotb/libs/*.so\"]),\n)\n\n"
             }
@@ -1286,9 +1294,9 @@
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
               "urls": [
-                "https://files.pythonhosted.org/packages/5c/1f/8e66ab9be3aaf1435bc03edd1ebdf58ffcd17f7349c1d970cafe87af27d9/pillow-12.1.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+                "https://files.pythonhosted.org/packages/43/06/7264c0597e676104cc22ca73ee48f752767cd4b1fe084662620b17e10120/pillow-12.1.0-cp311-cp311-macosx_11_0_arm64.whl"
               ],
-              "sha256": "1f345e7bc9d7f368887c712aa5054558bad44d2a301ddf9248599f4161abc7c0",
+              "sha256": "b6e53e82ec2db0717eabb276aa56cf4e500c9a7cec2c2e189b55c24f65a3e8c0",
               "type": "zip",
               "build_file_content": "\npackage(default_visibility = [\"//visibility:public\"])\npy_library(\n    name = \"pkg\",\n    srcs = glob([\"**/*.py\"]),\n    data = [] + glob([\"**/*\"], exclude=[\"**/* *\", \"**/*.dist-info/RECORD\", \"**/*.py\", \"**/*.pyc\"]),\n    imports = [\".\"],\n    deps = [],\n    tags = [\"pypi_name=Pillow\",\"pypi_version=12.1.0\"],\n)\nfilegroup(\n    name = \"verilator_srcs\",\n    srcs = glob([\"cocotb/share/lib/verilator/*.cpp\"]),\n)\nfilegroup(\n    name = \"cocotb_libs\",\n    srcs = glob([\"cocotb/libs/*.so\"]),\n)\n\n"
             }

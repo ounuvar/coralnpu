@@ -215,6 +215,11 @@ def _verilator_cocotb_model_impl(ctx):
     def _abs(p):
         return p if p.startswith("/") else "$PWD/" + p
 
+    # On macOS Bazel's archiver is Apple libtool, which rejects the
+    # `$(AR) -rcs` call in Verilator's makefiles; use the sibling ar instead.
+    if ar_executable.endswith("/libtool"):
+        ar_executable = ar_executable[:-len("libtool")] + "ar"
+
     make_cmd = "PATH=`dirname {ld}`:$PATH make -j {parallelism} -C {outdir} -f Vtop.mk OPT_FAST=-O3 {trace} CXX={cxx} AR={ar} LINK={cxx} > {make_log} 2>&1".format(
         outdir = outdir,
         cocotb_lib_path = cocotb_lib_path,
