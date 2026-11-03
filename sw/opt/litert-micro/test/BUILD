@@ -15,6 +15,7 @@
 load("@coralnpu_hw//rules:coralflow_test.bzl", "coralflow_test")
 load("@coralnpu_hw//rules:coralnpu_v2.bzl", "coralnpu_v2_binary")
 load("@coralnpu_hw//third_party/python:requirements.bzl", "requirement")
+load("@rules_cc//cc:defs.bzl", "cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -71,5 +72,17 @@ coralflow_test(
     deps = [
         "@bazel_tools//tools/python/runfiles",
         requirement("numpy"),
+    ],
+)
+
+# Golden tests for the requantization reference model (#9), run on the host.
+cc_test(
+    name = "requant_ref_test",
+    srcs = ["requant_ref_test.cc"],
+    deps = [
+        "//sw/opt/litert-micro:requant_ref",
+        "@com_google_googletest//:gtest_main",
+        "@gemmlowp//:fixedpoint",
+        "@tflite_micro//tensorflow/lite/kernels/internal:common",
     ],
 )

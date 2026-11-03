@@ -34,6 +34,13 @@ cc_library(
     ],
 )
 
+# Scalar reference model for the fused requantization instruction (#9).
+# Portable: builds for the host (golden tests) and for CoralNPU (kernel tests).
+cc_library(
+    name = "requant_ref",
+    hdrs = ["requant_ref.h"],
+)
+
 cc_library(
     name = "depthwise_conv",
     srcs = [
