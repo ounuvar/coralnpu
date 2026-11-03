@@ -127,7 +127,7 @@ extern "C" void* _sbrk(int bytes) {
   // newlib's malloc state (also .bss) whenever the program is restarted
   // without reloading .data. With an initializer it would live in .data, keep
   // growing across restarts and eventually run the heap out.
-  static char* _heap_ptr = nullptr;
+  static char *_heap_ptr = nullptr;
   if (_heap_ptr == nullptr) {
     _heap_ptr = &__heap_start__;
   }
