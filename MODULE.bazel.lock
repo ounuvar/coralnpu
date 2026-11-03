@@ -236,7 +236,7 @@
   "moduleExtensions": {
     "//rules:extensions.bzl%coralnpu_deps_ext": {
       "os:linux,arch:amd64": {
-        "bzlTransitiveDigest": "LAPox795+zxi6Vcr3mLw9tb9GRIuK5f8Pv7AqnyYlmw=",
+        "bzlTransitiveDigest": "0Xbj3pZIHyo9U+caw4QmCKGzFW1xpmw58L0fCrPsFgU=",
         "usagesDigest": "1CqV4EO7uDyVS9gQSAvjLugLlCTYAZrVJ16YUY5hgpI=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools",
@@ -1311,7 +1311,7 @@
         }
       },
       "os:osx,arch:aarch64": {
-        "bzlTransitiveDigest": "LAPox795+zxi6Vcr3mLw9tb9GRIuK5f8Pv7AqnyYlmw=",
+        "bzlTransitiveDigest": "0Xbj3pZIHyo9U+caw4QmCKGzFW1xpmw58L0fCrPsFgU=",
         "usagesDigest": "1CqV4EO7uDyVS9gQSAvjLugLlCTYAZrVJ16YUY5hgpI=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools",
