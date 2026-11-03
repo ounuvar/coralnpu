@@ -185,16 +185,20 @@ async def _run_layer(
         ref = await fixture.read("output_ref", dtype=np.int8, shape=(size, ))
         mismatches = int(np.sum(opt != ref))
     unsaturated = int(np.sum((opt > -128) & (opt < 127)))
-    counters = [await _read_u64(fixture, "opt_cycles"),
-                await _read_u64(fixture, "opt_instret")]
+    counters = [
+        await _read_u64(fixture, "opt_cycles"), await
+        _read_u64(fixture, "opt_instret")
+    ]
     if check:
-        counters += [await _read_u64(fixture, "ref_cycles"),
-                     await _read_u64(fixture, "ref_instret")]
+        counters += [
+            await _read_u64(fixture, "ref_cycles"), await
+            _read_u64(fixture, "ref_instret")
+        ]
     else:
         counters += ["", ""]
     row = [
-        op_index, "conv" if kernel == _CONV else "depthwise",
-        f"{h}x{w}x{c}", f"{fh}x{fw}x{n}/s{stride}/{padding}", size * k
+        op_index, "conv" if kernel == _CONV else "depthwise", f"{h}x{w}x{c}",
+        f"{fh}x{fw}x{n}/s{stride}/{padding}", size * k
     ] + counters + [mismatches, unsaturated, size]
     print("CSV," + ",".join(str(v) for v in row), flush=True)
     if mismatches:

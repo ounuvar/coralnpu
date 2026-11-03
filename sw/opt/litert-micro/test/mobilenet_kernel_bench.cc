@@ -43,14 +43,14 @@ extern "C" {
 // Sized for MobileNet v1 0.25 at 224x224: largest input 113x113x16 (padded
 // depthwise), largest output 112x112x16, largest filter 256x1x1x256, largest
 // depthwise accumulator 112x112x8 int32.
-int8_t input_data[204304] __attribute__((section(".data"), aligned(16)))   = {0};
-int8_t output_opt[200704] __attribute__((section(".data"), aligned(16)))   = {0};
-int32_t accs_buf[100352] __attribute__((section(".data"), aligned(16)))    = {0};
+int8_t input_data[204304] __attribute__((section(".data"), aligned(16))) = {0};
+int8_t output_opt[200704] __attribute__((section(".data"), aligned(16))) = {0};
+int32_t accs_buf[100352] __attribute__((section(".data"), aligned(16)))  = {0};
 int8_t output_ref[200704] __attribute__((section(".extdata"), aligned(16)));
 int8_t filter_data[65536] __attribute__((section(".extdata"), aligned(16)));
 int32_t bias_data[256] __attribute__((section(".extdata"), aligned(16)));
 
-int32_t kernel __attribute__((section(".data")))      = KERNEL_CONV;
+int32_t kernel __attribute__((section(".data")))        = KERNEL_CONV;
 int32_t run_reference __attribute__((section(".data"))) = 1;
 
 int32_t input_dims[4] __attribute__((section(".data")))  = {0};
