@@ -311,6 +311,7 @@ void Conv2D_4x4(const tflite::ConvParams &params,
     vint32m4_t a = ACC_V;                                                                           \
     a            = __riscv_vsll_vv_i32m4(a, __riscv_vreinterpret_v_i32m4_u32m4(left_shift_v), vl);  \
     a            = __riscv_vsmul_vv_i32m4(a, mult_v, 0, vl);                                        \
+    a            = TiesAwayFromZeroBeforeNudge(a, nudge_v, vl);                                     \
     a            = __riscv_vadd_vv_i32m4(a, nudge_v, vl);                                           \
     a            = __riscv_vsra_vv_i32m4(a, __riscv_vreinterpret_v_i32m4_u32m4(right_shift_v), vl); \
     a            = __riscv_vadd_vx_i32m4(a, output_offset, vl);                                     \
@@ -363,6 +364,7 @@ void Conv2D_4x4(const tflite::ConvParams &params,
     vint32m4_t a = ACC_V;                                                                           \
     a            = __riscv_vsll_vv_i32m4(a, __riscv_vreinterpret_v_i32m4_u32m4(left_shift_v), vl);  \
     a            = __riscv_vsmul_vv_i32m4(a, mult_v, 0, vl);                                        \
+    a            = TiesAwayFromZeroBeforeNudge(a, nudge_v, vl);                                     \
     a            = __riscv_vadd_vv_i32m4(a, nudge_v, vl);                                           \
     a            = __riscv_vsra_vv_i32m4(a, __riscv_vreinterpret_v_i32m4_u32m4(right_shift_v), vl); \
     a            = __riscv_vadd_vx_i32m4(a, output_offset, vl);                                     \
@@ -1085,6 +1087,7 @@ void Conv_4x4_OCVectorized(
   {                                                                                          \
     acc = __riscv_vsll_vv_i32m4(acc, __riscv_vreinterpret_v_i32m4_u32m4(left_shift_v), vl);  \
     acc = __riscv_vsmul_vv_i32m4(acc, mult_v, 0, vl);                                        \
+    acc = TiesAwayFromZeroBeforeNudge(acc, nudge_v, vl);                                     \
     acc = __riscv_vadd_vv_i32m4(acc, nudge_v, vl);                                           \
     acc = __riscv_vsra_vv_i32m4(acc, __riscv_vreinterpret_v_i32m4_u32m4(right_shift_v), vl); \
     acc = __riscv_vadd_vx_i32m4(acc, output_offset, vl);                                     \
@@ -1138,6 +1141,7 @@ void Conv_4x4_OCVectorized(
   {                                                                                          \
     acc = __riscv_vsll_vv_i32m4(acc, __riscv_vreinterpret_v_i32m4_u32m4(left_shift_v), vl);  \
     acc = __riscv_vsmul_vv_i32m4(acc, mult_v, 0, vl);                                        \
+    acc = TiesAwayFromZeroBeforeNudge(acc, nudge_v, vl);                                     \
     acc = __riscv_vadd_vv_i32m4(acc, nudge_v, vl);                                           \
     acc = __riscv_vsra_vv_i32m4(acc, __riscv_vreinterpret_v_i32m4_u32m4(right_shift_v), vl); \
     acc = __riscv_vadd_vx_i32m4(acc, output_offset, vl);                                     \

@@ -32,7 +32,12 @@ _CONV_SYMBOLS = [
 
 
 async def run_test_case(
-    fixture, input_shape, filter_shape, stride, padding_type="VALID"
+    fixture,
+    input_shape,
+    filter_shape,
+    stride,
+    padding_type="VALID",
+    output_offset=-128,
 ):
     # Parameters
     filter_height = filter_shape[1]
@@ -41,7 +46,6 @@ async def run_test_case(
     stride_height, stride_width = stride
 
     input_offset = 128
-    output_offset = -128
     activation_min = -128
     activation_max = 127
 
@@ -65,7 +69,7 @@ async def run_test_case(
     output_shape = [input_shape[0], out_h, out_w, output_depth]
 
     print(
-        f"Testing: Input {input_shape}, Filter {filter_shape}, Stride {stride}, Padding {padding_type} -> Output {output_shape}",
+        f"Testing: Input {input_shape}, Filter {filter_shape}, Stride {stride}, Padding {padding_type}, Output offset {output_offset} -> Output {output_shape}",
         flush=True,
     )
 
@@ -205,8 +209,18 @@ async def run_conv_sim_test(fixture):
         },
     ]
 
+    # With output_offset = -128 every negative rounding tie clamps to -128,
+    # which hid the requantization rounding bug in #23, so also run offsets
+    # that keep negative results in range.
     for tc in test_cases:
-        await run_test_case(fixture, tc["input"], tc["filter"], tc["stride"])
+        for output_offset in (-128, 0, 37):
+            await run_test_case(
+                fixture,
+                tc["input"],
+                tc["filter"],
+                tc["stride"],
+                output_offset=output_offset
+            )
 
 
 if __name__ == "__main__":
