@@ -58,4 +58,10 @@ def _coralnpu_deps_ext_impl(_ctx):
         macos_arm64 = "mac" in _ctx.os.name.lower() and _ctx.os.arch in ("aarch64", "arm64"),
     )
 
-coralnpu_deps_ext = module_extension(implementation = _coralnpu_deps_ext_impl)
+coralnpu_deps_ext = module_extension(
+    implementation = _coralnpu_deps_ext_impl,
+    # install_deps() picks platform-specific Python wheels, so the lockfile
+    # must keep a separate entry per host OS/arch.
+    os_dependent = True,
+    arch_dependent = True,
+)

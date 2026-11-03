@@ -235,8 +235,8 @@
   "selectedYankedVersions": {},
   "moduleExtensions": {
     "//rules:extensions.bzl%coralnpu_deps_ext": {
-      "general": {
-        "bzlTransitiveDigest": "Su6l4czG4g1KBfc9N0sNAq91lkLhyIMo7Ee3qZl0y6Q=",
+      "os:osx,arch:aarch64": {
+        "bzlTransitiveDigest": "KG/m/PJBSOy/qxsThFaBw4qfdRNQ6WR8401bvqnY6JY=",
         "usagesDigest": "1CqV4EO7uDyVS9gQSAvjLugLlCTYAZrVJ16YUY5hgpI=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools",
