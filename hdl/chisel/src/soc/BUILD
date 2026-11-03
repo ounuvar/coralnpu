@@ -193,6 +193,30 @@ chisel_cc_library(
     vopts = RVV_CORE_MINI_AXI_VOPTS,
 )
 
+# Highmem subsystem whose external SRAM (0x20000000) answers after a fixed delay, modelling the
+# AWS F2 HBM path at 250 MHz (about 70 cycles per read, 43 per write; see issue #11). The
+# default and highmem subsystems above are unchanged (zero delay). The flags give extra response
+# cycles on top of the SRAM's own response time.
+chisel_cc_library(
+    name = "coralnpu_chisel_subsystem_highmem_hbm_cc_library",
+    chisel_lib = ":coralnpu_chisel_subsystem_lib",
+    emit_class = "coralnpu.soc.CoralNPUChiselSubsystemEmitter",
+    gen_flags = [
+        "--itcmSizeKBytes",
+        "1024",
+        "--dtcmSizeKBytes",
+        "1024",
+        "--extMemReadLatency",
+        "68",
+        "--extMemWriteLatency",
+        "41",
+        "--moduleName",
+        "CoralNPUChiselSubsystemHighmemHbm",
+    ],
+    module_name = "CoralNPUChiselSubsystemHighmemHbm",
+    vopts = RVV_CORE_MINI_AXI_VOPTS,
+)
+
 chisel_cc_library(
     name = "coralnpu_chisel_subsystem_matrix_cc_library",
     chisel_lib = ":coralnpu_chisel_subsystem_lib",

@@ -110,7 +110,10 @@ class CoralNPUChiselSubsystem(
   val dtcmSize: MemorySize,
   val xlen: Int = 32,
   val moduleName: String = "",
-  val enableVme: Boolean = false
+  val enableVme: Boolean = false,
+  // Extra response cycles on the external SRAM, to model a slow memory in simulation (0 = none).
+  val extMemReadLatency: Int = 0,
+  val extMemWriteLatency: Int = 0
 ) extends RawModule {
   val testHarnessSuffix    = if (enableTestHarness) "TestHarness" else ""
   override val desiredName = {
@@ -254,8 +257,8 @@ class CoralNPUChiselSubsystem(
                 sram_p,
                 p.sramSizeBytes,
                 p.globalBaseAddr,
-                p.readLatency,
-                p.writeLatency
+                extMemReadLatency,
+                extMemWriteLatency
               )
             )
 
@@ -536,11 +539,15 @@ abstract class BaseCoralNPUChiselSubsystemEmitter {
     var dtcmSizeKBytes = Parameters.dtcmSizeKBytesDefault // Default DTCM size in KBytes
     var xlen           = 32
     var moduleName     = ""
+    var extMemReadLatency  = 0
+    var extMemWriteLatency = 0
     args.sliding(2, 1).foreach {
       case Array("--itcmSizeKBytes", size) => itcmSizeKBytes = size.toInt
       case Array("--dtcmSizeKBytes", size) => dtcmSizeKBytes = size.toInt
       case Array("--xlen", size)           => xlen = size.toInt
       case Array("--moduleName", name)     => moduleName = name
+      case Array("--extMemReadLatency", n)  => extMemReadLatency = n.toInt
+      case Array("--extMemWriteLatency", n) => extMemWriteLatency = n.toInt
       case _                               =>
     }
 
@@ -551,7 +558,14 @@ abstract class BaseCoralNPUChiselSubsystemEmitter {
       moduleName = defaultModuleName(itcmSize, dtcmSize, xlen)
     }
 
-    val flagsWithValues = Set("--itcmSizeKBytes", "--dtcmSizeKBytes", "--xlen", "--moduleName")
+    val flagsWithValues = Set(
+      "--itcmSizeKBytes",
+      "--dtcmSizeKBytes",
+      "--xlen",
+      "--moduleName",
+      "--extMemReadLatency",
+      "--extMemWriteLatency"
+    )
     val indicesToSkip   = args.zipWithIndex
       .collect {
         case (arg, idx) if flagsWithValues.contains(arg) => Seq(idx, idx + 1)
@@ -584,7 +598,9 @@ abstract class BaseCoralNPUChiselSubsystemEmitter {
         dtcmSize,
         xlen,
         moduleName,
-        socConfig.enableVme
+        socConfig.enableVme,
+        extMemReadLatency,
+        extMemWriteLatency
       ),
       chiselArgs.toArray
     )
