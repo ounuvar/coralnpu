@@ -208,6 +208,18 @@ int main(void) {
       bad += out_fused[x * kOutD + c] != want;
     }
   }
+#if CORALNPU_FUSED_REQUANT
+  // With --//sw/opt/litert-micro:fused_requant, PostprocessAcc itself takes
+  // the fused path, so it must match the reference too (offset 5 keeps
+  // negative rounding ties in range).
+  for (int x = 0; x < kOutW; ++x) {
+    for (int c = 0; c < kOutD; ++c) {
+      const int32_t want = rq::RequantRef(accs[x * kOutD + c] + bias[c], ch_mult[c], ch_shift[c],
+                                          out_offset, kActMin, kActMax);
+      bad += out_baseline[x * kOutD + c] != want;
+    }
+  }
+#endif  // CORALNPU_FUSED_REQUANT
   fused_mismatches = bad;
   done             = 1;
   return 0;
