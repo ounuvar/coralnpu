@@ -29,6 +29,9 @@ int32_t bias_data[256] __attribute__((section(".data"), aligned(16)))        = {
 int8_t output_data[65536] __attribute__((section(".data"), aligned(16)))     = {0};
 int8_t output_data_ref[65536] __attribute__((section(".data"), aligned(16))) = {0};
 
+// Whether this ELF was built with --//sw/opt/litert-micro:tflite_ties (#23).
+int32_t tflite_ties_enabled __attribute__((section(".data"), used)) = CORALNPU_TFLITE_TIES;
+
 int32_t input_dims[4] __attribute__((section(".data")))  = {0};
 int32_t filter_dims[4] __attribute__((section(".data"))) = {0};
 int32_t bias_dims[4] __attribute__((section(".data")))   = {0};

@@ -40,12 +40,30 @@ config_setting(
     flag_values = {":fused_requant": "True"},
 )
 
+# #23: requantization rounds negative ties away from zero, like TFLite. Off by
+# default, so the default build keeps baseline-v0's rounding (the team's decision
+# on #23); new kernels must be checked and measured with it on. Costs about 2
+# vector ops per requantized block.
+#   bazel test --//sw/opt/litert-micro:tflite_ties ...
+bool_flag(
+    name = "tflite_ties",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "tflite_ties_enabled",
+    flag_values = {":tflite_ties": "True"},
+)
+
 cc_library(
     name = "accumulator_util",
     hdrs = ["accumulator_util.h"],
     defines = select({
         ":fused_requant_enabled": ["CORALNPU_FUSED_REQUANT=1"],
         "//conditions:default": [],
+    }) + select({
+        ":tflite_ties_enabled": ["CORALNPU_TFLITE_TIES=1"],
+        "//conditions:default": ["CORALNPU_TFLITE_TIES=0"],
     }),
     target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
     deps = [
