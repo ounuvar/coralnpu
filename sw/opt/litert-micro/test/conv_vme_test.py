@@ -105,9 +105,8 @@ async def _run_case(
     )
     output_depth = filter[0]
     # input_offset = -zero_point; the kernel folds it into the bias, so
-    # randomize it. output_offset stays -128 like conv_test: the shared RVV
-    # requantization differs from TFLite on negative rounding ties (#7, #9),
-    # and -128 clamps those away.
+    # randomize it. output_offset is random too, so negative rounding ties
+    # reach the output (#23).
     input_offset = int(rng.integers(-127, 129))
     print(
         f"Testing: input {input} filter {filter} stride {stride} "
@@ -138,7 +137,7 @@ async def _run_case(
         ("params_padding_height", pad_h),
         ("params_padding_width", pad_w),
         ("params_input_offset", input_offset),
-        ("params_output_offset", -128),
+        ("params_output_offset", int(rng.integers(-128, 128))),
         ("params_activation_min", -128),
         ("params_activation_max", 127),
     ]:

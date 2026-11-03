@@ -98,8 +98,8 @@ async def _run_layer(fixture, op_index, in_hwc, filt, stride):
     out_w, pad_w = _same_padding(w, fw, stride)
     k = fh * fw * c
     # Random int8 data, as in conv_test.py. The shift scales with K so outputs
-    # don't all saturate; output_offset stays -128 for the reason in
-    # conv_vme_test.py.
+    # don't all saturate; output_offset is random so negative rounding ties
+    # show (#23).
     shift = -int(np.ceil(np.log2(k))) - 6
     await fixture.write("input_dims", np.array([1, h, w, c], dtype=np.int32))
     await fixture.write("filter_dims", np.array(filt, dtype=np.int32))
@@ -129,7 +129,7 @@ async def _run_layer(fixture, op_index, in_hwc, filt, stride):
         ("params_padding_height", pad_h),
         ("params_padding_width", pad_w),
         ("params_input_offset", int(rng.integers(-127, 129))),
-        ("params_output_offset", -128),
+        ("params_output_offset", int(rng.integers(-128, 128))),
         ("params_activation_min", -128),
         ("params_activation_max", 127),
     ]:

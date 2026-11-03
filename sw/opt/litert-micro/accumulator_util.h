@@ -28,6 +28,26 @@
 #endif  // TFLITE_SINGLE_ROUNDING
 
 namespace coralnpu_v2::opt::litert_micro {
+
+// TFLite's RoundingDivideByPOT rounds ties away from zero, but RVV's
+// round-to-nearest-up (vssra with vxrm = rnu, or vsra after adding
+// 1 << (shift - 1)) rounds them toward +infinity. Subtracting 1 from negative
+// values first (saturating), only in lanes whose right shift is nonzero,
+// turns -x.5 into -(x + 1) and leaves every other value's result unchanged.
+inline vint32m8_t TiesAwayFromZero(vbool4_t rshift_nonzero, vint32m8_t x, size_t vl) {
+  return __riscv_vsadd_vv_i32m8_mu(rshift_nonzero, x, x, __riscv_vsra_vx_i32m8(x, 31, vl), vl);
+}
+
+// The same correction for kernels that round with vsra after adding nudge =
+// 1 << (shift - 1) (0 where the shift is 0): min(nudge, 1) marks the lanes with
+// a nonzero shift, so no mask has to stay live across their inner loops
+// (Conv2D_4x4 produced wrong outputs with a live mask). x - 1 cannot overflow:
+// vsmul with a non-negative multiplier never returns INT32_MIN.
+inline vint32m4_t TiesAwayFromZeroBeforeNudge(vint32m4_t x, vint32m4_t nudge, size_t vl) {
+  const vint32m4_t negative_and_shifted = __riscv_vand_vv_i32m4(
+      __riscv_vsra_vx_i32m4(x, 31, vl), __riscv_vmin_vx_i32m4(nudge, 1, vl), vl);
+  return __riscv_vsub_vv_i32m4(x, negative_and_shifted, vl);
+}
 inline void PrepareShiftParams(uint8_t *left, uint8_t *right, const int32_t *shift_in, int out_d) {
   int out_ch        = 0;
   size_t out_ch_rem = out_d;
@@ -138,6 +158,7 @@ inline void PostprocessAcc(const int32_t *accs, const int32_t *bias_data, const 
     const vuint8m2_t rsh8    = __riscv_vle8_v_u8m2(&rshift[out_ch], vl);
     const vuint32m8_t lsh32  = __riscv_vzext_vf4_u32m8(lsh8, vl);
     const vuint32m8_t rsh32  = __riscv_vzext_vf4_u32m8(rsh8, vl);
+    const vbool4_t rsh_nz    = __riscv_vmsne_vx_u32m8_b4(rsh32, 0, vl);
     for (int out_x = 0; out_x < out_w; ++out_x) {
       vint32m8_t acc = __riscv_vle32_v_i32m8(&accs[out_x * out_d + out_ch], vl);
       // Apply bias
@@ -145,7 +166,8 @@ inline void PostprocessAcc(const int32_t *accs, const int32_t *bias_data, const 
       // int8 uses left shift BEFORE multiplier
       acc = __riscv_vsll_vv_i32m8(acc, lsh32, vl);
       acc = __riscv_vsmul_vv_i32m8(acc, mul_val, vxrm, vl);
-      // int8 uses rounding right shift
+      // int8 uses rounding right shift, ties away from zero
+      acc = TiesAwayFromZero(rsh_nz, acc, vl);
       acc = __riscv_vssra_vv_i32m8(acc, rsh32, vxrm, vl);
       // Apply offset
       acc = __riscv_vadd_vx_i32m8(acc, out_offset, vl);
