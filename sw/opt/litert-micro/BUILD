@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
@@ -25,9 +26,27 @@ cc_library(
     ],
 )
 
+# Idea 2 (#9): PostprocessAcc uses the fused requantization instructions
+# (vrequant.vv, vrqclamp.vx). Off by default; the instructions run on npusim
+# and Spike, and on RTL only once the hardware is built with them.
+#   bazel test --//sw/opt/litert-micro:fused_requant ...
+bool_flag(
+    name = "fused_requant",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "fused_requant_enabled",
+    flag_values = {":fused_requant": "True"},
+)
+
 cc_library(
     name = "accumulator_util",
     hdrs = ["accumulator_util.h"],
+    defines = select({
+        ":fused_requant_enabled": ["CORALNPU_FUSED_REQUANT=1"],
+        "//conditions:default": [],
+    }),
     target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
     deps = [
         "@tflite_micro//tensorflow/lite/kernels/internal:compatibility",
