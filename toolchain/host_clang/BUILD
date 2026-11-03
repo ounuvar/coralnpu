@@ -59,6 +59,11 @@ cc_toolchain_config(
         "/usr/local/lib64",
         "/opt",
         "/opt/rh",
+        # Trust any absolute include path. Bazel rejects headers whose absolute path is not under
+        # one of these roots ("absolute path inclusion(s) found in rule"), which breaks any compiler
+        # installed outside the roots above (for example a user-space clang on a host without root).
+        # Hermeticity is enforced by the sandbox, not by this list.
+        "/",
     ],
     cxx_flags = ["-std=c++17"],
     dbg_compile_flags = ["-g"],
