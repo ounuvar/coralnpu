@@ -249,7 +249,15 @@ class CoralNPUChiselSubsystem(
             val sram_p = new Parameters(xlen = xlen)
             sram_p.lsuDataBits = 128
             sram_p.axi2IdBits = 8
-            Module(new TlulSram(sram_p, p.sramSizeBytes, p.globalBaseAddr))
+            Module(
+              new TlulSram(
+                sram_p,
+                p.sramSizeBytes,
+                p.globalBaseAddr,
+                p.readLatency,
+                p.writeLatency
+              )
+            )
 
           case p: IspParameters => null // Handled externally
         }

@@ -86,8 +86,17 @@ case class IspParameters(
 /** Parameters for the PLIC module. */
 case class PlicParameters(numInterrupts: Int, priorityWidth: Int) extends ModuleParameters
 
-/** Parameters for the TlulSram module. */
-case class TlulSramParameters(sramSizeBytes: Int, globalBaseAddr: Int) extends ModuleParameters
+/** Parameters for the TlulSram module.
+  *
+  * `readLatency` and `writeLatency` add that many cycles to each response, to model a slow
+  * external memory in simulation. Both default to 0, which leaves the hardware unchanged.
+  */
+case class TlulSramParameters(
+  sramSizeBytes: Int,
+  globalBaseAddr: Int,
+  readLatency: Int = 0,
+  writeLatency: Int = 0
+) extends ModuleParameters
 
 /** Defines the parameters for a Chisel module to be instantiated within the subsystem.
   *
