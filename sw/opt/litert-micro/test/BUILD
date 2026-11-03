@@ -73,3 +73,55 @@ coralflow_test(
         requirement("numpy"),
     ],
 )
+
+coralnpu_v2_binary(
+    name = "conv_vme_test",
+    srcs = ["conv_vme_test.cc"],
+    dtcm_size_kbytes = 1024,
+    itcm_size_kbytes = 1024,
+    deps = [
+        "//sw/opt/litert-micro:conv_vme",
+        "//sw/utils",
+        "@tflite_micro//tensorflow/lite/kernels/internal:reference_base",
+    ],
+)
+
+# The matrix engine runs on npusim (MPACT models Zvt); the RTL VME core has
+# too little memory for these layer sizes.
+coralflow_test(
+    name = "conv_vme_sim_test",
+    srcs = ["conv_vme_test.py"],
+    elf = ":conv_vme_test.elf",
+    highmem = True,
+    main = "conv_vme_test.py",
+    targets = ["npusim"],
+    deps = [
+        "@bazel_tools//tools/python/runfiles",
+        requirement("numpy"),
+    ],
+)
+
+coralnpu_v2_binary(
+    name = "fully_connected_vme_test",
+    srcs = ["fully_connected_vme_test.cc"],
+    dtcm_size_kbytes = 1024,
+    itcm_size_kbytes = 1024,
+    deps = [
+        "//sw/opt/litert-micro:fully_connected_vme",
+        "//sw/utils",
+        "@tflite_micro//tensorflow/lite/kernels/internal:reference_base",
+    ],
+)
+
+coralflow_test(
+    name = "fully_connected_vme_sim_test",
+    srcs = ["fully_connected_vme_test.py"],
+    elf = ":fully_connected_vme_test.elf",
+    highmem = True,
+    main = "fully_connected_vme_test.py",
+    targets = ["npusim"],
+    deps = [
+        "@bazel_tools//tools/python/runfiles",
+        requirement("numpy"),
+    ],
+)

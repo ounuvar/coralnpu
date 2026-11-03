@@ -1,0 +1,104 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Runs reference_integer_ops::FullyConnected and the matrix-engine kernel on
+// the same inputs; fully_connected_vme_test.py compares the outputs.
+
+#include "sw/opt/litert-micro/fully_connected_vme.h"
+
+#include <cstdint>
+
+#include "sw/utils/utils.h"
+#include "tensorflow/lite/kernels/internal/reference/integer_ops/fully_connected.h"
+
+extern "C" {
+int8_t input_data[16384] __attribute__((section(".data"), aligned(16)))      = {0};
+int8_t filter_data[262144] __attribute__((section(".data"), aligned(16)))    = {0};
+int32_t bias_data[1024] __attribute__((section(".data"), aligned(16)))       = {0};
+int8_t output_data[16384] __attribute__((section(".data"), aligned(16)))     = {0};
+int8_t output_data_ref[16384] __attribute__((section(".data"), aligned(16))) = {0};
+
+int32_t batches __attribute__((section(".data")))      = 0;
+int32_t accum_depth __attribute__((section(".data")))  = 0;
+int32_t output_depth __attribute__((section(".data"))) = 0;
+
+int32_t params_input_offset __attribute__((section(".data")))      = 0;
+int32_t params_output_offset __attribute__((section(".data")))     = 0;
+int32_t params_output_multiplier __attribute__((section(".data"))) = 0;
+int32_t params_output_shift __attribute__((section(".data")))      = 0;
+int32_t params_activation_min __attribute__((section(".data")))    = 0;
+int32_t params_activation_max __attribute__((section(".data")))    = 0;
+
+uint64_t ref_cycles __attribute__((section(".data"), used)) = 0;
+uint64_t opt_cycles __attribute__((section(".data"), used)) = 0;
+int32_t heartbeat __attribute__((section(".data"), used))   = 0xAA;
+
+int8_t persistent_buffer[327680] __attribute__((section(".data"), aligned(16))) = {0};
+int8_t scratch_buffer[131072] __attribute__((section(".data"), aligned(16)))    = {0};
+
+static tflite::RuntimeShape Shape2(int32_t d0, int32_t d1) {
+  const int32_t dims[2] = {d0, d1};
+  return tflite::RuntimeShape(2, dims);
+}
+
+static tflite::FullyConnectedParams MakeParams() {
+  tflite::FullyConnectedParams params;
+  params.input_offset             = params_input_offset;
+  params.weights_offset           = 0;
+  params.output_offset            = params_output_offset;
+  params.output_multiplier        = params_output_multiplier;
+  params.output_shift             = params_output_shift;
+  params.quantized_activation_min = params_activation_min;
+  params.quantized_activation_max = params_activation_max;
+  return params;
+}
+
+__attribute__((used, retain)) void run_ref() {
+  heartbeat                                 = 0x11;
+  const tflite::FullyConnectedParams params = MakeParams();
+  uint64_t start                            = mcycle_read();
+  tflite::reference_integer_ops::FullyConnected(params, Shape2(batches, accum_depth), input_data,
+                                                Shape2(output_depth, accum_depth), filter_data,
+                                                tflite::RuntimeShape(1, &output_depth), bias_data,
+                                                Shape2(batches, output_depth), output_data_ref);
+  ref_cycles = mcycle_read() - start;
+  heartbeat  = 0x12;
+}
+
+__attribute__((used, retain)) void run_vme() {
+  heartbeat                                 = 0x21;
+  const tflite::FullyConnectedParams params = MakeParams();
+  namespace vme                             = coralnpu_v2::opt::litert_micro::vme;
+  const tflite::RuntimeShape filter_shape   = Shape2(output_depth, accum_depth);
+  if (vme::FullyConnectedVmePersistentBytes(filter_shape) > sizeof(persistent_buffer) ||
+      vme::FullyConnectedVmeScratchBytes(filter_shape) > sizeof(scratch_buffer)) {
+    heartbeat = 0xEE;
+    return;
+  }
+  // Prepare (weight packing) is per-layer setup and is not timed.
+  const vme::FullyConnectedVmeWeights weights = vme::FullyConnectedVmePrepare(
+      params, filter_shape, filter_data, bias_data, persistent_buffer);
+  uint64_t start = mcycle_read();
+  vme::FullyConnectedVme(params, weights, Shape2(batches, accum_depth), input_data,
+                         Shape2(batches, output_depth), output_data, scratch_buffer);
+  opt_cycles = mcycle_read() - start;
+  heartbeat  = 0x22;
+}
+
+int main(void) {
+  run_ref();
+  run_vme();
+  return 0;
+}
+}
