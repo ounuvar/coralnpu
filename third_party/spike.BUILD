@@ -30,9 +30,10 @@ configure_make(
     env = {
         "CXXFLAGS": "-std=c++20",
     } | select({
-        # Spike runs dtc at simulation time (execlp of the configure-time
-        # path), so it must be a stable system binary, not a Bazel output.
-        # Bazel's strict action PATH hides Homebrew, so name it explicitly.
+        # configure needs a dtc path, which Spike execs only to build a
+        # device tree. spike_simulator disables that (dtb_enabled=false), so
+        # the binary does not have to exist; Bazel's strict action PATH hides
+        # Homebrew, so name the conventional location explicitly.
         # Bazel's macOS archiver is Apple libtool, which rejects `$(AR) rcs`.
         "@platforms//os:macos": {
             "AR": "/usr/bin/ar",
