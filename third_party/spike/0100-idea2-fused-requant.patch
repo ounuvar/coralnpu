@@ -1,0 +1,118 @@
+From ade988a339af7656274bf884e449f85f8a58b0e6 Mon Sep 17 00:00:00 2001
+From: aayushmerchant <akm4397@eid.utexas.edu>
+Date: Tue, 3 Nov 2026 14:13:07 -0600
+Subject: [PATCH] Add CoralNPU fused requantization instructions (vrequant.vv,
+ vrqclamp.vx)
+
+Idea 2 (#9) in ounuvar/coralnpu. vrequant.vv applies TFLite's double-rounding MultiplyByQuantizedMultiplier per element (vd = accumulator in and result out, vs2 = Q31 multiplier, vs1 = shift); vrqclamp.vx adds the output offset and clamps, with rs1 = {hi, lo, offset16}. Both need SEW=32.
+---
+ disasm/disasm.cc          |  4 ++++
+ riscv/encoding.h          |  6 ++++++
+ riscv/insns/vrequant_vv.h | 21 +++++++++++++++++++++
+ riscv/insns/vrqclamp_vx.h | 13 +++++++++++++
+ riscv/riscv.mk.in         |  2 ++
+ 5 files changed, 46 insertions(+)
+ create mode 100644 riscv/insns/vrequant_vv.h
+ create mode 100644 riscv/insns/vrqclamp_vx.h
+
+diff --git a/disasm/disasm.cc b/disasm/disasm.cc
+index 33d7318..5ff9c20 100644
+--- a/disasm/disasm.cc
++++ b/disasm/disasm.cc
+@@ -2031,6 +2031,10 @@ void disassembler_t::add_instructions(const isa_parser_t* isa, bool strict)
+     DISASM_OPIV_MULTIPLYADD__X__INSN(vwmaccus,  1);
+     DISASM_OPIV_MULTIPLYADD_VX__INSN(vwmaccsu,  0);
+ 
++    // CoralNPU fused requantization (idea 2).
++    DISASM_OPIV_V___INSN(vrequant, 1);
++    DISASM_OPIV__X__INSN(vrqclamp, 1);
++
+     if (ext_enabled(EXT_ZVDOT4A)) {
+       DISASM_OPIV_VX__INSN(vdot4a,   0);
+       DISASM_OPIV_VX__INSN(vdot4au,  0);
+diff --git a/riscv/encoding.h b/riscv/encoding.h
+index b350e7c..ea8c1b2 100644
+--- a/riscv/encoding.h
++++ b/riscv/encoding.h
+@@ -2973,6 +2973,10 @@
+ #define MASK_VDIVU_VV 0xfc00707f
+ #define MATCH_VDIVU_VX 0x80006057
+ #define MASK_VDIVU_VX 0xfc00707f
++#define MATCH_VREQUANT_VV 0x4c002057
++#define MASK_VREQUANT_VV 0xfc00707f
++#define MATCH_VRQCLAMP_VX 0x44006057
++#define MASK_VRQCLAMP_VX 0xfc00707f
+ #define MATCH_VDOT4A_VV 0xb0002057
+ #define MASK_VDOT4A_VV 0xfc00707f
+ #define MATCH_VDOT4A_VX 0xb0006057
+@@ -5688,6 +5692,8 @@ DECLARE_INSN(vdiv_vv, MATCH_VDIV_VV, MASK_VDIV_VV)
+ DECLARE_INSN(vdiv_vx, MATCH_VDIV_VX, MASK_VDIV_VX)
+ DECLARE_INSN(vdivu_vv, MATCH_VDIVU_VV, MASK_VDIVU_VV)
+ DECLARE_INSN(vdivu_vx, MATCH_VDIVU_VX, MASK_VDIVU_VX)
++DECLARE_INSN(vrequant_vv, MATCH_VREQUANT_VV, MASK_VREQUANT_VV)
++DECLARE_INSN(vrqclamp_vx, MATCH_VRQCLAMP_VX, MASK_VRQCLAMP_VX)
+ DECLARE_INSN(vdot4a_vv, MATCH_VDOT4A_VV, MASK_VDOT4A_VV)
+ DECLARE_INSN(vdot4a_vx, MATCH_VDOT4A_VX, MASK_VDOT4A_VX)
+ DECLARE_INSN(vdot4asu_vv, MATCH_VDOT4ASU_VV, MASK_VDOT4ASU_VV)
+diff --git a/riscv/insns/vrequant_vv.h b/riscv/insns/vrequant_vv.h
+new file mode 100644
+index 0000000..afdf2db
+--- /dev/null
++++ b/riscv/insns/vrequant_vv.h
+@@ -0,0 +1,21 @@
++// vrequant.vv vd, vs2, vs1: CoralNPU fused requantization, idea 2 (#9).
++// vd[i] = TFLite MultiplyByQuantizedMultiplier(vd[i], vs2[i], vs1[i]):
++// left shift, SaturatingRoundingDoublingHighMul, then RoundingDivideByPOT
++// (ties away from zero). Golden model: sw/opt/litert-micro/requant_ref.h.
++require(P.VU.vsew == e32);
++VI_VV_LOOP
++({
++  const int32_t sh = vs1 < -31 ? -31 : (vs1 > 31 ? 31 : vs1);
++  const int32_t x = (int32_t)((uint32_t)vd << (sh > 0 ? sh : 0));
++  const int32_t m = vs2;
++  int32_t y = (x == INT32_MIN && m == INT32_MIN)
++                  ? INT32_MAX
++                  : (int32_t)(((int64_t)x * m + (INT64_C(1) << 30)) >> 31);
++  const int e = sh > 0 ? 0 : -sh;
++  if (e != 0) {
++    const int32_t mask = (int32_t)((INT64_C(1) << e) - 1);
++    const int32_t threshold = (mask >> 1) + (y < 0 ? 1 : 0);
++    y = (y >> e) + ((y & mask) > threshold ? 1 : 0);
++  }
++  vd = y;
++})
+diff --git a/riscv/insns/vrqclamp_vx.h b/riscv/insns/vrqclamp_vx.h
+new file mode 100644
+index 0000000..720da84
+--- /dev/null
++++ b/riscv/insns/vrqclamp_vx.h
+@@ -0,0 +1,13 @@
++// vrqclamp.vx vd, vs2, rs1: CoralNPU fused requantization, idea 2 (#9).
++// rs1 packs {hi[31:24], lo[23:16], offset[15:0]}, all signed.
++// vd[i] = min(max(vs2[i] + offset, lo), hi), with the add wrapping.
++require(P.VU.vsew == e32);
++VI_VX_LOOP
++({
++  const int32_t offset = (int16_t)(rs1 & 0xffff);
++  const int32_t lo = (int8_t)((rs1 >> 16) & 0xff);
++  const int32_t hi = (int8_t)((rs1 >> 24) & 0xff);
++  int32_t y = (int32_t)((uint32_t)vs2 + (uint32_t)offset);
++  y = y < lo ? lo : y;
++  vd = y > hi ? hi : y;
++})
+diff --git a/riscv/riscv.mk.in b/riscv/riscv.mk.in
+index b6c95b6..1c5a44e 100644
+--- a/riscv/riscv.mk.in
++++ b/riscv/riscv.mk.in
+@@ -489,6 +489,8 @@ riscv_insn_ext_k = \
+        sm4ks
+ 
+ riscv_insn_ext_v_alu_int = \
++	vrequant_vv \
++	vrqclamp_vx \
+ 	vaadd_vv \
+ 	vaaddu_vv \
+ 	vaadd_vx \
+-- 
+2.50.1 (Apple Git-155)
+
