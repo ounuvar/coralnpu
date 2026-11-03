@@ -46,6 +46,10 @@ _TOPLEVEL_MODELS = {
         "//tests/cocotb:vme_core_mini_axi_model",
         "//tests/cocotb:vme_core_mini_axi_vcs_model",
     ),
+    "VmeCoreMiniHighmemAxi": (
+        "//tests/cocotb:vme_core_mini_highmem_axi_model",
+        "//tests/cocotb:vme_core_mini_highmem_axi_vcs_model",
+    ),
 }
 
 _SIZE_ORDER = {
@@ -330,6 +334,7 @@ def coralflow_test(
     is_highmem_map = highmem or resolved_toplevel in (
         "RvvCoreMiniHighmemAxi",
         "RvvCoreMini_ITCM512KB_DTCM512KBAxi",
+        "VmeCoreMiniHighmemAxi",
     )
     highmem_env = "1" if is_highmem_map else "0"
     main_src = main if main else (srcs[0] if len(srcs) == 1 else None)
