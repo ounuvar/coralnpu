@@ -65,6 +65,14 @@ and a gcc 8 `libstdc++`. Everything is installed under one private directory.
 - **Do not update clang in the micromamba environment.** The wrapper replaces
   the `clang-19` binary in place and an update would overwrite it. Re-run the
   script to repair it.
+- **Deleting a Bazel cache needs write permission first.** Bazel makes its
+  outputs read-only, so `rm -rf` fails partway. Run `bazel clean --expunge` from
+  the clone, or `chmod -R u+w <cache dir>` before deleting.
+- **VS Code may show thousands of "changes".** Each Bazel output base contains
+  `execroot/_main`, a symlink copy of the workspace with a `.git` link, and
+  VS Code's git extension detects it as a repository. If the cache is inside the
+  folder you opened, add its parent to `git.repositoryScanIgnoredFolders` in the
+  workspace settings. The cache is not tracked by git.
 - **Why the wrapper replaces the binary.** Bazel's auto-detected toolchain
   resolves the compiler to its real path, so a wrapper on `PATH` can be bypassed.
 - **Why `host_clang` trusts `/`.** See the comment in `toolchain/host_clang/BUILD`.
