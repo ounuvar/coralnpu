@@ -99,18 +99,22 @@ coralnpu_v2_binary(
     ],
 )
 
-# The matrix engine runs on npusim (MPACT models Zvt); the RTL VME core has
-# too little memory for these layer sizes.
+# npusim (MPACT models Zvt) checks correctness quickly; the verilator target
+# runs the same ELF on the 1 MB VmeCoreMiniHighmemAxi RTL for cycle counts.
 coralflow_test(
     name = "conv_vme_sim_test",
     srcs = ["conv_vme_test.py"],
     elf = ":conv_vme_test.elf",
+    hdl_toplevel = "VmeCoreMiniHighmemAxi",
     highmem = True,
     main = "conv_vme_test.py",
-    targets = ["npusim"],
+    targets = [
+        "npusim",
+        "verilator",
+    ],
     deps = [
+        # The RTL rule adds numpy itself; npusim gets it from the fixture.
         "@bazel_tools//tools/python/runfiles",
-        requirement("numpy"),
     ],
 )
 
@@ -130,11 +134,49 @@ coralflow_test(
     name = "fully_connected_vme_sim_test",
     srcs = ["fully_connected_vme_test.py"],
     elf = ":fully_connected_vme_test.elf",
+    hdl_toplevel = "VmeCoreMiniHighmemAxi",
     highmem = True,
     main = "fully_connected_vme_test.py",
-    targets = ["npusim"],
+    targets = [
+        "npusim",
+        "verilator",
+    ],
     deps = [
+        # The RTL rule adds numpy itself; npusim gets it from the fixture.
         "@bazel_tools//tools/python/runfiles",
-        requirement("numpy"),
+    ],
+)
+
+coralnpu_v2_binary(
+    name = "mobilenet_conv_bench",
+    srcs = ["mobilenet_conv_bench.cc"],
+    dtcm_size_kbytes = 1024,
+    itcm_size_kbytes = 1024,
+    deps = [
+        "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:conv_vme",
+        "//sw/utils",
+    ],
+)
+
+# Per-layer baseline vs matrix-engine cycles for MobileNet's conv layers (#12).
+# npusim checks bit-exactness on every layer; the verilator target gives the
+# cycle counts. RTL runs are long; pick layers with
+# --test_env=MOBILENET_CONV_LAYERS=0,2,5 (model op indices).
+coralflow_test(
+    name = "mobilenet_conv_bench",
+    srcs = ["mobilenet_conv_bench.py"],
+    elf = ":mobilenet_conv_bench.elf",
+    hdl_toplevel = "VmeCoreMiniHighmemAxi",
+    highmem = True,
+    main = "mobilenet_conv_bench.py",
+    tags = ["manual"],
+    targets = [
+        "npusim",
+        "verilator",
+    ],
+    deps = [
+        # The RTL rule adds numpy itself; npusim gets it from the fixture.
+        "@bazel_tools//tools/python/runfiles",
     ],
 )

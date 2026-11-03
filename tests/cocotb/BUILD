@@ -143,6 +143,21 @@ verilator_cocotb_model(
     ],
 )
 
+# VME with 1 MB ITCM / 1 MB DTCM, for layer-sized kernels (#12).
+verilator_cocotb_model(
+    name = "vme_core_mini_highmem_axi_model",
+    cflags = VERILATOR_BUILD_ARGS + [
+        "-DZVT_ON",
+        "-DZVTBF16FMM_ON",
+    ],
+    hdl_toplevel = "VmeCoreMiniHighmemAxi",
+    trace = False,
+    verilog_source = "//hdl/chisel/src/coralnpu:VmeCoreMiniHighmemAxi.sv",
+    deps = [
+        "//hdl/verilog:sram_backdoor",
+    ],
+)
+
 vcs_cocotb_model(
     name = "core_mini_axi_vcs_model",
     build_args = VCS_BUILD_ARGS,
@@ -215,6 +230,24 @@ vcs_cocotb_model(
         "vcs",
     ],
     verilog_sources = ["//hdl/chisel/src/coralnpu:vme_core_mini_axi_cc_library_verilog"],
+)
+
+vcs_cocotb_model(
+    name = "vme_core_mini_highmem_axi_vcs_model",
+    build_args = VCS_BUILD_ARGS,
+    data = VCS_COMMON_DATA,
+    defines = dict(
+        VCS_DEFINES,
+        ZVTBF16FMM_ON = "",
+        ZVT_ON = "",
+    ),
+    hdl_toplevel = "VmeCoreMiniHighmemAxi",
+    tags = [
+        "manual",
+        "rtl",
+        "vcs",
+    ],
+    verilog_sources = ["//hdl/chisel/src/coralnpu:vme_core_mini_highmem_axi_cc_library_verilog"],
 )
 
 # BEGIN_TESTCASES_FOR_core_mini_axi_sim_cocotb
