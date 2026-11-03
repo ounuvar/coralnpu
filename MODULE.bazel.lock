@@ -236,7 +236,7 @@
   "moduleExtensions": {
     "//rules:extensions.bzl%coralnpu_deps_ext": {
       "os:linux,arch:amd64": {
-        "bzlTransitiveDigest": "0Xbj3pZIHyo9U+caw4QmCKGzFW1xpmw58L0fCrPsFgU=",
+        "bzlTransitiveDigest": "OT4d2bS5v28lJsB5g3CUFcH7Zj/3ZkFlVCe5S7QrlX8=",
         "usagesDigest": "1CqV4EO7uDyVS9gQSAvjLugLlCTYAZrVJ16YUY5hgpI=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools",
@@ -462,7 +462,8 @@
                 "@@//third_party/coralnpu_mpact:0006-Fix-svdpi-includes.patch",
                 "@@//third_party/coralnpu_mpact:0007-Add-matrix-tile-DPI-accessors.patch",
                 "@@//third_party/coralnpu_mpact:0008-CoralNPU-M4-alignment.patch",
-                "@@//third_party/coralnpu_mpact:0009-Validate-rvv-lsu-legality.patch"
+                "@@//third_party/coralnpu_mpact:0009-Validate-rvv-lsu-legality.patch",
+                "@@//third_party/coralnpu_mpact:0100-idea2-fused-requant.patch"
               ],
               "patch_args": [
                 "-p1"
@@ -817,7 +818,8 @@
                 "@@//third_party/spike:0006-Hardwire-misa-as-read-only-WARL.patch",
                 "@@//third_party/spike:0007-Rename-yield-macro-avoid-boost-std-conflict.patch",
                 "@@//third_party/spike:0008-Link-libstdc-explicitly-in-LIBS.patch",
-                "@@//third_party/spike:0009-Fix-Zvt-and-CoralNPU-mstatus-alignment.patch"
+                "@@//third_party/spike:0009-Fix-Zvt-and-CoralNPU-mstatus-alignment.patch",
+                "@@//third_party/spike:0100-idea2-fused-requant.patch"
               ],
               "patch_args": [
                 "-p1"
@@ -1311,7 +1313,7 @@
         }
       },
       "os:osx,arch:aarch64": {
-        "bzlTransitiveDigest": "0Xbj3pZIHyo9U+caw4QmCKGzFW1xpmw58L0fCrPsFgU=",
+        "bzlTransitiveDigest": "OT4d2bS5v28lJsB5g3CUFcH7Zj/3ZkFlVCe5S7QrlX8=",
         "usagesDigest": "1CqV4EO7uDyVS9gQSAvjLugLlCTYAZrVJ16YUY5hgpI=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools",
@@ -1537,7 +1539,8 @@
                 "@@//third_party/coralnpu_mpact:0006-Fix-svdpi-includes.patch",
                 "@@//third_party/coralnpu_mpact:0007-Add-matrix-tile-DPI-accessors.patch",
                 "@@//third_party/coralnpu_mpact:0008-CoralNPU-M4-alignment.patch",
-                "@@//third_party/coralnpu_mpact:0009-Validate-rvv-lsu-legality.patch"
+                "@@//third_party/coralnpu_mpact:0009-Validate-rvv-lsu-legality.patch",
+                "@@//third_party/coralnpu_mpact:0100-idea2-fused-requant.patch"
               ],
               "patch_args": [
                 "-p1"
@@ -1892,7 +1895,8 @@
                 "@@//third_party/spike:0006-Hardwire-misa-as-read-only-WARL.patch",
                 "@@//third_party/spike:0007-Rename-yield-macro-avoid-boost-std-conflict.patch",
                 "@@//third_party/spike:0008-Link-libstdc-explicitly-in-LIBS.patch",
-                "@@//third_party/spike:0009-Fix-Zvt-and-CoralNPU-mstatus-alignment.patch"
+                "@@//third_party/spike:0009-Fix-Zvt-and-CoralNPU-mstatus-alignment.patch",
+                "@@//third_party/spike:0100-idea2-fused-requant.patch"
               ],
               "patch_args": [
                 "-p1"

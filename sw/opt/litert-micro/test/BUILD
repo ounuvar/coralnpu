@@ -215,3 +215,39 @@ coralflow_test(
         "@bazel_tools//tools/python/runfiles",
     ],
 )
+
+# ISS check for the fused requantization instructions (#9, step 3): the same
+# ELF runs on npusim (MPACT) and on Spike.
+coralnpu_v2_binary(
+    name = "requant_iss_test",
+    srcs = ["requant_iss_test.cc"],
+    deps = [
+        "//sw/opt/litert-micro:accumulator_util",
+        "//sw/opt/litert-micro:requant_ref",
+        "//sw/utils",
+        "@tflite_micro//tensorflow/lite/kernels/internal:common",
+    ],
+)
+
+coralflow_test(
+    name = "requant_iss_sim_test",
+    srcs = ["requant_iss_test.py"],
+    elf = ":requant_iss_test.elf",
+    main = "requant_iss_test.py",
+    targets = ["npusim"],
+    deps = [
+        "@bazel_tools//tools/python/runfiles",
+    ],
+)
+
+cc_test(
+    name = "requant_iss_spike_test",
+    srcs = ["requant_iss_spike_test.cc"],
+    data = [":requant_iss_test.elf"],
+    deps = [
+        "//sw/coralnpu_sim:spike_simulator",
+        "//tests/verilator_sim:elf",
+        "@bazel_tools//tools/cpp/runfiles",
+        "@com_google_googletest//:gtest_main",
+    ],
+)

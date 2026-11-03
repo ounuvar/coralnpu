@@ -1,0 +1,225 @@
+From 94c5c370b57cbc50702c9c11f29a859e7d194409 Mon Sep 17 00:00:00 2001
+From: aayushmerchant <akm4397@eid.utexas.edu>
+Date: Tue, 3 Nov 2026 14:13:46 -0600
+Subject: [PATCH] Add CoralNPU fused requantization instructions (vrequant.vv,
+ vrqclamp.vx)
+
+Idea 2 (#9) in ounuvar/coralnpu: decoder entries in coralnpu_v2.bin_fmt and coralnpu_v2.isa, semantics in coralnpu_v2_requant_instructions.cc. Both need SEW=32.
+---
+ sim/BUILD                               | 13 ++++
+ sim/coralnpu_v2.bin_fmt                 |  3 +
+ sim/coralnpu_v2.isa                     |  8 +++
+ sim/coralnpu_v2_requant_instructions.cc | 87 +++++++++++++++++++++++++
+ sim/coralnpu_v2_requant_instructions.h  | 35 ++++++++++
+ 5 files changed, 146 insertions(+)
+ create mode 100644 sim/coralnpu_v2_requant_instructions.cc
+ create mode 100644 sim/coralnpu_v2_requant_instructions.h
+
+diff --git a/sim/BUILD b/sim/BUILD
+index 270fed4..f4df0b2 100755
+--- a/sim/BUILD
++++ b/sim/BUILD
+@@ -254,6 +254,18 @@ cc_library(
+     ],
+ )
+ 
++cc_library(
++    name = "coralnpu_v2_requant_instructions",
++    srcs = ["coralnpu_v2_requant_instructions.cc"],
++    hdrs = ["coralnpu_v2_requant_instructions.h"],
++    copts = ["-O3"],
++    deps = [
++        "@com_google_mpact-riscv//riscv:riscv_state",
++        "@com_google_mpact-riscv//riscv:riscv_v",
++        "@mpact-sim//mpact/sim/generic:instruction",
++    ],
++)
++
+ mpact_isa_decoder(
+     name = "coralnpu_v2_isa",
+     src = "coralnpu_v2.isa",
+@@ -265,6 +277,7 @@ mpact_isa_decoder(
+     isa_name = "CoralNPUV2",
+     deps = [
+         ":coralnpu_v2_instructions",
++        ":coralnpu_v2_requant_instructions",
+         "@abseil-cpp//absl/functional:bind_front",
+         "@com_google_mpact-riscv//riscv:riscv_bitmanip_instructions",
+         "@com_google_mpact-riscv//riscv:riscv_g",
+diff --git a/sim/coralnpu_v2.bin_fmt b/sim/coralnpu_v2.bin_fmt
+index 4a06c65..244bbe4 100755
+--- a/sim/coralnpu_v2.bin_fmt
++++ b/sim/coralnpu_v2.bin_fmt
+@@ -716,6 +716,9 @@ instruction group RiscVZve32xInst32[32] : Inst32Format {
+   vmadd_vx    : VArith : func6 == 0b101'001, func3 == 0b110, opcode == 0b101'0111;
+   vnmsub_vv   : VArith : func6 == 0b101'011, func3 == 0b010, opcode == 0b101'0111;
+   vnmsub_vx   : VArith : func6 == 0b101'011, func3 == 0b110, opcode == 0b101'0111;
++  // CoralNPU fused requantization, idea 2 (#9).
++  vrequant_vv : VArith : func6 == 0b010'011, func3 == 0b010, opcode == 0b101'0111;
++  vrqclamp_vx : VArith : func6 == 0b010'001, func3 == 0b110, opcode == 0b101'0111;
+   vmacc_vv    : VArith : func6 == 0b101'101, func3 == 0b010, opcode == 0b101'0111;
+   vmacc_vx    : VArith : func6 == 0b101'101, func3 == 0b110, opcode == 0b101'0111;
+   vnmsac_vv   : VArith : func6 == 0b101'111, func3 == 0b010, opcode == 0b101'0111;
+diff --git a/sim/coralnpu_v2.isa b/sim/coralnpu_v2.isa
+index 70d4471..0b3de8a 100755
+--- a/sim/coralnpu_v2.isa
++++ b/sim/coralnpu_v2.isa
+@@ -750,6 +750,7 @@ slot riscv_zve32x {
+     #include "riscv/riscv_vector_reduction_instructions.h"
+     #include "riscv/riscv_vector_unary_instructions.h"
+     #include "absl/functional/bind_front.h"
++    #include "sim/coralnpu_v2_requant_instructions.h"
+   }
+   default size = 4;
+   default latency = 0;
+@@ -1584,6 +1585,13 @@ slot riscv_zve32x {
+     vnmsub_vx{: vs2, rs1, vd, vmask: vd},
+       disasm: "vnmsub.vx", "%vd, %vs2, %rs1, %vmask",
+       semfunc: "&::mpact::sim::riscv::Vnmsub";
++    // CoralNPU fused requantization, idea 2 (#9).
++    vrequant_vv{: vs2, vs1, vd, vmask: vd},
++      disasm: "vrequant.vv", "%vd, %vs2, %vs1, %vmask",
++      semfunc: "&::coralnpu::sim::CoralNPUV2Vrequant";
++    vrqclamp_vx{: vs2, rs1, vmask : vd},
++      disasm: "vrqclamp.vx", "%vd, %vs2, %rs1, %vmask",
++      semfunc: "&::coralnpu::sim::CoralNPUV2Vrqclamp";
+     vmacc_vv{: vs2, vs1, vd, vmask: vd},
+       disasm: "vmacc.vv", "%vd, %vs2, %vs1, %vmask",
+       semfunc: "&::mpact::sim::riscv::Vmacc";
+diff --git a/sim/coralnpu_v2_requant_instructions.cc b/sim/coralnpu_v2_requant_instructions.cc
+new file mode 100644
+index 0000000..089aaa9
+--- /dev/null
++++ b/sim/coralnpu_v2_requant_instructions.cc
+@@ -0,0 +1,87 @@
++// Copyright 2026 Google LLC
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     https://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#include "sim/coralnpu_v2_requant_instructions.h"
++
++#include <cstdint>
++
++#include "riscv/riscv_state.h"
++#include "riscv/riscv_vector_instruction_helpers.h"
++#include "riscv/riscv_vector_state.h"
++#include "mpact/sim/generic/instruction.h"
++
++namespace coralnpu::sim {
++
++using ::mpact::sim::generic::Instruction;
++using ::mpact::sim::riscv::RiscVBinaryVectorOp;
++using ::mpact::sim::riscv::RiscVState;
++using ::mpact::sim::riscv::RiscVTernaryVectorOp;
++
++namespace {
++
++int32_t Requant(int32_t acc, int32_t multiplier, int32_t shift) {
++  const int32_t sh = shift < -31 ? -31 : (shift > 31 ? 31 : shift);
++  const int32_t x =
++      static_cast<int32_t>(static_cast<uint32_t>(acc) << (sh > 0 ? sh : 0));
++  int32_t y =
++      (x == INT32_MIN && multiplier == INT32_MIN)
++          ? INT32_MAX
++          : static_cast<int32_t>(
++                (static_cast<int64_t>(x) * multiplier + (int64_t{1} << 30)) >>
++                31);
++  const int e = sh > 0 ? 0 : -sh;
++  if (e != 0) {
++    const int32_t mask = static_cast<int32_t>((int64_t{1} << e) - 1);
++    const int32_t threshold = (mask >> 1) + (y < 0 ? 1 : 0);
++    y = (y >> e) + ((y & mask) > threshold ? 1 : 0);
++  }
++  return y;
++}
++
++int32_t Clamp(int32_t value, uint32_t packed) {
++  const int32_t offset = static_cast<int16_t>(packed & 0xffff);
++  const int32_t lo = static_cast<int8_t>((packed >> 16) & 0xff);
++  const int32_t hi = static_cast<int8_t>((packed >> 24) & 0xff);
++  int32_t y = static_cast<int32_t>(static_cast<uint32_t>(value) +
++                                   static_cast<uint32_t>(offset));
++  y = y < lo ? lo : y;
++  return y > hi ? hi : y;
++}
++
++}  // namespace
++
++void CoralNPUV2Vrequant(const Instruction* inst) {
++  auto* rv_vector = static_cast<RiscVState*>(inst->state())->rv_vector();
++  if (rv_vector->selected_element_width() != 4) {
++    rv_vector->set_vector_exception();
++    return;
++  }
++  RiscVTernaryVectorOp<int32_t, int32_t, int32_t>(
++      rv_vector, inst, [](int32_t vs2, int32_t vs1, int32_t vd) -> int32_t {
++        return Requant(vd, vs2, vs1);
++      });
++}
++
++void CoralNPUV2Vrqclamp(const Instruction* inst) {
++  auto* rv_vector = static_cast<RiscVState*>(inst->state())->rv_vector();
++  if (rv_vector->selected_element_width() != 4) {
++    rv_vector->set_vector_exception();
++    return;
++  }
++  RiscVBinaryVectorOp<int32_t, int32_t, uint32_t>(
++      rv_vector, inst,
++      [](int32_t vs2, uint32_t rs1) -> int32_t { return Clamp(vs2, rs1); });
++}
++
++}  // namespace coralnpu::sim
+diff --git a/sim/coralnpu_v2_requant_instructions.h b/sim/coralnpu_v2_requant_instructions.h
+new file mode 100644
+index 0000000..254da2c
+--- /dev/null
++++ b/sim/coralnpu_v2_requant_instructions.h
+@@ -0,0 +1,35 @@
++// Copyright 2026 Google LLC
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     https://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++#ifndef SIM_CORALNPU_V2_REQUANT_INSTRUCTIONS_H_
++#define SIM_CORALNPU_V2_REQUANT_INSTRUCTIONS_H_
++
++#include "mpact/sim/generic/instruction.h"
++
++namespace coralnpu::sim {
++
++// Fused requantization, CoralNPU idea 2 (ounuvar/coralnpu#9). Both need
++// SEW=32. Golden model: sw/opt/litert-micro/requant_ref.h in coralnpu.
++
++// vrequant.vv vd, vs2, vs1: vd[i] = MultiplyByQuantizedMultiplier(vd[i],
++// vs2[i], vs1[i]) with TFLite's double rounding.
++void CoralNPUV2Vrequant(const mpact::sim::generic::Instruction* inst);
++
++// vrqclamp.vx vd, vs2, rs1: rs1 = {hi[31:24], lo[23:16], offset[15:0]};
++// vd[i] = min(max(vs2[i] + offset, lo), hi).
++void CoralNPUV2Vrqclamp(const mpact::sim::generic::Instruction* inst);
++
++}  // namespace coralnpu::sim
++
++#endif  // SIM_CORALNPU_V2_REQUANT_INSTRUCTIONS_H_
+-- 
+2.50.1 (Apple Git-155)
+
