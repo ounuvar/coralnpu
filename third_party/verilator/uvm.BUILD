@@ -44,7 +44,11 @@ cc_library(
         "-O2",
         "-DVERILATOR",
         "-Wno-vla-cxx-extension",
-    ],
+    ] + select({
+        # macOS has no <malloc.h>; malloc() itself comes from <stdlib.h>.
+        "@platforms//os:macos": ["-DUVM_NO_MALLOC"],
+        "//conditions:default": [],
+    }),
     includes = ["src/dpi"],
     textual_hdrs = [
         "src/dpi/uvm_common.c",

@@ -50,9 +50,16 @@ verilog_library(
 filegroup(
     name = "dpi_files",
     srcs = [
+        "elf_compat.h",
         "sram_backdoor.cc",
         "sram_backdoor.h",
     ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "elf_compat",
+    hdrs = ["elf_compat.h"],
     visibility = ["//visibility:public"],
 )
 
@@ -61,5 +68,8 @@ cc_library(
     srcs = ["sram_backdoor.cc"],
     hdrs = ["sram_backdoor.h"],
     visibility = ["//visibility:public"],
-    deps = ["@verilator//:svdpi"],
+    deps = [
+        ":elf_compat",
+        "@verilator//:svdpi",
+    ],
 )
