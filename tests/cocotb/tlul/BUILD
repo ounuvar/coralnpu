@@ -608,6 +608,71 @@ cocotb_test_suite(
     verilator_model = "//hdl/chisel/src/soc:coralnpu_chisel_subsystem_hbm_testharness_model",
 )
 
+# BEGIN_TESTCASES_FOR_ext_mem_tile_zero_cocotb
+EXT_MEM_TILE_TESTCASES = [
+    "test_tile_local",
+    "test_tile_ext",
+]
+# END_TESTCASES_FOR_ext_mem_tile_zero_cocotb
+
+# Tile-sized conv benchmark for the DMA tiling study (#11): the same firmware on the highmem
+# testharness with zero and with HBM-like external memory latency.
+cocotb_test_suite(
+    name = "ext_mem_tile_zero_cocotb",
+    simulators = ["verilator"],
+    testcases = EXT_MEM_TILE_TESTCASES,
+    testcases_vname = "EXT_MEM_TILE_TESTCASES",
+    tests_kwargs = {
+        "hdl_toplevel": "CoralNPUChiselSubsystemHighmemTestHarness",
+        "waves": False,
+        "seed": "42",
+        "test_module": ["test_ext_mem_tile.py"],
+        "deps": [
+            "//coralnpu_test_utils:TileLinkULInterface",
+            "//coralnpu_test_utils:backdoor",
+            requirement("pyelftools"),
+            "@bazel_tools//tools/python/runfiles",
+        ],
+        "data": [
+            "//sw/opt/litert-micro/test:ext_mem_tile_bench_local.elf",
+            "//sw/opt/litert-micro/test:ext_mem_tile_bench_ext.elf",
+        ],
+        "default_testcase_size": "enormous",
+        "size": "enormous",
+        "timeout": "eternal",
+        "tags": ["manual"],
+    },
+    verilator_model = "//hdl/chisel/src/soc:coralnpu_chisel_subsystem_highmem_testharness_model",
+)
+
+cocotb_test_suite(
+    name = "ext_mem_tile_hbm_cocotb",
+    simulators = ["verilator"],
+    testcases = EXT_MEM_TILE_TESTCASES,
+    testcases_vname = "EXT_MEM_TILE_TESTCASES",
+    tests_kwargs = {
+        "hdl_toplevel": "CoralNPUChiselSubsystemHighmemHbmTestHarness",
+        "waves": False,
+        "seed": "42",
+        "test_module": ["test_ext_mem_tile.py"],
+        "deps": [
+            "//coralnpu_test_utils:TileLinkULInterface",
+            "//coralnpu_test_utils:backdoor",
+            requirement("pyelftools"),
+            "@bazel_tools//tools/python/runfiles",
+        ],
+        "data": [
+            "//sw/opt/litert-micro/test:ext_mem_tile_bench_local.elf",
+            "//sw/opt/litert-micro/test:ext_mem_tile_bench_ext.elf",
+        ],
+        "default_testcase_size": "enormous",
+        "size": "enormous",
+        "timeout": "eternal",
+        "tags": ["manual"],
+    },
+    verilator_model = "//hdl/chisel/src/soc:coralnpu_chisel_subsystem_highmem_hbm_testharness_model",
+)
+
 # BEGIN_TESTCASES_FOR_gpio_integration_cocotb
 GPIO_INTEGRATION_TESTCASES = [
     "test_gpio_integration",

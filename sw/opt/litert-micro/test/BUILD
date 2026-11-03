@@ -182,6 +182,31 @@ coralflow_test(
     ],
 )
 
+# Tile-sized conv benchmark for the DMA tiling study (#11). One MobileNet layer 17 tile; the
+# _local variant keeps its data in DTCM, the _ext variant keeps it in external memory.
+coralnpu_v2_binary(
+    name = "ext_mem_tile_bench_local",
+    srcs = ["ext_mem_tile_bench.cc"],
+    dtcm_size_kbytes = 1024,
+    itcm_size_kbytes = 1024,
+    deps = [
+        "//sw/opt/litert-micro:conv",
+        "//sw/utils",
+    ],
+)
+
+coralnpu_v2_binary(
+    name = "ext_mem_tile_bench_ext",
+    srcs = ["ext_mem_tile_bench.cc"],
+    copts = ["-DTILE_IN_EXTMEM"],
+    dtcm_size_kbytes = 1024,
+    itcm_size_kbytes = 1024,
+    deps = [
+        "//sw/opt/litert-micro:conv",
+        "//sw/utils",
+    ],
+)
+
 coralnpu_v2_binary(
     name = "mobilenet_conv_bench",
     srcs = ["mobilenet_conv_bench.cc"],
