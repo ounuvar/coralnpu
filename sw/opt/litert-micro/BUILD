@@ -72,6 +72,38 @@ cc_library(
     ],
 )
 
+# Matrix-engine (VME/Zvt) kernels for idea 5 (#12).
+cc_library(
+    name = "vme_util",
+    hdrs = ["vme_util.h"],
+    target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
+)
+
+cc_library(
+    name = "conv_vme",
+    srcs = ["conv_vme.cc"],
+    hdrs = ["conv_vme.h"],
+    target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
+    deps = [
+        ":accumulator_util",
+        ":vme_util",
+        "@tflite_micro//tensorflow/lite/kernels/internal:common",
+        "@tflite_micro//tensorflow/lite/kernels/internal:types",
+    ],
+)
+
+cc_library(
+    name = "fully_connected_vme",
+    srcs = ["fully_connected_vme.cc"],
+    hdrs = ["fully_connected_vme.h"],
+    target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
+    deps = [
+        ":conv_vme",
+        "@tflite_micro//tensorflow/lite/kernels/internal:common",
+        "@tflite_micro//tensorflow/lite/kernels/internal:types",
+    ],
+)
+
 cc_library(
     name = "pooling",
     srcs = ["pooling.cc"],
