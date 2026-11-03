@@ -148,6 +148,41 @@ coralflow_test(
 )
 
 coralnpu_v2_binary(
+    name = "mobilenet_kernel_bench",
+    srcs = ["mobilenet_kernel_bench.cc"],
+    dtcm_size_kbytes = 1024,
+    itcm_size_kbytes = 1024,
+    deps = [
+        "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:depthwise_conv",
+        "//sw/utils",
+        "@tflite_micro//tensorflow/lite/kernels/internal:reference_base",
+    ],
+)
+
+# Baseline per-layer conv and depthwise cycles for MobileNet (#3), on the RVV
+# core without the matrix engine. npusim checks bit-exactness against the
+# TFLite reference on every layer; the verilator target gives the cycle counts.
+# Pick layers with --test_env=MOBILENET_KERNEL_LAYERS=0,1,4 (model op indices)
+# and skip the reference run with --test_env=MOBILENET_KERNEL_SKIP_REF=1.
+coralflow_test(
+    name = "mobilenet_kernel_bench",
+    srcs = ["mobilenet_kernel_bench.py"],
+    elf = ":mobilenet_kernel_bench.elf",
+    highmem = True,
+    main = "mobilenet_kernel_bench.py",
+    tags = ["manual"],
+    targets = [
+        "npusim",
+        "verilator",
+    ],
+    deps = [
+        # The RTL rule adds numpy itself; npusim gets it from the fixture.
+        "@bazel_tools//tools/python/runfiles",
+    ],
+)
+
+coralnpu_v2_binary(
     name = "mobilenet_conv_bench",
     srcs = ["mobilenet_conv_bench.cc"],
     dtcm_size_kbytes = 1024,
