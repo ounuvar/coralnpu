@@ -35,6 +35,13 @@ def define_coralnpu_toolchain():
         urls = [
             "https://storage.googleapis.com/shodan-public-artifacts/toolchain_coralnpu_v2-2026-06-29.tar.xz",
         ],
+        # Local toolchains only: source of htif_nano.specs/htif.ld, at the
+        # commit toolchain/build_scripts/coralnpu_v2_toolchain_build.sh uses.
+        htif_urls = [
+            "https://github.com/ucb-bar/libgloss-htif/archive/39234a16247ab1fa234821b251f1f1870c3de343.tar.gz",
+        ],
+        htif_sha256 = "2e7b337d53bf7f30c6a49538523cd2b3d985a59c28cf2658df549d7518e38532",
+        htif_strip_prefix = "libgloss-htif-39234a16247ab1fa234821b251f1f1870c3de343",
     )
 
 def define_pybind11_abseil():
@@ -116,7 +123,11 @@ def define_mpact_repos():
         sha256 = "2dc7e2463556f2e29bb6c2429833d9f672774dde79d4ced7f553703018c9e91c",
         strip_prefix = "mpact-sim-9c43949f80bef9978654473d9703ac29de30bc34",
         url = "https://github.com/google/mpact-sim/archive/9c43949f80bef9978654473d9703ac29de30bc34.tar.gz",
-        patches = ["@coralnpu_hw//third_party/patches:mpact_sim_isa_includes.patch"],
+        patches = [
+            "@coralnpu_hw//third_party/patches:mpact_sim_isa_includes.patch",
+            # Run ANTLR with Bazel's hermetic JDK instead of `java` from PATH.
+            "@coralnpu_hw//third_party/patches:mpact_sim_hermetic_java.patch",
+        ],
         patch_args = ["-p1"],
     )
 
@@ -126,7 +137,11 @@ def define_mpact_repos():
         sha256 = "2dc7e2463556f2e29bb6c2429833d9f672774dde79d4ced7f553703018c9e91c",
         strip_prefix = "mpact-sim-9c43949f80bef9978654473d9703ac29de30bc34",
         url = "https://github.com/google/mpact-sim/archive/9c43949f80bef9978654473d9703ac29de30bc34.tar.gz",
-        patches = ["@coralnpu_hw//third_party/patches:mpact_sim_isa_includes.patch"],
+        patches = [
+            "@coralnpu_hw//third_party/patches:mpact_sim_isa_includes.patch",
+            # Run ANTLR with Bazel's hermetic JDK instead of `java` from PATH.
+            "@coralnpu_hw//third_party/patches:mpact_sim_hermetic_java.patch",
+        ],
         patch_args = ["-p1"],
     )
 

@@ -145,6 +145,13 @@ else
   HAVE_BREW=0
 fi
 
+if [[ -x /opt/homebrew/bin/dtc ]]; then
+  ok "dtc ($(/opt/homebrew/bin/dtc --version 2>/dev/null | head -1)) for Spike"
+else
+  fail "dtc (device-tree compiler) not at /opt/homebrew/bin/dtc; Spike runs it during simulation" \
+    "brew install dtc"
+fi
+
 BAZEL=""
 if command -v bazelisk >/dev/null 2>&1; then
   BAZEL="bazelisk"
@@ -210,12 +217,8 @@ else
       "Use riscv-software-src/riscv/riscv-gnu-toolchain (Homebrew core's riscv64-elf-gcc has no libc)."
   fi
 
-  if [[ -e "${TC_PREFIX}/riscv64-unknown-elf/lib/htif_nano.specs" ]]; then
-    ok "libgloss-htif present (semihosting targets supported)"
-  else
-    warn "No htif_nano.specs: semihosting targets won't link (only tests/npusim_examples and" \
-      "tests/verilator_sim:htif_semihosting_test need it)."
-  fi
+  # Semihosting's htif_nano.specs/htif.ld are fetched by Bazel
+  # (rules/coralnpu_toolchain.bzl) when the toolchain lacks them.
 
   TMP="$(mktemp -d)"
   trap 'rm -rf "${TMP}"' EXIT

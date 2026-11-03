@@ -29,7 +29,17 @@ configure_make(
     ],
     env = {
         "CXXFLAGS": "-std=c++20",
-    },
+    } | select({
+        # Spike runs dtc at simulation time (execlp of the configure-time
+        # path), so it must be a stable system binary, not a Bazel output.
+        # Bazel's strict action PATH hides Homebrew, so name it explicitly.
+        # Bazel's macOS archiver is Apple libtool, which rejects `$(AR) rcs`.
+        "@platforms//os:macos": {
+            "AR": "/usr/bin/ar",
+            "DTC": "/opt/homebrew/bin/dtc",
+        },
+        "//conditions:default": {},
+    }),
     lib_source = ":all_srcs",
     out_binaries = ["spike"],
     out_static_libs = [
