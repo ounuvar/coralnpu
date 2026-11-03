@@ -198,7 +198,9 @@ def _verilator_cocotb_model_impl(ctx):
     def _abs(p):
         return p if p.startswith("/") else "$PWD/" + p
 
-    make_cmd = "PATH=`dirname {ld}`:$PATH make -j {parallelism} -C {outdir} -f Vtop.mk OPT_FAST=-O3 {trace} CXX={cxx} AR={ar} LINK={cxx} > {make_log} 2>&1".format(
+    # USER_LDLIBS=-ldl: on glibc < 2.34 (e.g. RHEL 8), dlsym is in libdl and
+    # verilated.o fails to link without it. Harmless on newer glibc.
+    make_cmd = "PATH=`dirname {ld}`:$PATH make -j {parallelism} -C {outdir} -f Vtop.mk OPT_FAST=-O3 USER_LDLIBS=-ldl {trace} CXX={cxx} AR={ar} LINK={cxx} > {make_log} 2>&1".format(
         outdir = outdir,
         cocotb_lib_path = cocotb_lib_path,
         make_log = make_log.path,
