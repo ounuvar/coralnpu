@@ -14,7 +14,6 @@
 
 #include "tests/verilator_sim/coralnpu/core_mini_axi_tb.h"
 
-#include "hdl/verilog/elf_compat.h"
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -26,6 +25,7 @@
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
+#include "hdl/verilog/elf_compat.h"
 #include "tests/verilator_sim/elf.h"
 #include "tests/verilator_sim/sysc_tb.h"
 

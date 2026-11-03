@@ -14,11 +14,11 @@
 
 #include "tests/verilator_sim/elf.h"
 
-#include "hdl/verilog/elf_compat.h"
-
 #include <cstdint>
 #include <cstring>
 #include <string_view>
+
+#include "hdl/verilog/elf_compat.h"
 
 namespace {
 

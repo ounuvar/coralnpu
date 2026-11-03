@@ -39,15 +39,15 @@ typedef uint64_t Elf64_Xword;
 typedef uint64_t Elf64_Addr;
 typedef uint64_t Elf64_Off;
 
-#define EI_NIDENT 16
-#define EI_CLASS 4
-#define ELFMAG "\177ELF"
-#define SELFMAG 4
+#define EI_NIDENT  16
+#define EI_CLASS   4
+#define ELFMAG     "\177ELF"
+#define SELFMAG    4
 #define ELFCLASS32 1
 #define ELFCLASS64 2
 
-#define PT_LOAD 1
-#define SHN_UNDEF 0
+#define PT_LOAD    1
+#define SHN_UNDEF  0
 #define SHT_SYMTAB 2
 #define SHT_STRTAB 3
 

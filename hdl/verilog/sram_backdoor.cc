@@ -14,8 +14,6 @@
 
 #include "sram_backdoor.h"
 
-#include "elf_compat.h"
-
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -23,6 +21,7 @@
 #include <random>
 #include <vector>
 
+#include "elf_compat.h"
 #include "svdpi.h"
 
 namespace coralnpu {
