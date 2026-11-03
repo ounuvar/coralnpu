@@ -559,6 +559,55 @@ cocotb_test_suite(
     verilator_model = "//hdl/chisel/src/soc:coralnpu_chisel_subsystem_testharness_model",
 )
 
+# BEGIN_TESTCASES_FOR_ext_mem_latency_baseline_cocotb
+EXT_MEM_LATENCY_TESTCASES = [
+    "test_sram_latency",
+    "test_dma_copy_time",
+]
+# END_TESTCASES_FOR_ext_mem_latency_baseline_cocotb
+
+# Latency calibration for the external SRAM model (#11): run once on the default subsystem and
+# once on the HBM-latency subsystem; the difference is the latency the model adds.
+cocotb_test_suite(
+    name = "ext_mem_latency_baseline_cocotb",
+    simulators = ["verilator"],
+    testcases = EXT_MEM_LATENCY_TESTCASES,
+    testcases_vname = "EXT_MEM_LATENCY_TESTCASES",
+    tests_kwargs = {
+        "hdl_toplevel": "CoralNPUChiselSubsystemTestHarness",
+        "waves": False,
+        "seed": "42",
+        "test_module": ["test_ext_mem_latency.py"],
+        "deps": [
+            "//coralnpu_test_utils:TileLinkULInterface",
+        ],
+        "default_testcase_size": "medium",
+        "size": "medium",
+        "tags": ["manual"],
+    },
+    verilator_model = "//hdl/chisel/src/soc:coralnpu_chisel_subsystem_testharness_model",
+)
+
+cocotb_test_suite(
+    name = "ext_mem_latency_hbm_cocotb",
+    simulators = ["verilator"],
+    testcases = EXT_MEM_LATENCY_TESTCASES,
+    testcases_vname = "EXT_MEM_LATENCY_TESTCASES",
+    tests_kwargs = {
+        "hdl_toplevel": "CoralNPUChiselSubsystemHbmTestHarness",
+        "waves": False,
+        "seed": "42",
+        "test_module": ["test_ext_mem_latency.py"],
+        "deps": [
+            "//coralnpu_test_utils:TileLinkULInterface",
+        ],
+        "default_testcase_size": "medium",
+        "size": "medium",
+        "tags": ["manual"],
+    },
+    verilator_model = "//hdl/chisel/src/soc:coralnpu_chisel_subsystem_hbm_testharness_model",
+)
+
 # BEGIN_TESTCASES_FOR_gpio_integration_cocotb
 GPIO_INTEGRATION_TESTCASES = [
     "test_gpio_integration",

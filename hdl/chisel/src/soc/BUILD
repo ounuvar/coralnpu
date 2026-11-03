@@ -150,6 +150,36 @@ verilator_cocotb_model(
     ],
 )
 
+# Default-size subsystem with the F2 HBM-like external memory latency (see issue #11), for the
+# latency calibration test. Same module name scheme as the 64-bit variant.
+chisel_cc_library(
+    name = "coralnpu_chisel_subsystem_hbm_testharness_cc_library",
+    chisel_lib = ":coralnpu_chisel_subsystem_lib",
+    emit_class = "coralnpu.soc.CoralNPUChiselSubsystemEmitter",
+    gen_flags = [
+        "--enableTestHarness",
+        "--extMemReadLatency",
+        "68",
+        "--extMemWriteLatency",
+        "41",
+        "--moduleName",
+        "CoralNPUChiselSubsystemHbm",
+    ],
+    module_name = "CoralNPUChiselSubsystemHbmTestHarness",
+    vopts = RVV_CORE_MINI_AXI_VOPTS,
+)
+
+verilator_cocotb_model(
+    name = "coralnpu_chisel_subsystem_hbm_testharness_model",
+    cflags = VERILATOR_BUILD_ARGS,
+    hdl_toplevel = "CoralNPUChiselSubsystemHbmTestHarness",
+    trace = True,
+    verilog_source = ":coralnpu_chisel_subsystem_hbm_testharness_cc_library_emit_verilog",
+    deps = [
+        "//hdl/verilog:sram_backdoor",
+    ],
+)
+
 chisel_cc_library(
     name = "coralnpu_chisel_subsystem_64_testharness_cc_library",
     chisel_lib = ":coralnpu_chisel_subsystem_lib",
