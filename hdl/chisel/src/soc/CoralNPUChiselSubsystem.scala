@@ -535,20 +535,20 @@ abstract class BaseCoralNPUChiselSubsystemEmitter {
     val enableTestHarness = args.contains("--enableTestHarness")
 
     // --- Parse command-line arguments for TCM sizes ---
-    var itcmSizeKBytes = Parameters.itcmSizeKBytesDefault // Default ITCM size in KBytes
-    var dtcmSizeKBytes = Parameters.dtcmSizeKBytesDefault // Default DTCM size in KBytes
-    var xlen           = 32
-    var moduleName     = ""
+    var itcmSizeKBytes     = Parameters.itcmSizeKBytesDefault // Default ITCM size in KBytes
+    var dtcmSizeKBytes     = Parameters.dtcmSizeKBytesDefault // Default DTCM size in KBytes
+    var xlen               = 32
+    var moduleName         = ""
     var extMemReadLatency  = 0
     var extMemWriteLatency = 0
     args.sliding(2, 1).foreach {
-      case Array("--itcmSizeKBytes", size) => itcmSizeKBytes = size.toInt
-      case Array("--dtcmSizeKBytes", size) => dtcmSizeKBytes = size.toInt
-      case Array("--xlen", size)           => xlen = size.toInt
-      case Array("--moduleName", name)     => moduleName = name
+      case Array("--itcmSizeKBytes", size)  => itcmSizeKBytes = size.toInt
+      case Array("--dtcmSizeKBytes", size)  => dtcmSizeKBytes = size.toInt
+      case Array("--xlen", size)            => xlen = size.toInt
+      case Array("--moduleName", name)      => moduleName = name
       case Array("--extMemReadLatency", n)  => extMemReadLatency = n.toInt
       case Array("--extMemWriteLatency", n) => extMemWriteLatency = n.toInt
-      case _                               =>
+      case _                                =>
     }
 
     val itcmSize  = MemorySize.fromKBytes(itcmSizeKBytes)
@@ -566,7 +566,7 @@ abstract class BaseCoralNPUChiselSubsystemEmitter {
       "--extMemReadLatency",
       "--extMemWriteLatency"
     )
-    val indicesToSkip   = args.zipWithIndex
+    val indicesToSkip = args.zipWithIndex
       .collect {
         case (arg, idx) if flagsWithValues.contains(arg) => Seq(idx, idx + 1)
       }
