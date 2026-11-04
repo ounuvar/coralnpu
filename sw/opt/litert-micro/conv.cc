@@ -1158,6 +1158,238 @@ void Conv_4x4_OCVectorized(
   }
 }
 
+#if CORALNPU_RVV_CONV
+// Configuration S (#26), behind --//sw/opt/litert-micro:rvv_conv.
+//
+// Pointwise (1x1, stride 1, no padding) conv as a GEMM over pixels x output
+// channels (#26). Weights are transposed to [in_d][out_d] int16 and the input
+// offset is folded into the bias (bias + input_offset * sum(w)), so the inner
+// loop is one vwmacc.vx per pixel per input channel. Each weight load is
+// shared by kPixels pixels. Returns false if scratch allocation fails, so the
+// caller can fall back to the reference kernel. noinline: inlined into
+// ConvPerChannel, it changes the codegen of the inlined reference fallback
+// (+4% instructions on MobileNet's 3x3 first layer).
+__attribute__((noinline)) static bool Conv1x1PerChannel(
+    const ConvParams &params, const int32_t *output_multiplier, const uint8_t *shift_left,
+    const uint8_t *shift_right, const RuntimeShape &input_shape, const int8_t *input_data,
+    const RuntimeShape &filter_shape, const int8_t *filter_data, const int32_t *bias_data,
+    const RuntimeShape &output_shape, int8_t *output_data) {
+  constexpr int kPixels = 4;
+  const int in_d        = input_shape.Dims(3);
+  const int out_d       = output_shape.Dims(3);
+  const int pixels      = output_shape.Dims(0) * output_shape.Dims(1) * output_shape.Dims(2);
+
+  auto weights = make_aligned_array<int16_t>(16, in_d * out_d);
+  auto bias    = make_aligned_array<int32_t>(16, out_d);
+  auto accs    = make_aligned_array<int32_t>(16, kPixels * out_d);
+  if (!weights || !bias || !accs) {
+    return false;
+  }
+
+  // Transpose OHWI [out_d][in_d] int8 to [in_d][out_d] int16, summing each
+  // filter for the offset fold.
+  for (int n = 0; n < out_d; ++n) {
+    const int8_t *row = &filter_data[n * in_d];
+    vint32m1_t sum    = __riscv_vmv_v_x_i32m1(0, 1);
+    for (int c = 0; c < in_d;) {
+      const size_t vl    = __riscv_vsetvl_e8m2(in_d - c);
+      const vint16m4_t w = __riscv_vsext_vf2_i16m4(__riscv_vle8_v_i8m2(&row[c], vl), vl);
+      __riscv_vsse16_v_i16m4(&weights[c * out_d + n], out_d * sizeof(int16_t), w, vl);
+      sum = __riscv_vwredsum_vs_i16m4_i32m1(w, sum, vl);
+      c += vl;
+    }
+    const int32_t b = bias_data ? bias_data[n] : 0;
+    bias[n]         = b + params.input_offset * __riscv_vmv_x_s_i32m1_i32(sum);
+  }
+
+  for (int p0 = 0; p0 < pixels; p0 += kPixels) {
+    const int np     = std::min(kPixels, pixels - p0);
+    const int8_t *in = &input_data[p0 * in_d];
+    for (int n0 = 0; n0 < out_d;) {
+      const size_t vl     = __riscv_vsetvl_e32m4(out_d - n0);
+      const int16_t *wcol = &weights[n0];
+      if (np == kPixels) {
+        vint32m4_t acc0 = __riscv_vmv_v_x_i32m4(0, vl);
+        vint32m4_t acc1 = __riscv_vmv_v_x_i32m4(0, vl);
+        vint32m4_t acc2 = __riscv_vmv_v_x_i32m4(0, vl);
+        vint32m4_t acc3 = __riscv_vmv_v_x_i32m4(0, vl);
+        for (int c = 0; c < in_d; ++c) {
+          const vint16m2_t w = __riscv_vle16_v_i16m2(&wcol[c * out_d], vl);
+          acc0               = __riscv_vwmacc_vx_i32m4(acc0, in[c], w, vl);
+          acc1               = __riscv_vwmacc_vx_i32m4(acc1, in[in_d + c], w, vl);
+          acc2               = __riscv_vwmacc_vx_i32m4(acc2, in[2 * in_d + c], w, vl);
+          acc3               = __riscv_vwmacc_vx_i32m4(acc3, in[3 * in_d + c], w, vl);
+        }
+        __riscv_vse32_v_i32m4(&accs[n0], acc0, vl);
+        __riscv_vse32_v_i32m4(&accs[out_d + n0], acc1, vl);
+        __riscv_vse32_v_i32m4(&accs[2 * out_d + n0], acc2, vl);
+        __riscv_vse32_v_i32m4(&accs[3 * out_d + n0], acc3, vl);
+      } else {
+        for (int p = 0; p < np; ++p) {
+          vint32m4_t acc = __riscv_vmv_v_x_i32m4(0, vl);
+          for (int c = 0; c < in_d; ++c) {
+            const vint16m2_t w = __riscv_vle16_v_i16m2(&wcol[c * out_d], vl);
+            acc                = __riscv_vwmacc_vx_i32m4(acc, in[p * in_d + c], w, vl);
+          }
+          __riscv_vse32_v_i32m4(&accs[p * out_d + n0], acc, vl);
+        }
+      }
+      n0 += vl;
+    }
+    PostprocessAcc(accs.get(), bias.get(), shift_left, output_multiplier, shift_right,
+                   params.output_offset, params.quantized_activation_min,
+                   params.quantized_activation_max, &output_data[p0 * out_d], np, out_d);
+  }
+  return true;
+}
+
+// 3x3 conv vectorized over output pixels (#26), for MobileNet's first layer
+// (224x224x3, 8 output channels, stride 2), where K = 27 and out_d = 8 are
+// too small to vectorize over. Per filter tap, one strided load gathers the
+// input for kVl pixels of an output row, and one vwmacc.vx per output channel
+// (in blocks of 8) accumulates it. Pixels whose taps reach into the padding
+// skip those taps, as the reference does, in a scalar loop. Each output row
+// is requantized with PostprocessAcc. Returns false if scratch allocation
+// fails. noinline for the same reason as Conv1x1PerChannel.
+__attribute__((noinline)) static bool Conv3x3PerChannel(
+    const ConvParams &params, const int32_t *output_multiplier, const uint8_t *shift_left,
+    const uint8_t *shift_right, const RuntimeShape &input_shape, const int8_t *input_data,
+    const RuntimeShape &filter_shape, const int8_t *filter_data, const int32_t *bias_data,
+    const RuntimeShape &output_shape, int8_t *output_data) {
+  constexpr int kBlock  = 8;  // output channels per block
+  const int batches     = MatchingDim(input_shape, 0, output_shape, 0);
+  const int in_h        = input_shape.Dims(1);
+  const int in_w        = input_shape.Dims(2);
+  const int in_d        = input_shape.Dims(3);
+  const int fh          = filter_shape.Dims(1);
+  const int fw          = filter_shape.Dims(2);
+  const int out_h       = output_shape.Dims(1);
+  const int out_w       = output_shape.Dims(2);
+  const int out_d       = output_shape.Dims(3);
+  const int sh          = params.stride_height;
+  const int sw          = params.stride_width;
+  const int pad_h       = params.padding_values.height;
+  const int pad_w       = params.padding_values.width;
+  const int32_t in_off  = params.input_offset;
+  const int k_size      = fh * fw * in_d;
+  const int blocks      = (out_d + kBlock - 1) / kBlock;
+  const ptrdiff_t lstep = sw * in_d;
+  const ptrdiff_t sstep = out_d * sizeof(int32_t);
+
+  // Weights as int16 [block][k][kBlock], zero-padded past out_d.
+  auto weights = make_aligned_array<int16_t>(16, blocks * k_size * kBlock);
+  auto accs    = make_aligned_array<int32_t>(16, out_w * out_d);
+  if (!weights || !accs) {
+    return false;
+  }
+  for (int b = 0; b < blocks; ++b) {
+    for (int k = 0; k < k_size; ++k) {
+      for (int j = 0; j < kBlock; ++j) {
+        const int n                            = b * kBlock + j;
+        weights[(b * k_size + k) * kBlock + j] = n < out_d ? filter_data[n * k_size + k] : 0;
+      }
+    }
+  }
+
+  // Output pixels whose taps are all inside the input. None exist when the
+  // input is smaller than the filter; checked separately because C division
+  // rounds a negative (in_w - fw + pad_w) toward zero, not down.
+  const int ox_lo = std::min(out_w, (pad_w + sw - 1) / sw);
+  const int ox_hi =
+      in_w < fw ? ox_lo : std::max(ox_lo, std::min(out_w, (in_w - fw + pad_w) / sw + 1));
+  const int oy_lo = std::min(out_h, (pad_h + sh - 1) / sh);
+  const int oy_hi =
+      in_h < fh ? oy_lo : std::max(oy_lo, std::min(out_h, (in_h - fh + pad_h) / sh + 1));
+
+  for (int batch = 0; batch < batches; ++batch) {
+    const int8_t *in = &input_data[batch * in_h * in_w * in_d];
+    for (int oy = 0; oy < out_h; ++oy) {
+      const bool row_inside = oy >= oy_lo && oy < oy_hi;
+      for (int ox = 0; ox < out_w;) {
+        if (row_inside && ox >= ox_lo && ox < ox_hi) {
+          const size_t vl = __riscv_vsetvl_e32m2(ox_hi - ox);
+          for (int b = 0; b < blocks; ++b) {
+            const int16_t *w = &weights[b * k_size * kBlock];
+            vint32m2_t acc0  = __riscv_vmv_v_x_i32m2(0, vl);
+            vint32m2_t acc1  = __riscv_vmv_v_x_i32m2(0, vl);
+            vint32m2_t acc2  = __riscv_vmv_v_x_i32m2(0, vl);
+            vint32m2_t acc3  = __riscv_vmv_v_x_i32m2(0, vl);
+            vint32m2_t acc4  = __riscv_vmv_v_x_i32m2(0, vl);
+            vint32m2_t acc5  = __riscv_vmv_v_x_i32m2(0, vl);
+            vint32m2_t acc6  = __riscv_vmv_v_x_i32m2(0, vl);
+            vint32m2_t acc7  = __riscv_vmv_v_x_i32m2(0, vl);
+            for (int ky = 0; ky < fh; ++ky) {
+              const int iy       = oy * sh - pad_h + ky;
+              const int8_t *taps = &in[(iy * in_w + ox * sw - pad_w) * in_d];
+              const int row_taps = fw * in_d;
+              for (int t = 0; t < row_taps; ++t, w += kBlock) {
+                const vint16m1_t x = __riscv_vadd_vx_i16m1(
+                    __riscv_vsext_vf2_i16m1(__riscv_vlse8_v_i8mf2(&taps[t], lstep, vl), vl),
+                    static_cast<int16_t>(in_off), vl);
+                acc0 = __riscv_vwmacc_vx_i32m2(acc0, w[0], x, vl);
+                acc1 = __riscv_vwmacc_vx_i32m2(acc1, w[1], x, vl);
+                acc2 = __riscv_vwmacc_vx_i32m2(acc2, w[2], x, vl);
+                acc3 = __riscv_vwmacc_vx_i32m2(acc3, w[3], x, vl);
+                acc4 = __riscv_vwmacc_vx_i32m2(acc4, w[4], x, vl);
+                acc5 = __riscv_vwmacc_vx_i32m2(acc5, w[5], x, vl);
+                acc6 = __riscv_vwmacc_vx_i32m2(acc6, w[6], x, vl);
+                acc7 = __riscv_vwmacc_vx_i32m2(acc7, w[7], x, vl);
+              }
+            }
+            // Scatter channel-major accumulators to the [pixel][out_d] row.
+            const int nn = std::min(kBlock, out_d - b * kBlock);
+            int32_t *dst = &accs[ox * out_d + b * kBlock];
+            if (nn > 0)
+              __riscv_vsse32_v_i32m2(&dst[0], sstep, acc0, vl);
+            if (nn > 1)
+              __riscv_vsse32_v_i32m2(&dst[1], sstep, acc1, vl);
+            if (nn > 2)
+              __riscv_vsse32_v_i32m2(&dst[2], sstep, acc2, vl);
+            if (nn > 3)
+              __riscv_vsse32_v_i32m2(&dst[3], sstep, acc3, vl);
+            if (nn > 4)
+              __riscv_vsse32_v_i32m2(&dst[4], sstep, acc4, vl);
+            if (nn > 5)
+              __riscv_vsse32_v_i32m2(&dst[5], sstep, acc5, vl);
+            if (nn > 6)
+              __riscv_vsse32_v_i32m2(&dst[6], sstep, acc6, vl);
+            if (nn > 7)
+              __riscv_vsse32_v_i32m2(&dst[7], sstep, acc7, vl);
+          }
+          ox += vl;
+        } else {
+          for (int n = 0; n < out_d; ++n) {
+            const int8_t *f = &filter_data[n * k_size];
+            int32_t acc     = 0;
+            for (int ky = 0; ky < fh; ++ky) {
+              const int iy = oy * sh - pad_h + ky;
+              for (int kx = 0; kx < fw; ++kx) {
+                const int ix = ox * sw - pad_w + kx;
+                if (iy < 0 || iy >= in_h || ix < 0 || ix >= in_w) {
+                  continue;
+                }
+                const int8_t *x  = &in[(iy * in_w + ix) * in_d];
+                const int8_t *fk = &f[(ky * fw + kx) * in_d];
+                for (int c = 0; c < in_d; ++c) {
+                  acc += fk[c] * (x[c] + in_off);
+                }
+              }
+            }
+            accs[ox * out_d + n] = acc;
+          }
+          ++ox;
+        }
+      }
+      PostprocessAcc(accs.get(), bias_data, shift_left, output_multiplier, shift_right,
+                     params.output_offset, params.quantized_activation_min,
+                     params.quantized_activation_max,
+                     &output_data[((batch * out_h + oy) * out_w) * out_d], out_w, out_d);
+    }
+  }
+  return true;
+}
+#endif  // CORALNPU_RVV_CONV
+
 void ConvPerChannel(const ConvParams &params, const OpDataConvCustom &data,
                     const int32_t *output_multiplier, const int32_t *output_shift,
                     TfLiteContext *context, const RuntimeShape &input_shape,
@@ -1236,6 +1468,21 @@ void ConvPerChannel(const ConvParams &params, const OpDataConvCustom &data,
     Conv2D_4x4(params, data, input_shape, input_data, filter_shape, filter_data_copy.get(),
                bias_data_copy.get(), output_shape, output_data, data.repacked_weights_generic,
                context);
+#if CORALNPU_RVV_CONV
+  } else if (filter_height == 1 && filter_width == 1 && groups == 1 && params.stride_width == 1 &&
+             params.stride_height == 1 && params.padding_values.width == 0 &&
+             params.padding_values.height == 0 &&
+             Conv1x1PerChannel(params, output_multiplier, shift_left.get(), shift_right.get(),
+                               input_shape, input_data, filter_shape, filter_data_copy.get(),
+                               bias_data_copy.get(), output_shape, output_data)) {
+    // Pointwise conv done by Conv1x1PerChannel.
+  } else if (filter_height == 3 && filter_width == 3 && groups == 1 &&
+             params.dilation_width_factor == 1 && params.dilation_height_factor == 1 &&
+             Conv3x3PerChannel(params, output_multiplier, shift_left.get(), shift_right.get(),
+                               input_shape, input_data, filter_shape, filter_data_copy.get(),
+                               bias_data_copy.get(), output_shape, output_data)) {
+    // 3x3 conv done by Conv3x3PerChannel.
+#endif  // CORALNPU_RVV_CONV
   } else {
     MicroPrintf("Fallback kernel: fh=%d fw=%d id=%d od=%d oh=%d ow=%d", filter_height, filter_width,
                 input_depth, output_depth, output_shape.Dims(1), output_shape.Dims(2));
