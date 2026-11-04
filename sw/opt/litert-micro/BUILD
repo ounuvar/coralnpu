@@ -69,6 +69,13 @@ cc_library(
     hdrs = ["requant_ref.h"],
 )
 
+# Tile planner for DMA-tiled pointwise conv (#11). Portable: builds for the host (unit tests) and
+# for CoralNPU.
+cc_library(
+    name = "conv_tile_plan",
+    hdrs = ["conv_tile_plan.h"],
+)
+
 cc_library(
     name = "depthwise_conv",
     srcs = [

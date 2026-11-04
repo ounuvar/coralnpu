@@ -87,6 +87,16 @@ cc_test(
     ],
 )
 
+# Host tests for the pointwise tile planner (#11).
+cc_test(
+    name = "conv_tile_plan_test",
+    srcs = ["conv_tile_plan_test.cc"],
+    deps = [
+        "//sw/opt/litert-micro:conv_tile_plan",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
 coralnpu_v2_binary(
     name = "conv_vme_test",
     srcs = ["conv_vme_test.cc"],
