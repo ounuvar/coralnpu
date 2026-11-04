@@ -197,7 +197,8 @@ async def run_conv_sim_test(fixture):
             "filter": [48, 4, 4, 16],
             "stride": (1, 1)
         },
-        # 5. Conv3x3PerChannel (fh=3, fw=3)
+        # 5. fh=3, fw=3: Conv3x3PerChannel with --//sw/opt/litert-micro:rvv_conv,
+        # the reference fallback without it.
         {
             "input": [1, 8, 8, 16],
             "filter": [16, 3, 3, 16],
@@ -232,8 +233,8 @@ async def run_conv_sim_test(fixture):
             "stride": (1, 1),
             "padding": "SAME"
         },
-        # 6. Conv1x1PerChannel (fh=1, fw=1, stride 1): pixel count not a
-        # multiple of 4, channel counts not a multiple of 16.
+        # 6. fh=1, fw=1, stride 1: Conv1x1PerChannel with rvv_conv. Pixel
+        # count not a multiple of 4, channel counts not a multiple of 16.
         {
             "input": [1, 6, 7, 13],
             "filter": [21, 1, 1, 13],

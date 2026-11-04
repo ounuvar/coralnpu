@@ -1158,6 +1158,9 @@ void Conv_4x4_OCVectorized(
   }
 }
 
+#if CORALNPU_RVV_CONV
+// Configuration S (#26), behind --//sw/opt/litert-micro:rvv_conv.
+//
 // Pointwise (1x1, stride 1, no padding) conv as a GEMM over pixels x output
 // channels (#26). Weights are transposed to [in_d][out_d] int16 and the input
 // offset is folded into the bias (bias + input_offset * sum(w)), so the inner
@@ -1381,6 +1384,7 @@ __attribute__((noinline)) static bool Conv3x3PerChannel(
   }
   return true;
 }
+#endif  // CORALNPU_RVV_CONV
 
 void ConvPerChannel(const ConvParams &params, const OpDataConvCustom &data,
                     const int32_t *output_multiplier, const int32_t *output_shift,
@@ -1460,6 +1464,7 @@ void ConvPerChannel(const ConvParams &params, const OpDataConvCustom &data,
     Conv2D_4x4(params, data, input_shape, input_data, filter_shape, filter_data_copy.get(),
                bias_data_copy.get(), output_shape, output_data, data.repacked_weights_generic,
                context);
+#if CORALNPU_RVV_CONV
   } else if (filter_height == 1 && filter_width == 1 && groups == 1 && params.stride_width == 1 &&
              params.stride_height == 1 && params.padding_values.width == 0 &&
              params.padding_values.height == 0 &&
@@ -1473,6 +1478,7 @@ void ConvPerChannel(const ConvParams &params, const OpDataConvCustom &data,
                                input_shape, input_data, filter_shape, filter_data_copy.get(),
                                bias_data_copy.get(), output_shape, output_data)) {
     // 3x3 conv done by Conv3x3PerChannel.
+#endif  // CORALNPU_RVV_CONV
   } else {
     MicroPrintf("Fallback kernel: fh=%d fw=%d id=%d od=%d oh=%d ow=%d", filter_height, filter_width,
                 input_depth, output_depth, output_shape.Dims(1), output_shape.Dims(2));
