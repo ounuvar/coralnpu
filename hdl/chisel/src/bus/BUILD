@@ -54,6 +54,7 @@ chisel_library(
         "TlulIntegrity.scala",
         "TlulIntegrityTestbench.scala",
         "TlulLocalXbar.scala",
+        "TlulResponseDelay.scala",
         "TlulRouter.scala",
         "TlulSocket1N.scala",
         "TlulSocketM1.scala",
@@ -320,6 +321,16 @@ chisel_test(
         ":bus",
         "//hdl/chisel/src/common:testing",
         "//hdl/chisel/src/coralnpu:coralnpu_params",
+    ],
+)
+
+chisel_test(
+    name = "tlul_response_delay_test",
+    size = "small",
+    srcs = ["TlulResponseDelayTest.scala"],
+    deps = [
+        ":bus",
+        "//hdl/chisel/src/common:testing",
     ],
 )
 

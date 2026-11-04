@@ -20,7 +20,16 @@ import bus._
 import coralnpu.Parameters
 import coralnpu.Sram_Nx128
 
-class TlulSram(p: Parameters, sramSizeBytes: Int, globalBaseAddr: Int = 0) extends Module {
+/** TL-UL SRAM. `readLatency` and `writeLatency` add cycles to each response to model a slow
+  * external memory in simulation. With both 0 (the default) no delay logic is generated.
+  */
+class TlulSram(
+  p: Parameters,
+  sramSizeBytes: Int,
+  globalBaseAddr: Int = 0,
+  readLatency: Int = 0,
+  writeLatency: Int = 0
+) extends Module {
   val tlul_p = p.toTLUL()
   val io     = IO(new Bundle {
     val tl = Flipped(new OpenTitanTileLink.Host2Device(tlul_p))
@@ -32,7 +41,24 @@ class TlulSram(p: Parameters, sramSizeBytes: Int, globalBaseAddr: Int = 0) exten
   val adapter = Module(new TlulToSram(p.toTLUL(), sramAddrWidth))
   val sram    = Module(new Sram_Nx128(tcmEntries, globalBaseAddr))
 
-  adapter.io.tl <> io.tl
+  if (readLatency == 0 && writeLatency == 0) {
+    adapter.io.tl <> io.tl
+  } else {
+    // The adapter takes one request at a time, so the delay line sits on the response side and
+    // holds enough entries to cover the latency.
+    adapter.io.tl.a <> io.tl.a
+    val delay = Module(
+      new TlulResponseDelay(
+        chiselTypeOf(io.tl.d.bits),
+        readLatency,
+        writeLatency,
+        depth = math.max(readLatency, writeLatency) + 2
+      )
+    )
+    delay.io.enq <> adapter.io.tl.d
+    delay.io.isRead := adapter.io.tl.d.bits.opcode === TLULOpcodesD.AccessAckData.asUInt
+    io.tl.d <> delay.io.deq
+  }
 
   sram.io.addr   := adapter.io.sram.addr
   sram.io.enable := adapter.io.sram.enable
