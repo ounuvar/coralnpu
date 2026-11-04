@@ -197,16 +197,75 @@ async def run_conv_sim_test(fixture):
             "filter": [48, 4, 4, 16],
             "stride": (1, 1)
         },
-        # 5. Fallback (fh=3, fw=3)
+        # 5. fh=3, fw=3: Conv3x3PerChannel with --//sw/opt/litert-micro:rvv_conv,
+        # the reference fallback without it.
         {
             "input": [1, 8, 8, 16],
             "filter": [16, 3, 3, 16],
             "stride": (1, 1)
         },
+        # Input smaller than the filter: 2x2 input, 3x3 at stride 2, SAME
+        # padding only at the bottom and right. No pixel is interior.
+        {
+            "input": [1, 2, 2, 3],
+            "filter": [8, 3, 3, 3],
+            "stride": (2, 2),
+            "padding": "SAME"
+        },
+        # Padding on all sides, out_d below one 8-channel block.
+        {
+            "input": [1, 9, 11, 3],
+            "filter": [5, 3, 3, 3],
+            "stride": (1, 1),
+            "padding": "SAME"
+        },
+        # Stride 2, odd input: padding on all sides.
+        {
+            "input": [1, 15, 15, 3],
+            "filter": [8, 3, 3, 3],
+            "stride": (2, 2),
+            "padding": "SAME"
+        },
+        # Stride 2, even input: padding only at the bottom and right, as in
+        # MobileNet's first layer.
+        {
+            "input": [1, 16, 18, 4],
+            "filter": [12, 3, 3, 4],
+            "stride": (2, 2),
+            "padding": "SAME"
+        },
+        # Several 8-channel blocks, the last one partial.
+        {
+            "input": [1, 10, 13, 7],
+            "filter": [20, 3, 3, 7],
+            "stride": (1, 1),
+            "padding": "SAME"
+        },
+        # 6. fh=1, fw=1, stride 1: Conv1x1PerChannel with rvv_conv. Pixel
+        # count not a multiple of 4, channel counts not a multiple of 16.
+        {
+            "input": [1, 6, 7, 13],
+            "filter": [21, 1, 1, 13],
+            "stride": (1, 1)
+        },
+        {
+            "input": [1, 5, 5, 40],
+            "filter": [5, 1, 1, 40],
+            "stride": (1, 1)
+        },
+        # 1x1 with stride 2 still takes the reference fallback.
+        {
+            "input": [1, 9, 9, 16],
+            "filter": [24, 1, 1, 16],
+            "stride": (2, 2)
+        },
     ]
 
     for tc in test_cases:
-        await run_test_case(fixture, tc["input"], tc["filter"], tc["stride"])
+        await run_test_case(
+            fixture, tc["input"], tc["filter"], tc["stride"],
+            tc.get("padding", "VALID")
+        )
 
 
 if __name__ == "__main__":

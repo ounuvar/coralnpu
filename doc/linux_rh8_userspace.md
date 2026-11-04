@@ -62,6 +62,15 @@ and a gcc 8 `libstdc++`. Everything is installed under one private directory.
   `bazel fetch --force --repo=@@rules_cc++cc_configure_extension+local_config_cc`.
   Bazel does not hash the wrapper, and caches the toolchain's list of built-in
   include directories.
+- **FPGA Verilator builds need lz4 in the wrapper.** `//fpga:build_chip_verilator*`
+  runs through FuseSoC, which builds with a clean environment: the
+  `C_INCLUDE_PATH` and `LIBRARY_PATH` lines in `.bazelrc.user` do not reach it, and
+  the build stops with `fatal error: 'lz4.h' file not found` in
+  `fstcpp_writer.cpp`. The compiler it uses is the wrapper, so the script puts the
+  private lz4 (`<root>/local`) on the wrapper's include and link paths. If you set
+  up before this was added, re-run `utils/setup_rh8_userspace.sh` (it rewrites the
+  wrapper), then bump `CLANG_WRAPPER_REV` as above. Check with
+  `bazel build //fpga:build_chip_verilator_vector_highmem_rom`.
 - **Do not update clang in the micromamba environment.** The wrapper replaces
   the `clang-19` binary in place and an update would overwrite it. Re-run the
   script to repair it.

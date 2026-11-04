@@ -150,11 +150,14 @@ install_wrapper() {
 # libstdc++.so.6 is too old for the symbols the toolset's headers need). Also rewrites the
 # toolchain's explicit -lstdc++/-latomic, including inside @params files (how Bazel passes link
 # args). Rewritten params files go to a content-addressed cache in /tmp (never deleted here).
+# Also puts the private lz4 (installed below) on the include and link paths. The FuseSoC Verilator
+# build (//fpga:build_chip_verilator*) runs with a clean environment, so the C_INCLUDE_PATH and
+# LIBRARY_PATH in .bazelrc.user never reach it; the compiler it uses is this wrapper.
 real="$(dirname "$(readlink -f "$0")")/clang-19.real"
 # Clang re-execs its own "executable" (this script) with -cc1 first for subprocess frontend
 # jobs; pass those straight to the real binary, untouched.
 case "${1:-}" in -cc1 | -cc1as | -cc1gen-reproducer) exec -a "$0" "${real}" "$@" ;; esac
-extra=(--target=x86_64-redhat-linux-gnu --gcc-install-dir=@GCC_DIR@)
+extra=(--target=x86_64-redhat-linux-gnu --gcc-install-dir=@GCC_DIR@ -isystem @LZ4_DIR@/include)
 args=()
 link=1
 cache="/tmp/clangwrap-$(id -un)"
@@ -180,11 +183,11 @@ for a in "$@"; do
   args+=("${a}")
 done
 if [ "${link}" = 1 ]; then
-  extra+=(-static-libstdc++ -static-libgcc -L@GCC_DIR@)
+  extra+=(-static-libstdc++ -static-libgcc -L@GCC_DIR@ -L@LZ4_DIR@/lib -Wl,-rpath,@LZ4_DIR@/lib)
 fi
 exec -a "$0" "${real}" "${extra[@]}" "${args[@]}"
 EOF
-  sed -i "s#@GCC_DIR@#${gcc_dir}#g" "${bin}/clang-19.tmp"
+  sed -i -e "s#@GCC_DIR@#${gcc_dir}#g" -e "s#@LZ4_DIR@#${ROOT}/local#g" "${bin}/clang-19.tmp"
   chmod 755 "${bin}/clang-19.tmp"
   mv -f "${bin}/clang-19.tmp" "${bin}/clang-19"
 }
@@ -239,7 +242,7 @@ build --symlink_prefix=${ROOT}/links/$(basename "${REPO_DIR}")-
 
 # Bump this to force a rebuild after the clang wrapper changes (Bazel does not hash it). Also run:
 #   bazel fetch --force --repo=@@rules_cc++cc_configure_extension+local_config_cc
-build --action_env=CLANG_WRAPPER_REV=1
+build --action_env=CLANG_WRAPPER_REV=2
 EOF
 }
 

@@ -84,12 +84,30 @@ cc_library(
     ],
 )
 
+# Configuration S (#26): ConvPerChannel dispatches 1x1 and 3x3 convs to RVV
+# kernels instead of the scalar TFLite reference. Off by default, so the
+# default build matches baseline-v0.
+#   bazel test --//sw/opt/litert-micro:rvv_conv ...
+bool_flag(
+    name = "rvv_conv",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "rvv_conv_enabled",
+    flag_values = {":rvv_conv": "True"},
+)
+
 cc_library(
     name = "conv",
     srcs = [
         "conv.cc",
     ],
     hdrs = ["conv.h"],
+    local_defines = select({
+        ":rvv_conv_enabled": ["CORALNPU_RVV_CONV=1"],
+        "//conditions:default": [],
+    }),
     target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
     deps = [
         ":accumulator_util",
