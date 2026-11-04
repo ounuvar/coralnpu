@@ -239,6 +239,71 @@ coralnpu_v2_binary(
     ],
 )
 
+# The same tile, all data in DTCM, also run through the TFLite Micro reference kernel and compared
+# byte for byte (#11: the optimized kernel the tiled variants use is bit-exact on this layer shape).
+coralnpu_v2_binary(
+    name = "ext_mem_tile_bench_ref",
+    srcs = ["ext_mem_tile_bench.cc"],
+    copts = ["-DTILE_CHECK_REFERENCE"],
+    dtcm_size_kbytes = 1024,
+    itcm_size_kbytes = 1024,
+    deps = [
+        "//sw/opt/litert-micro:conv",
+        "//sw/utils",
+        "@tflite_micro//tensorflow/lite/kernels/internal:reference_base",
+    ],
+)
+
+# Four-row runs for the double buffering study (#11): the same four rows through the kernel with
+# all data in DTCM (the reference output), copied with the DMA one transfer at a time (_dma), and
+# copied with the DMA overlapped with compute (_db). 4 and 16 are the DMA beat width in bytes.
+[
+    coralnpu_v2_binary(
+        name = "ext_mem_tile_bench_%s_r4" % variant,
+        srcs = ["ext_mem_tile_bench.cc"],
+        copts = ["-DTILE_ROWS=4"] + flags,
+        dtcm_size_kbytes = 1024,
+        itcm_size_kbytes = 1024,
+        deps = [
+            "//sw/opt/litert-micro:conv",
+            "//sw/utils",
+        ] + ([] if variant == "local" else ["//fpga:dma"]),
+    )
+    for variant, flags in [
+        ("local", []),
+        (
+            "dma4",
+            [
+                "-DTILE_DMA",
+                "-DDMA_BEAT_LOG2=2",
+            ],
+        ),
+        (
+            "dma16",
+            [
+                "-DTILE_DMA",
+                "-DDMA_BEAT_LOG2=4",
+            ],
+        ),
+        (
+            "db4",
+            [
+                "-DTILE_DMA",
+                "-DTILE_DOUBLE_BUFFER",
+                "-DDMA_BEAT_LOG2=2",
+            ],
+        ),
+        (
+            "db16",
+            [
+                "-DTILE_DMA",
+                "-DTILE_DOUBLE_BUFFER",
+                "-DDMA_BEAT_LOG2=4",
+            ],
+        ),
+    ]
+]
+
 coralnpu_v2_binary(
     name = "mobilenet_conv_bench",
     srcs = ["mobilenet_conv_bench.cc"],

@@ -179,11 +179,22 @@ async def run_tile(dut, elf_name):
                ) | ((await result("tile_instret_hi")) << 32)
     checksum = await result("tile_checksum")
     phases = ""
-    if "dma" in elf_name:
+    if "dma" in elf_name or "_db" in elf_name:
         phases = (
             f" dma_in={await result('dma_in_cycles')}"
             f" compute={await result('compute_cycles')}"
             f" dma_out={await result('dma_out_cycles')}"
+            f" dma_stall={await result('dma_stall_cycles')}"
+        )
+    elif "_r4" in elf_name:
+        phases = f" compute={await result('compute_cycles')}"
+    if "_ref" in elf_name:
+        ref_done = await result("tile_ref_done")
+        assert ref_done == 0x600D, f"reference comparison did not run: 0x{ref_done:x}"
+        mismatches = await result("tile_ref_mismatch")
+        phases += f" ref_mismatches={mismatches}"
+        assert mismatches == 0, (
+            f"optimized kernel differs from the reference kernel in {mismatches} bytes"
         )
     print(
         f"RESULT placement={elf_name} cycles={cycles} instret={instret}{phases} "
@@ -214,3 +225,41 @@ async def test_tile_dma4(dut):
 async def test_tile_dma16(dut):
     """Same as test_tile_dma4 with 16-byte DMA beats."""
     await run_tile(dut, "ext_mem_tile_bench_dma16.elf")
+
+
+@cocotb.test()
+async def test_tile_ref(dut):
+    """The all-DTCM tile also run through the TFLite Micro reference kernel; outputs must match."""
+    await run_tile(dut, "ext_mem_tile_bench_ref.elf")
+
+
+# Four rows (double buffering study): all in DTCM as the reference, one DMA transfer at a time,
+# and DMA overlapped with compute (4 and 16 are the beat width in bytes).
+@cocotb.test()
+async def test_tile_local_r4(dut):
+    """Four rows with everything in DTCM (reference output)."""
+    await run_tile(dut, "ext_mem_tile_bench_local_r4.elf")
+
+
+@cocotb.test()
+async def test_tile_dma4_r4(dut):
+    """Four rows, DMA with 4-byte beats, one transfer at a time."""
+    await run_tile(dut, "ext_mem_tile_bench_dma4_r4.elf")
+
+
+@cocotb.test()
+async def test_tile_dma16_r4(dut):
+    """Four rows, DMA with 16-byte beats, one transfer at a time."""
+    await run_tile(dut, "ext_mem_tile_bench_dma16_r4.elf")
+
+
+@cocotb.test()
+async def test_tile_db4_r4(dut):
+    """Four rows, double buffered DMA with 4-byte beats."""
+    await run_tile(dut, "ext_mem_tile_bench_db4_r4.elf")
+
+
+@cocotb.test()
+async def test_tile_db16_r4(dut):
+    """Four rows, double buffered DMA with 16-byte beats."""
+    await run_tile(dut, "ext_mem_tile_bench_db16_r4.elf")
