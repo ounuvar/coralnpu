@@ -105,19 +105,59 @@ config_setting(
     flag_values = {":rvv_conv": "True"},
 )
 
+# Idea 4 (#11): ConvPerChannel runs pointwise (1x1) convs in DMA-planned tiles through a DTCM
+# arena (conv_tiled.cc). Off by default; with it off conv.o is unchanged and conv_tiled.o is not
+# linked.
+#   bazel test --//sw/opt/litert-micro:conv_tiling ...
+bool_flag(
+    name = "conv_tiling",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "conv_tiling_enabled",
+    flag_values = {":conv_tiling": "True"},
+)
+
+# With conv_tiling, copy tiles with the DMA engine instead of memcpy (SoC builds; npusim has no
+# DMA engine).
+#   bazel test --//sw/opt/litert-micro:conv_tiling --//sw/opt/litert-micro:tiling_dma ...
+bool_flag(
+    name = "tiling_dma",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "tiling_dma_enabled",
+    flag_values = {":tiling_dma": "True"},
+)
+
 cc_library(
     name = "conv",
     srcs = [
         "conv.cc",
+        "conv_tiled.cc",
     ],
-    hdrs = ["conv.h"],
+    hdrs = [
+        "conv.h",
+        "conv_pointwise.h",
+        "conv_tiled.h",
+    ],
     local_defines = select({
         ":rvv_conv_enabled": ["CORALNPU_RVV_CONV=1"],
+        "//conditions:default": [],
+    }) + select({
+        ":conv_tiling_enabled": ["CORALNPU_CONV_TILING=1"],
+        "//conditions:default": [],
+    }) + select({
+        ":tiling_dma_enabled": ["CORALNPU_DMA_TILING=1"],
         "//conditions:default": [],
     }),
     target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
     deps = [
         ":accumulator_util",
+        ":conv_tile_plan",
+        ":dma_tile",
         ":memory_util",
         "//sw/opt:rvv_opt",
         "@tflite_micro//tensorflow/lite/kernels/internal:common",

@@ -75,6 +75,30 @@ coralflow_test(
     ],
 )
 
+# Tiled versus untiled pointwise conv (#11), on npusim with the memcpy copy path. Run it with and
+# without --//sw/opt/litert-micro:rvv_conv to cover the RVV and the reference kernel.
+coralnpu_v2_binary(
+    name = "conv_tiled_test",
+    srcs = ["conv_tiled_test.cc"],
+    dtcm_size_kbytes = 1024,
+    itcm_size_kbytes = 1024,
+    deps = [
+        "//sw/opt/litert-micro:conv",
+    ],
+)
+
+coralflow_test(
+    name = "conv_tiled_sim_test",
+    srcs = ["conv_tiled_test.py"],
+    elf = ":conv_tiled_test.elf",
+    highmem = True,
+    main = "conv_tiled_test.py",
+    targets = ["npusim"],
+    deps = [
+        "@bazel_tools//tools/python/runfiles",
+    ],
+)
+
 # Golden tests for the requantization reference model (#9), run on the host.
 cc_test(
     name = "requant_ref_test",
