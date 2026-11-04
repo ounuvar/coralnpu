@@ -17,6 +17,15 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+# Copy interface for DMA tiling (#11). Runs on the DMA engine when CORALNPU_DMA_TILING is
+# defined, and as memcpy otherwise (functional tests on npusim). Header only.
+cc_library(
+    name = "dma_tile",
+    hdrs = ["dma_tile.h"],
+    target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
+    deps = ["//fpga:dma"],
+)
+
 cc_library(
     name = "memory_util",
     hdrs = ["memory_util.h"],

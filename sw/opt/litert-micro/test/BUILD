@@ -191,6 +191,7 @@ coralnpu_v2_binary(
     itcm_size_kbytes = 1024,
     deps = [
         "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:dma_tile",
         "//sw/utils",
     ],
 )
@@ -203,6 +204,7 @@ coralnpu_v2_binary(
     itcm_size_kbytes = 1024,
     deps = [
         "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:dma_tile",
         "//sw/utils",
     ],
 )
@@ -219,6 +221,7 @@ coralnpu_v2_binary(
     deps = [
         "//fpga:dma",
         "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:dma_tile",
         "//sw/utils",
     ],
 )
@@ -235,6 +238,7 @@ coralnpu_v2_binary(
     deps = [
         "//fpga:dma",
         "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:dma_tile",
         "//sw/utils",
     ],
 )
@@ -249,6 +253,7 @@ coralnpu_v2_binary(
     itcm_size_kbytes = 1024,
     deps = [
         "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:dma_tile",
         "//sw/utils",
         "@tflite_micro//tensorflow/lite/kernels/internal:reference_base",
     ],
@@ -266,6 +271,7 @@ coralnpu_v2_binary(
         itcm_size_kbytes = 1024,
         deps = [
             "//sw/opt/litert-micro:conv",
+            "//sw/opt/litert-micro:dma_tile",
             "//sw/utils",
         ] + ([] if variant == "local" else ["//fpga:dma"]),
     )
@@ -312,6 +318,7 @@ coralnpu_v2_binary(
     deps = [
         "//sw/opt/litert-micro:conv",
         "//sw/opt/litert-micro:conv_vme",
+        "//sw/opt/litert-micro:dma_tile",
         "//sw/utils",
     ],
 )
