@@ -1158,6 +1158,88 @@ void Conv_4x4_OCVectorized(
   }
 }
 
+// Pointwise (1x1, stride 1, no padding) conv as a GEMM over pixels x output
+// channels (#26). Weights are transposed to [in_d][out_d] int16 and the input
+// offset is folded into the bias (bias + input_offset * sum(w)), so the inner
+// loop is one vwmacc.vx per pixel per input channel. Each weight load is
+// shared by kPixels pixels. Returns false if scratch allocation fails, so the
+// caller can fall back to the reference kernel. noinline: inlined into
+// ConvPerChannel, it changes the codegen of the inlined reference fallback
+// (+4% instructions on MobileNet's 3x3 first layer).
+__attribute__((noinline)) static bool Conv1x1PerChannel(
+    const ConvParams &params, const int32_t *output_multiplier, const uint8_t *shift_left,
+    const uint8_t *shift_right, const RuntimeShape &input_shape, const int8_t *input_data,
+    const RuntimeShape &filter_shape, const int8_t *filter_data, const int32_t *bias_data,
+    const RuntimeShape &output_shape, int8_t *output_data) {
+  constexpr int kPixels = 4;
+  const int in_d        = input_shape.Dims(3);
+  const int out_d       = output_shape.Dims(3);
+  const int pixels      = output_shape.Dims(0) * output_shape.Dims(1) * output_shape.Dims(2);
+
+  auto weights = make_aligned_array<int16_t>(16, in_d * out_d);
+  auto bias    = make_aligned_array<int32_t>(16, out_d);
+  auto accs    = make_aligned_array<int32_t>(16, kPixels * out_d);
+  if (!weights || !bias || !accs) {
+    return false;
+  }
+
+  // Transpose OHWI [out_d][in_d] int8 to [in_d][out_d] int16, summing each
+  // filter for the offset fold.
+  for (int n = 0; n < out_d; ++n) {
+    const int8_t *row = &filter_data[n * in_d];
+    vint32m1_t sum    = __riscv_vmv_v_x_i32m1(0, 1);
+    for (int c = 0; c < in_d;) {
+      const size_t vl    = __riscv_vsetvl_e8m2(in_d - c);
+      const vint16m4_t w = __riscv_vsext_vf2_i16m4(__riscv_vle8_v_i8m2(&row[c], vl), vl);
+      __riscv_vsse16_v_i16m4(&weights[c * out_d + n], out_d * sizeof(int16_t), w, vl);
+      sum = __riscv_vwredsum_vs_i16m4_i32m1(w, sum, vl);
+      c += vl;
+    }
+    const int32_t b = bias_data ? bias_data[n] : 0;
+    bias[n]         = b + params.input_offset * __riscv_vmv_x_s_i32m1_i32(sum);
+  }
+
+  for (int p0 = 0; p0 < pixels; p0 += kPixels) {
+    const int np     = std::min(kPixels, pixels - p0);
+    const int8_t *in = &input_data[p0 * in_d];
+    for (int n0 = 0; n0 < out_d;) {
+      const size_t vl     = __riscv_vsetvl_e32m4(out_d - n0);
+      const int16_t *wcol = &weights[n0];
+      if (np == kPixels) {
+        vint32m4_t acc0 = __riscv_vmv_v_x_i32m4(0, vl);
+        vint32m4_t acc1 = __riscv_vmv_v_x_i32m4(0, vl);
+        vint32m4_t acc2 = __riscv_vmv_v_x_i32m4(0, vl);
+        vint32m4_t acc3 = __riscv_vmv_v_x_i32m4(0, vl);
+        for (int c = 0; c < in_d; ++c) {
+          const vint16m2_t w = __riscv_vle16_v_i16m2(&wcol[c * out_d], vl);
+          acc0               = __riscv_vwmacc_vx_i32m4(acc0, in[c], w, vl);
+          acc1               = __riscv_vwmacc_vx_i32m4(acc1, in[in_d + c], w, vl);
+          acc2               = __riscv_vwmacc_vx_i32m4(acc2, in[2 * in_d + c], w, vl);
+          acc3               = __riscv_vwmacc_vx_i32m4(acc3, in[3 * in_d + c], w, vl);
+        }
+        __riscv_vse32_v_i32m4(&accs[n0], acc0, vl);
+        __riscv_vse32_v_i32m4(&accs[out_d + n0], acc1, vl);
+        __riscv_vse32_v_i32m4(&accs[2 * out_d + n0], acc2, vl);
+        __riscv_vse32_v_i32m4(&accs[3 * out_d + n0], acc3, vl);
+      } else {
+        for (int p = 0; p < np; ++p) {
+          vint32m4_t acc = __riscv_vmv_v_x_i32m4(0, vl);
+          for (int c = 0; c < in_d; ++c) {
+            const vint16m2_t w = __riscv_vle16_v_i16m2(&wcol[c * out_d], vl);
+            acc                = __riscv_vwmacc_vx_i32m4(acc, in[p * in_d + c], w, vl);
+          }
+          __riscv_vse32_v_i32m4(&accs[p * out_d + n0], acc, vl);
+        }
+      }
+      n0 += vl;
+    }
+    PostprocessAcc(accs.get(), bias.get(), shift_left, output_multiplier, shift_right,
+                   params.output_offset, params.quantized_activation_min,
+                   params.quantized_activation_max, &output_data[p0 * out_d], np, out_d);
+  }
+  return true;
+}
+
 void ConvPerChannel(const ConvParams &params, const OpDataConvCustom &data,
                     const int32_t *output_multiplier, const int32_t *output_shift,
                     TfLiteContext *context, const RuntimeShape &input_shape,
@@ -1236,6 +1318,13 @@ void ConvPerChannel(const ConvParams &params, const OpDataConvCustom &data,
     Conv2D_4x4(params, data, input_shape, input_data, filter_shape, filter_data_copy.get(),
                bias_data_copy.get(), output_shape, output_data, data.repacked_weights_generic,
                context);
+  } else if (filter_height == 1 && filter_width == 1 && groups == 1 && params.stride_width == 1 &&
+             params.stride_height == 1 && params.padding_values.width == 0 &&
+             params.padding_values.height == 0 &&
+             Conv1x1PerChannel(params, output_multiplier, shift_left.get(), shift_right.get(),
+                               input_shape, input_data, filter_shape, filter_data_copy.get(),
+                               bias_data_copy.get(), output_shape, output_data)) {
+    // Pointwise conv done by Conv1x1PerChannel.
   } else {
     MicroPrintf("Fallback kernel: fh=%d fw=%d id=%d od=%d oh=%d ow=%d", filter_height, filter_width,
                 input_depth, output_depth, output_shape.Dims(1), output_shape.Dims(2));
