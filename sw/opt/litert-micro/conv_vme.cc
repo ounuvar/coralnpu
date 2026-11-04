@@ -209,14 +209,25 @@ void ConvPerChannelVme(const tflite::ConvParams &params, const ConvVmeWeights &w
         }
       }
 
-      // accs rows are n_padded wide, output rows output_depth wide, so
-      // requantize one pixel at a time.
-      for (int m = 0; m < rows; ++m) {
-        PostprocessAcc(accs + m * n_padded, weights.bias, weights.shift_left, output_multiplier,
-                       weights.shift_right, params.output_offset, params.quantized_activation_min,
-                       params.quantized_activation_max, output + (pix0 + m) * output_depth,
-                       /*out_w=*/1, output_depth);
+      // accs rows are n_padded wide; PostprocessAcc wants output_depth-wide
+      // rows. Compact them in place when the widths differ (dest never passes
+      // source, so a forward copy is safe), then requantize all rows at once:
+      // one call per tile instead of one per pixel.
+      if (n_padded != output_depth) {
+        for (int m = 1; m < rows; ++m) {
+          const int32_t *src = accs + m * n_padded;
+          int32_t *dst       = accs + m * output_depth;
+          for (int c = 0; c < output_depth;) {
+            const size_t vl = __riscv_vsetvl_e32m8(output_depth - c);
+            __riscv_vse32_v_i32m8(dst + c, __riscv_vle32_v_i32m8(src + c, vl), vl);
+            c += vl;
+          }
+        }
       }
+      PostprocessAcc(accs, weights.bias, weights.shift_left, output_multiplier, weights.shift_right,
+                     params.output_offset, params.quantized_activation_min,
+                     params.quantized_activation_max, output + pix0 * output_depth, rows,
+                     output_depth);
     }
   }
 }
