@@ -99,6 +99,41 @@ coralflow_test(
     ],
 )
 
+# Whole pointwise layers through the real dispatcher on the SoC testharness (#11): everything in
+# DTCM (_local, the ceiling), data in external memory without tiling (_ext), and with the
+# DMA-tiled path (_tiled). All use the RVV kernel. Layers l28 and l30 are measured at full size; l17
+# and l2 at two pixel counts each, to separate per-layer from per-pixel cost.
+[
+    coralnpu_v2_binary(
+        name = "conv_layer_bench_%s_p%d_%s" % (layer, pixels, variant),
+        srcs = ["conv_layer_bench.cc"],
+        copts = [
+            "-DLAYER_PIXELS=%d" % pixels,
+            "-DIN_D=%d" % in_d,
+            "-DOUT_D=%d" % out_d,
+        ] + ([] if variant == "local" else ["-DPLACE_EXT"]),
+        dtcm_size_kbytes = 1024,
+        itcm_size_kbytes = 1024,
+        deps = [
+            "//sw/opt/litert-micro:conv_rvv_tiled_dma" if variant == "tiled" else "//sw/opt/litert-micro:conv_rvv",
+            "//sw/utils",
+        ],
+    )
+    for layer, pixels, in_d, out_d in [
+        ("l30", 49, 256, 256),
+        ("l28", 49, 128, 256),
+        ("l17", 33, 128, 128),
+        ("l17", 99, 128, 128),
+        ("l2", 128, 8, 16),
+        ("l2", 384, 8, 16),
+    ]
+    for variant in [
+        "local",
+        "ext",
+        "tiled",
+    ]
+]
+
 # Golden tests for the requantization reference model (#9), run on the host.
 cc_test(
     name = "requant_ref_test",

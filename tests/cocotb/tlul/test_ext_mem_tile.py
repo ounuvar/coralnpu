@@ -263,3 +263,111 @@ async def test_tile_db4_r4(dut):
 async def test_tile_db16_r4(dut):
     """Four rows, double buffered DMA with 16-byte beats."""
     await run_tile(dut, "ext_mem_tile_bench_db16_r4.elf")
+
+
+@cocotb.test()
+async def test_layer_l30_p49_local(dut):
+    """Pointwise layer l30 with 49 pixels, local variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l30_p49_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l30_p49_ext(dut):
+    """Pointwise layer l30 with 49 pixels, ext variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l30_p49_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l30_p49_tiled(dut):
+    """Pointwise layer l30 with 49 pixels, tiled variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l30_p49_tiled.elf")
+
+
+@cocotb.test()
+async def test_layer_l28_p49_local(dut):
+    """Pointwise layer l28 with 49 pixels, local variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l28_p49_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l28_p49_ext(dut):
+    """Pointwise layer l28 with 49 pixels, ext variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l28_p49_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l28_p49_tiled(dut):
+    """Pointwise layer l28 with 49 pixels, tiled variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l28_p49_tiled.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p33_local(dut):
+    """Pointwise layer l17 with 33 pixels, local variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p33_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p33_ext(dut):
+    """Pointwise layer l17 with 33 pixels, ext variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p33_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p33_tiled(dut):
+    """Pointwise layer l17 with 33 pixels, tiled variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p33_tiled.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p99_local(dut):
+    """Pointwise layer l17 with 99 pixels, local variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p99_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p99_ext(dut):
+    """Pointwise layer l17 with 99 pixels, ext variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p99_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p99_tiled(dut):
+    """Pointwise layer l17 with 99 pixels, tiled variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p99_tiled.elf")
+
+
+@cocotb.test()
+async def test_layer_l2_p128_local(dut):
+    """Pointwise layer l2 with 128 pixels, local variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l2_p128_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l2_p128_ext(dut):
+    """Pointwise layer l2 with 128 pixels, ext variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l2_p128_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l2_p128_tiled(dut):
+    """Pointwise layer l2 with 128 pixels, tiled variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l2_p128_tiled.elf")
+
+
+@cocotb.test()
+async def test_layer_l2_p384_local(dut):
+    """Pointwise layer l2 with 384 pixels, local variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l2_p384_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l2_p384_ext(dut):
+    """Pointwise layer l2 with 384 pixels, ext variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l2_p384_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l2_p384_tiled(dut):
+    """Pointwise layer l2 with 384 pixels, tiled variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l2_p384_tiled.elf")

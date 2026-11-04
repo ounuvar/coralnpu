@@ -165,6 +165,49 @@ cc_library(
     ],
 )
 
+# The conv library with fixed defines, for benchmarks that must not change the build configuration
+# (a Bazel flag would rebuild the RTL simulator): the RVV kernels untiled (configuration S), and
+# with DMA-engine tiling (#11).
+[
+    cc_library(
+        name = "conv_" + variant,
+        srcs = [
+            "conv.cc",
+            "conv_tiled.cc",
+        ],
+        hdrs = [
+            "conv.h",
+            "conv_pointwise.h",
+            "conv_tiled.h",
+        ],
+        local_defines = defines,
+        target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
+        deps = [
+            ":accumulator_util",
+            ":conv_tile_plan",
+            ":dma_tile",
+            ":memory_util",
+            "//sw/opt:rvv_opt",
+            "@tflite_micro//tensorflow/lite/kernels/internal:common",
+            "@tflite_micro//tensorflow/lite/micro:op_resolvers",
+        ],
+    )
+    for variant, defines in [
+        (
+            "rvv",
+            ["CORALNPU_RVV_CONV=1"],
+        ),
+        (
+            "rvv_tiled_dma",
+            [
+                "CORALNPU_RVV_CONV=1",
+                "CORALNPU_CONV_TILING=1",
+                "CORALNPU_DMA_TILING=1",
+            ],
+        ),
+    ]
+]
+
 # Matrix-engine (VME/Zvt) kernels for idea 5 (#12).
 cc_library(
     name = "vme_util",
