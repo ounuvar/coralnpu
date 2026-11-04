@@ -42,7 +42,8 @@ void ExpectConsistent(const Layer &l, bool int16_weights, uint32_t budget) {
   EXPECT_LE(p.footprint, budget) << "layer " << l.index;
   EXPECT_EQ(p.footprint, PointwiseLayoutFor(l.in_d, p.channel_chunk, p.pixels_per_tile,
                                             p.double_buffer ? 2 : 1, int16_weights)
-                             .total);
+                                 .total +
+                             kDescriptorBytes);
   // The chunks cover every output channel, and there are no empty chunks.
   EXPECT_GE(p.num_chunks * p.channel_chunk, l.out_d);
   EXPECT_LT((p.num_chunks - 1) * p.channel_chunk, l.out_d);
@@ -129,6 +130,12 @@ TEST(ConvTilePlan, BiggerBudgetNeverMakesChunksSmaller) {
       previous_chunk = p.channel_chunk;
     }
   }
+}
+
+TEST(ConvTilePlan, DescriptorsAreInsideTheBudget) {
+  EXPECT_EQ(kDescriptorBytes, 32u * (5 + 2 * 34 + 3));
+  EXPECT_EQ(ArenaBudget(CORALNPU_TILE_BUDGET_BYTES), CORALNPU_TILE_BUDGET_BYTES - kDescriptorBytes);
+  EXPECT_EQ(ArenaBudget(100), 0u);
 }
 
 TEST(ConvTilePlan, ImpossibleBudgetIsNotTiled) {

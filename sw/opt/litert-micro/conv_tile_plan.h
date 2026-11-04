@@ -45,7 +45,20 @@ inline constexpr int kChannelGranule = 16;
 // layer is smaller.
 inline constexpr int kMinTilePixels = 8;
 // Larger tiles do not amortize the per-tile overhead any further and only cost DTCM.
-inline constexpr int kMaxTilePixels = 64;
+inline constexpr int kMaxTilePixels = 32;
+
+// DMA descriptors (32 bytes each) live outside the arena, in the wrapper's copy chains: the
+// prologue chain (filter, bias, multiplier, shift, first input tile) and two per-tile chains, each
+// holding one input copy plus, when the output channels are chunked, one output copy per pixel
+// (the DMA has no strided mode). Each chain also has a 32-byte header.
+inline constexpr uint32_t kPrologueCopies  = 5;
+inline constexpr uint32_t kMaxChainCopies  = kMaxTilePixels + 2;
+inline constexpr uint32_t kDescriptorBytes = 32 * (kPrologueCopies + 2 * kMaxChainCopies + 3);
+
+// The arena the tiled path carves its buffers from, for a given total budget.
+constexpr uint32_t ArenaBudget(uint32_t budget) {
+  return budget > kDescriptorBytes ? budget - kDescriptorBytes : 0;
+}
 
 constexpr uint32_t RoundUp16(uint32_t v) { return (v + 15u) & ~15u; }
 
@@ -103,13 +116,14 @@ struct ConvTilePlan {
   int channel_chunk   = 0;      // output channels per chunk (the last chunk may be smaller)
   int num_chunks      = 0;
   bool double_buffer  = false;
-  uint32_t footprint  = 0;  // DTCM bytes the plan needs
+  uint32_t footprint  = 0;  // DTCM bytes the plan needs: arena plus descriptors
   uint64_t dma_bytes  = 0;  // bytes the DMA moves for the whole layer
 };
 
 // Plans a pointwise conv with `pixels` output pixels (batch x height x width), `in_d` input and
-// `out_d` output channels. `int16_weights` selects the RVV kernel's buffers (the transposed int16
-// weights are twice the filter's size); false is for the scalar reference kernel.
+// `out_d` output channels. The budget covers the arena and the descriptors. `int16_weights` selects
+// the RVV kernel's buffers (the transposed int16 weights are twice the filter's size); false is for
+// the scalar reference kernel.
 //
 // Prefers the largest channel chunk (fewer passes over the input), starting with all channels and
 // then splitting into 2, 3, ... balanced chunks. For a chunk it prefers double buffering, and falls
@@ -127,8 +141,9 @@ constexpr ConvTilePlan PlanPointwise(int pixels, int in_d, int out_d, bool int16
   ConvTilePlan none{};
   if (pixels <= 0 || in_d <= 0 || out_d <= 0)
     return none;
-  const int min_tile = pixels < kMinTilePixels ? pixels : kMinTilePixels;
-  const int max_tile = pixels < kMaxTilePixels ? pixels : kMaxTilePixels;
+  const uint32_t arena_budget = ArenaBudget(budget);
+  const int min_tile          = pixels < kMinTilePixels ? pixels : kMinTilePixels;
+  const int max_tile          = pixels < kMaxTilePixels ? pixels : kMaxTilePixels;
   // Try one chunk (all channels), then 2, 3, ... balanced chunks, each rounded up to a granule.
   int previous = 0;
   for (int parts = 1;; ++parts) {
@@ -146,7 +161,7 @@ constexpr ConvTilePlan PlanPointwise(int pixels, int in_d, int out_d, bool int16
       // The footprint grows with the tile, so the largest tile that fits is found by search.
       int best = 0;
       for (int t = max_tile; t >= min_tile; --t) {
-        if (PointwiseLayoutFor(in_d, chunk, t, buffers, int16_weights).total <= budget) {
+        if (PointwiseLayoutFor(in_d, chunk, t, buffers, int16_weights).total <= arena_budget) {
           best = t;
           break;
         }
@@ -158,8 +173,9 @@ constexpr ConvTilePlan PlanPointwise(int pixels, int in_d, int out_d, bool int16
         plan.channel_chunk   = chunk;
         plan.num_chunks      = (out_d + chunk - 1) / chunk;
         plan.double_buffer   = buffers == 2;
-        plan.footprint       = PointwiseLayoutFor(in_d, chunk, best, buffers, int16_weights).total;
-        plan.dma_bytes       = PointwiseDmaBytes(pixels, in_d, out_d, plan.num_chunks);
+        plan.footprint =
+            PointwiseLayoutFor(in_d, chunk, best, buffers, int16_weights).total + kDescriptorBytes;
+        plan.dma_bytes = PointwiseDmaBytes(pixels, in_d, out_d, plan.num_chunks);
         return plan;
       }
     }
