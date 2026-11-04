@@ -19,6 +19,9 @@
 // mcycle/minstret. Where the tile's data lives is chosen at build time:
 //   default             input, filter, bias and output all in DTCM (no external memory traffic)
 //   -DTILE_IN_EXTMEM    all four in external memory (what an untiled kernel sees)
+//   -DTILE_DMA          the tile lives in external memory, the DMA copies filter, bias and input
+//                       into DTCM, the kernel runs there, and the DMA copies the output back
+//                       (-DDMA_BEAT_LOG2=2 for 4-byte beats, 4 for 16-byte beats)
 // Comparing the two on a simulation with external-memory latency shows what the external
 // accesses cost the kernel, which is the most DMA tiling can recover.
 //
@@ -28,13 +31,16 @@
 #include <cstdint>
 #include <cstring>
 
+#ifdef TILE_DMA
+#include "fpga/sw/dma.h"
+#endif
 #include "sw/opt/litert-micro/conv.h"
 #include "sw/utils/utils.h"
 #include "tensorflow/lite/micro/kernels/conv.h"
 
 using namespace coralnpu_v2::opt::litert_micro;
 
-#ifdef TILE_IN_EXTMEM
+#if defined(TILE_IN_EXTMEM)
 #define TILE_SECTION ".extdata"
 #else
 #define TILE_SECTION ".data"
@@ -47,7 +53,18 @@ constexpr int kWidth    = TILE_WIDTH;
 constexpr int kInDepth  = 128;
 constexpr int kOutDepth = 128;
 
+#ifndef DMA_BEAT_LOG2
+#define DMA_BEAT_LOG2 2
+#endif
+
 extern "C" {
+#ifdef TILE_DMA
+// The tile's home is external memory; the kernel works on copies in DTCM.
+int8_t ext_input[kWidth * kInDepth] __attribute__((section(".extdata"), aligned(16)));
+int8_t ext_filter[kOutDepth * kInDepth] __attribute__((section(".extdata"), aligned(16)));
+int32_t ext_bias[kOutDepth] __attribute__((section(".extdata"), aligned(16)));
+int8_t ext_output[kWidth * kOutDepth] __attribute__((section(".extdata"), aligned(16)));
+#endif
 int8_t tile_input[kWidth * kInDepth] __attribute__((section(TILE_SECTION), aligned(16)));
 int8_t tile_filter[kOutDepth * kInDepth] __attribute__((section(TILE_SECTION), aligned(16)));
 int32_t tile_bias[kOutDepth] __attribute__((section(TILE_SECTION), aligned(16)));
@@ -65,6 +82,9 @@ RESULT_VAR(uint32_t, tile_cycles_lo);
 RESULT_VAR(uint32_t, tile_cycles_hi);
 RESULT_VAR(uint32_t, tile_instret_lo);
 RESULT_VAR(uint32_t, tile_instret_hi);
+RESULT_VAR(uint32_t, dma_in_cycles);
+RESULT_VAR(uint32_t, compute_cycles);
+RESULT_VAR(uint32_t, dma_out_cycles);
 RESULT_VAR(int32_t, tile_checksum);
 RESULT_VAR(int32_t, tile_done);
 }
@@ -81,13 +101,43 @@ static int8_t NextByte() {
   return static_cast<int8_t>(lcg_state >> 24);
 }
 
+#ifdef TILE_DMA
+// Where the tile data is created and where the final output is read from.
+#define SRC_INPUT  ext_input
+#define SRC_FILTER ext_filter
+#define SRC_BIAS   ext_bias
+#define SRC_OUTPUT ext_output
+
+static struct dma_descriptor dma_desc[4] __attribute__((section(".data"), aligned(32)));
+
+static void SetDescriptor(struct dma_descriptor *d, const void *src, void *dst, uint32_t bytes,
+                          struct dma_descriptor *next) {
+  d->src_addr  = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(src));
+  d->dst_addr  = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(dst));
+  d->len_flags = dma_make_len_flags(bytes, DMA_BEAT_LOG2, 0, 0, 0);
+  d->next_desc = next ? static_cast<uint32_t>(reinterpret_cast<uintptr_t>(next)) : 0;
+  d->poll_addr = d->poll_mask = d->poll_value = d->reserved = 0;
+}
+
+// Returns false if the DMA reported an error or never finished.
+static bool RunDma(struct dma_descriptor *first) {
+  dma_start(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(first)));
+  return dma_wait_done() == 0;
+}
+#else
+#define SRC_INPUT  tile_input
+#define SRC_FILTER tile_filter
+#define SRC_BIAS   tile_bias
+#define SRC_OUTPUT tile_output
+#endif
+
 int main(void) {
   for (int i = 0; i < kWidth * kInDepth; ++i)
-    tile_input[i] = NextByte();
+    SRC_INPUT[i] = NextByte();
   for (int i = 0; i < kOutDepth * kInDepth; ++i)
-    tile_filter[i] = NextByte();
+    SRC_FILTER[i] = NextByte();
   for (int i = 0; i < kOutDepth; ++i) {
-    tile_bias[i]              = (i * 37) - 2000;
+    SRC_BIAS[i]               = (i * 37) - 2000;
     per_channel_multiplier[i] = 0x40000000 + i * 4096;
     per_channel_shift[i]      = -8;
   }
@@ -126,20 +176,41 @@ int main(void) {
 
   const uint64_t c0 = mcycle_read();
   const uint64_t i0 = minstret_read();
+#ifdef TILE_DMA
+  // One descriptor chain brings in the input row, the filter and the bias.
+  SetDescriptor(&dma_desc[0], ext_input, tile_input, kWidth * kInDepth, &dma_desc[1]);
+  SetDescriptor(&dma_desc[1], ext_filter, tile_filter, kOutDepth * kInDepth, &dma_desc[2]);
+  SetDescriptor(&dma_desc[2], ext_bias, tile_bias, kOutDepth * sizeof(int32_t), nullptr);
+  const bool in_ok = RunDma(&dma_desc[0]);
+#endif
+  const uint64_t t1 = mcycle_read();
   ConvPerChannel(params, data, per_channel_multiplier, per_channel_shift, &context, input_shape,
                  tile_input, filter_shape, tile_filter, bias_shape, tile_bias, output_shape,
                  tile_output);
+  const uint64_t t2 = mcycle_read();
+#ifdef TILE_DMA
+  SetDescriptor(&dma_desc[3], tile_output, ext_output, kWidth * kOutDepth, nullptr);
+  const bool out_ok = RunDma(&dma_desc[3]);
+#endif
+  const uint64_t t3      = mcycle_read();
   const uint64_t instret = minstret_read() - i0;
-  const uint64_t cycles  = mcycle_read() - c0;
+  const uint64_t cycles  = t3 - c0;
   tile_instret_lo        = static_cast<uint32_t>(instret);
   tile_instret_hi        = static_cast<uint32_t>(instret >> 32);
   tile_cycles_lo         = static_cast<uint32_t>(cycles);
   tile_cycles_hi         = static_cast<uint32_t>(cycles >> 32);
+  dma_in_cycles          = static_cast<uint32_t>(t1 - c0);
+  compute_cycles         = static_cast<uint32_t>(t2 - t1);
+  dma_out_cycles         = static_cast<uint32_t>(t3 - t2);
 
   int32_t sum = 0;
   for (int i = 0; i < kWidth * kOutDepth; ++i)
-    sum = sum * 31 + tile_output[i];
+    sum = sum * 31 + SRC_OUTPUT[i];
   tile_checksum = sum;
-  tile_done     = 0x600D;
+#ifdef TILE_DMA
+  tile_done = (in_ok && out_ok) ? 0x600D : 0xBAD;
+#else
+  tile_done = 0x600D;
+#endif
   return 0;
 }

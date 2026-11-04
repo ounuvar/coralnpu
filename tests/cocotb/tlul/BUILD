@@ -612,6 +612,8 @@ cocotb_test_suite(
 EXT_MEM_TILE_TESTCASES = [
     "test_tile_local",
     "test_tile_ext",
+    "test_tile_dma4",
+    "test_tile_dma16",
 ]
 # END_TESTCASES_FOR_ext_mem_tile_zero_cocotb
 
@@ -636,6 +638,8 @@ cocotb_test_suite(
         "data": [
             "//sw/opt/litert-micro/test:ext_mem_tile_bench_local.elf",
             "//sw/opt/litert-micro/test:ext_mem_tile_bench_ext.elf",
+            "//sw/opt/litert-micro/test:ext_mem_tile_bench_dma4.elf",
+            "//sw/opt/litert-micro/test:ext_mem_tile_bench_dma16.elf",
         ],
         "default_testcase_size": "enormous",
         "size": "enormous",
@@ -664,6 +668,8 @@ cocotb_test_suite(
         "data": [
             "//sw/opt/litert-micro/test:ext_mem_tile_bench_local.elf",
             "//sw/opt/litert-micro/test:ext_mem_tile_bench_ext.elf",
+            "//sw/opt/litert-micro/test:ext_mem_tile_bench_dma4.elf",
+            "//sw/opt/litert-micro/test:ext_mem_tile_bench_dma16.elf",
         ],
         "default_testcase_size": "enormous",
         "size": "enormous",

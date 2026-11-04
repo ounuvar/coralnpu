@@ -208,6 +208,38 @@ coralnpu_v2_binary(
 )
 
 coralnpu_v2_binary(
+    name = "ext_mem_tile_bench_dma4",
+    srcs = ["ext_mem_tile_bench.cc"],
+    copts = [
+        "-DTILE_DMA",
+        "-DDMA_BEAT_LOG2=2",
+    ],
+    dtcm_size_kbytes = 1024,
+    itcm_size_kbytes = 1024,
+    deps = [
+        "//fpga:dma",
+        "//sw/opt/litert-micro:conv",
+        "//sw/utils",
+    ],
+)
+
+coralnpu_v2_binary(
+    name = "ext_mem_tile_bench_dma16",
+    srcs = ["ext_mem_tile_bench.cc"],
+    copts = [
+        "-DTILE_DMA",
+        "-DDMA_BEAT_LOG2=4",
+    ],
+    dtcm_size_kbytes = 1024,
+    itcm_size_kbytes = 1024,
+    deps = [
+        "//fpga:dma",
+        "//sw/opt/litert-micro:conv",
+        "//sw/utils",
+    ],
+)
+
+coralnpu_v2_binary(
     name = "mobilenet_conv_bench",
     srcs = ["mobilenet_conv_bench.cc"],
     dtcm_size_kbytes = 1024,

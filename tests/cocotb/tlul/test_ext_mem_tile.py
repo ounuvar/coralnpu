@@ -178,8 +178,15 @@ async def run_tile(dut, elf_name):
     instret = (await result("tile_instret_lo")
                ) | ((await result("tile_instret_hi")) << 32)
     checksum = await result("tile_checksum")
+    phases = ""
+    if "dma" in elf_name:
+        phases = (
+            f" dma_in={await result('dma_in_cycles')}"
+            f" compute={await result('compute_cycles')}"
+            f" dma_out={await result('dma_out_cycles')}"
+        )
     print(
-        f"RESULT placement={elf_name} cycles={cycles} instret={instret} "
+        f"RESULT placement={elf_name} cycles={cycles} instret={instret}{phases} "
         f"checksum=0x{checksum:08x} halted_after_core_cycles~{waited}",
         flush=True,
     )
@@ -195,3 +202,15 @@ async def test_tile_local(dut):
 async def test_tile_ext(dut):
     """Tile with input, filter, bias and output in external memory."""
     await run_tile(dut, "ext_mem_tile_bench_ext.elf")
+
+
+@cocotb.test()
+async def test_tile_dma4(dut):
+    """Tile copied into DTCM by the DMA (4-byte beats), computed there, output copied back."""
+    await run_tile(dut, "ext_mem_tile_bench_dma4.elf")
+
+
+@cocotb.test()
+async def test_tile_dma16(dut):
+    """Same as test_tile_dma4 with 16-byte DMA beats."""
+    await run_tile(dut, "ext_mem_tile_bench_dma16.elf")
