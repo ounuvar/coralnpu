@@ -204,6 +204,14 @@ async def run_conv_sim_test(fixture):
             "filter": [16, 3, 3, 16],
             "stride": (1, 1)
         },
+        # Input smaller than the filter: 2x2 input, 3x3 at stride 2, SAME
+        # padding only at the bottom and right. No pixel is interior.
+        {
+            "input": [1, 2, 2, 3],
+            "filter": [8, 3, 3, 3],
+            "stride": (2, 2),
+            "padding": "SAME"
+        },
         # Padding on all sides, out_d below one 8-channel block.
         {
             "input": [1, 9, 11, 3],

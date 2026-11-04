@@ -1291,11 +1291,15 @@ __attribute__((noinline)) static bool Conv3x3PerChannel(
     }
   }
 
-  // Output pixels whose taps are all inside the input.
+  // Output pixels whose taps are all inside the input. None exist when the
+  // input is smaller than the filter; checked separately because C division
+  // rounds a negative (in_w - fw + pad_w) toward zero, not down.
   const int ox_lo = std::min(out_w, (pad_w + sw - 1) / sw);
-  const int ox_hi = std::max(ox_lo, std::min(out_w, (in_w - fw + pad_w) / sw + 1));
+  const int ox_hi =
+      in_w < fw ? ox_lo : std::max(ox_lo, std::min(out_w, (in_w - fw + pad_w) / sw + 1));
   const int oy_lo = std::min(out_h, (pad_h + sh - 1) / sh);
-  const int oy_hi = std::max(oy_lo, std::min(out_h, (in_h - fh + pad_h) / sh + 1));
+  const int oy_hi =
+      in_h < fh ? oy_lo : std::max(oy_lo, std::min(out_h, (in_h - fh + pad_h) / sh + 1));
 
   for (int batch = 0; batch < batches; ++batch) {
     const int8_t *in = &input_data[batch * in_h * in_w * in_d];
