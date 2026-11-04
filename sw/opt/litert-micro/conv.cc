@@ -1169,23 +1169,14 @@ void Conv_4x4_OCVectorized(
 // caller can fall back to the reference kernel. noinline: inlined into
 // ConvPerChannel, it changes the codegen of the inlined reference fallback
 // (+4% instructions on MobileNet's 3x3 first layer).
-__attribute__((noinline)) static bool Conv1x1PerChannel(
-    const ConvParams &params, const int32_t *output_multiplier, const uint8_t *shift_left,
-    const uint8_t *shift_right, const RuntimeShape &input_shape, const int8_t *input_data,
-    const RuntimeShape &filter_shape, const int8_t *filter_data, const int32_t *bias_data,
-    const RuntimeShape &output_shape, int8_t *output_data) {
-  constexpr int kPixels = 4;
-  const int in_d        = input_shape.Dims(3);
-  const int out_d       = output_shape.Dims(3);
-  const int pixels      = output_shape.Dims(0) * output_shape.Dims(1) * output_shape.Dims(2);
-
-  auto weights = make_aligned_array<int16_t>(16, in_d * out_d);
-  auto bias    = make_aligned_array<int32_t>(16, out_d);
-  auto accs    = make_aligned_array<int32_t>(16, kPixels * out_d);
-  if (!weights || !bias || !accs) {
-    return false;
-  }
-
+// Prepare step of the pointwise conv. Transposes `out_d` rows of an OHWI filter ([out_d][in_d]
+// int8) to [in_d][out_d] int16 and folds the input offset into the bias, as described above.
+// `weights` holds in_d * out_d values and `bias` holds out_d values. Split from Conv1x1PerChannel
+// (#11) so that DMA tiling can run it once per chunk of output channels instead of once per tile.
+__attribute__((noinline)) static void Conv1x1Prepare(const ConvParams &params, int in_d, int out_d,
+                                                     const int8_t *filter_data,
+                                                     const int32_t *bias_data, int16_t *weights,
+                                                     int32_t *bias) {
   // Transpose OHWI [out_d][in_d] int8 to [in_d][out_d] int16, summing each
   // filter for the offset fold.
   for (int n = 0; n < out_d; ++n) {
@@ -1201,7 +1192,16 @@ __attribute__((noinline)) static bool Conv1x1PerChannel(
     const int32_t b = bias_data ? bias_data[n] : 0;
     bias[n]         = b + params.input_offset * __riscv_vmv_x_s_i32m1_i32(sum);
   }
+}
 
+// Run step of the pointwise conv: the pixel loop over prepared weights and bias. `accs` holds
+// kPixels * out_d int32 values. `output_multiplier`, `shift_left` and `shift_right` are indexed by
+// output channel, 0 to out_d - 1.
+__attribute__((noinline)) static void Conv1x1Run(
+    const ConvParams &params, const int32_t *output_multiplier, const uint8_t *shift_left,
+    const uint8_t *shift_right, int in_d, int out_d, int pixels, const int8_t *input_data,
+    const int16_t *weights, const int32_t *bias, int32_t *accs, int8_t *output_data) {
+  constexpr int kPixels = 4;
   for (int p0 = 0; p0 < pixels; p0 += kPixels) {
     const int np     = std::min(kPixels, pixels - p0);
     const int8_t *in = &input_data[p0 * in_d];
@@ -1236,10 +1236,31 @@ __attribute__((noinline)) static bool Conv1x1PerChannel(
       }
       n0 += vl;
     }
-    PostprocessAcc(accs.get(), bias.get(), shift_left, output_multiplier, shift_right,
-                   params.output_offset, params.quantized_activation_min,
-                   params.quantized_activation_max, &output_data[p0 * out_d], np, out_d);
+    PostprocessAcc(accs, bias, shift_left, output_multiplier, shift_right, params.output_offset,
+                   params.quantized_activation_min, params.quantized_activation_max,
+                   &output_data[p0 * out_d], np, out_d);
   }
+}
+
+__attribute__((noinline)) static bool Conv1x1PerChannel(
+    const ConvParams &params, const int32_t *output_multiplier, const uint8_t *shift_left,
+    const uint8_t *shift_right, const RuntimeShape &input_shape, const int8_t *input_data,
+    const RuntimeShape &filter_shape, const int8_t *filter_data, const int32_t *bias_data,
+    const RuntimeShape &output_shape, int8_t *output_data) {
+  constexpr int kPixels = 4;
+  const int in_d        = input_shape.Dims(3);
+  const int out_d       = output_shape.Dims(3);
+  const int pixels      = output_shape.Dims(0) * output_shape.Dims(1) * output_shape.Dims(2);
+
+  auto weights = make_aligned_array<int16_t>(16, in_d * out_d);
+  auto bias    = make_aligned_array<int32_t>(16, out_d);
+  auto accs    = make_aligned_array<int32_t>(16, kPixels * out_d);
+  if (!weights || !bias || !accs) {
+    return false;
+  }
+  Conv1x1Prepare(params, in_d, out_d, filter_data, bias_data, weights.get(), bias.get());
+  Conv1x1Run(params, output_multiplier, shift_left, shift_right, in_d, out_d, pixels, input_data,
+             weights.get(), bias.get(), accs.get(), output_data);
   return true;
 }
 
