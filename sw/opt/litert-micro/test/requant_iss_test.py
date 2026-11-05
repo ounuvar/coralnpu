@@ -25,6 +25,10 @@ _SYMBOLS = [
     "ties_checked",
     "baseline_instret",
     "fused_instret",
+    "requant_mismatches",
+    "rqclamp_mismatches",
+    "first_bad_count",
+    "first_bad",
 ]
 
 
@@ -43,7 +47,16 @@ async def run_requant_iss_test(fixture):
     await fixture.load_elf_and_lookup_symbols(elf_file, _SYMBOLS)
     await fixture.run_to_halt(timeout_cycles=50_000_000)
 
-    values = {s: await fixture.read_word(s) for s in _SYMBOLS}
+    values = {
+        s: await fixture.read_word(s) for s in _SYMBOLS if s != "first_bad"
+    }
+    for k in range(min(_signed(values["first_bad_count"]), 8)):
+        rec = [
+            _signed(await fixture.read_word("first_bad", offset=4 * (7 * k + j)))
+            for j in range(7)
+        ]
+        print("mismatch i={} acc={} mult={} shift={} offset={} got={} want={}"
+              .format(*rec), flush=True)
     baseline = values["baseline_instret"]
     fused = values["fused_instret"]
     print(
@@ -52,6 +65,8 @@ async def run_requant_iss_test(fixture):
         flush=True
     )
     assert values["done"] == 1, "program did not finish"
+    assert _signed(values["requant_mismatches"]) == 0, values
+    assert _signed(values["rqclamp_mismatches"]) == 0, values
     assert _signed(values["insn_mismatches"]) == 0, values
     assert _signed(values["fused_mismatches"]) == 0, values
     assert _signed(values["ties_checked"]) > 0, values
