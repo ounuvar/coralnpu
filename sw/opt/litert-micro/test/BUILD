@@ -394,10 +394,12 @@ coralflow_test(
     elf = ":requant_iss_test.elf",
     hdl_toplevel = "RvvCoreMiniRequantAxi",
     main = "requant_iss_test.py",
-    # verilator: the RTL with REQUANT_ON (#9, steps 5-6).
+    # verilator: the RTL with REQUANT_ON (#9, steps 5-6). uvm: the same RTL
+    # co-simulated against Spike and MPACT.
     targets = [
         "npusim",
         "verilator",
+        "uvm",
     ],
     deps = [
         "@bazel_tools//tools/python/runfiles",

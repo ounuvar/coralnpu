@@ -443,7 +443,12 @@ def coralflow_test(
                     for d in common_data
                 ]),
             }
-        if resolved_toplevel == "VmeCoreMiniAxi":
+        if resolved_toplevel == "RvvCoreMiniRequantAxi":
+            # Idea 2 (#9): co-simulate on the VME verification core with
+            # REQUANT_ON (Verilator only).
+            uvm_sim_dep = ["//tests/uvm:uvm_sim_verilator_vme_requant"]
+            uvm_extra_env["CORALFLOW_UVM_SIMULATOR"] = "verilator_vme_requant"
+        elif resolved_toplevel == "VmeCoreMiniAxi":
             uvm_sim_dep = select({
                 "//tests/uvm:use_vcs_uvm": ["//tests/uvm:uvm_sim_vcs_vme"],
                 "//conditions:default": ["//tests/uvm:uvm_sim_verilator_vme"],

@@ -908,6 +908,34 @@ chisel_cc_library(
     vopts = VME_CORE_MINI_AXI_VOPTS + ["-DREQUANT_ON"],
 )
 
+# Verification core (debug ports for UVM co-simulation) with the matrix engine
+# and the fused requantization instructions (#9, step 6).
+chisel_cc_library(
+    name = "vme_core_mini_verification_requant_axi_cc_library",
+    chisel_lib = ":coralnpu",
+    emit_class = "coralnpu.EmitCore",
+    extra_outs = [
+        "VVmeCoreMiniVerificationRequantAxi_parameters.h",
+        "VmeCoreMiniVerificationRequantAxi.zip",
+    ],
+    gen_flags = [
+        "--moduleName=VmeCoreMiniVerificationRequant",
+        "--enableVerification=True",
+        "--enableRequant=True",
+    ] + VME_CORE_MINI_AXI_COMMON_GEN_FLAGS,
+    module_name = "VmeCoreMiniVerificationRequantAxi",
+    tags = ["manual"],
+    verilog_file_path = "VmeCoreMiniVerificationRequantAxi.sv",
+    vopts = VME_CORE_MINI_AXI_VOPTS + ["-DREQUANT_ON"],
+)
+
+filter_files_by_extension(
+    name = "vme_core_mini_verification_requant_axi_cc_library_emit_verilog_single_sv",
+    src = ":vme_core_mini_verification_requant_axi_cc_library_emit_verilog",
+    extensions = ["sv"],
+    tags = ["manual"],
+)
+
 filter_files_by_extension(
     name = "vme_core_mini_verification_axi_cc_library_emit_verilog_single_sv",
     src = ":vme_core_mini_verification_axi_cc_library_emit_verilog",
