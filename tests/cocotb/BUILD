@@ -894,6 +894,26 @@ coralflow_test(
     ],
 )
 
+# Idea 2 (#9): the whole arithmetic suite on the REQUANT_ON core, whose MAC
+# unit also carries vrequant/vrqclamp.
+coralflow_test(
+    name = "rvv_arithmetic_requant_test",
+    size = "enormous",
+    srcs = ["rvv_arithmetic_cocotb_test.py"],
+    data = [
+        "//tests/cocotb/rvv/arithmetics:rvv_arith_tests",
+    ],
+    hdl_toplevel = "RvvCoreMiniRequantAxi",
+    tags = ["manual"],
+    targets = [
+        "verilator",
+    ],
+    deps = [
+        "@bazel_tools//tools/python/runfiles",
+        requirement("tqdm"),
+    ],
+)
+
 test_suite(
     name = "rvv_openroad_arithmetic_tests",
     tests = [
