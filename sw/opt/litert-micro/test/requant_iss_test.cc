@@ -73,7 +73,7 @@ volatile int32_t rqclamp_mismatches __attribute__((used)) = -1;
 // First few instruction-check mismatches: {i, acc, mult, shift, offset, got, want}.
 constexpr int kMaxBad = 8;
 int32_t first_bad[kMaxBad][7] __attribute__((used));
-volatile int32_t first_bad_count __attribute__((used)) = 0;
+volatile int32_t first_bad_count __attribute__((used))   = 0;
 volatile uint32_t baseline_instret __attribute__((used)) = 0;
 volatile uint32_t fused_instret __attribute__((used))    = 0;
 volatile int32_t done __attribute__((used))              = 0;
@@ -147,11 +147,12 @@ static void OneInsn(int op, const int32_t *in, const int32_t *m, const int32_t *
                     int32_t *out, int n) {
   while (n > 0) {
     size_t vl;
-    asm volatile("vsetvli %[vl], %[n], e32, m8, ta, ma\n"
-                 "vle32.v v8, (%[in])\n"
-                 : [vl] "=&r"(vl)
-                 : [n] "r"(n), [in] "r"(in)
-                 : "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "memory");
+    asm volatile(
+        "vsetvli %[vl], %[n], e32, m8, ta, ma\n"
+        "vle32.v v8, (%[in])\n"
+        : [vl] "=&r"(vl)
+        : [n] "r"(n), [in] "r"(in)
+        : "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "memory");
     if (op == 0) {
       asm volatile(
           "vle32.v v16, (%[m])\n"
@@ -159,8 +160,8 @@ static void OneInsn(int op, const int32_t *in, const int32_t *m, const int32_t *
           ".insn r 0x57, 0x2, 0x27, x8, x24, x16\n"  // vrequant.vv v8, v16, v24
           :
           : [m] "r"(m), [s] "r"(s)
-          : "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19",
-            "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31");
+          : "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20",
+            "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31");
     } else {
       asm volatile(".insn r 0x57, 0x6, 0x23, x8, %[packed], x8\n"  // vrqclamp.vx v8, v8, packed
                    :
@@ -214,14 +215,14 @@ int main(void) {
     for (int i = 0; i < kElems; ++i) {
       const int32_t want = rq::RequantRef(acc[i], mult[i], shift[i], offset, kActMin, kActMax);
       if (got[i] != want && first_bad_count < kMaxBad) {
-        int32_t *rec = first_bad[first_bad_count];
-        rec[0]       = i;
-        rec[1]       = acc[i];
-        rec[2]       = mult[i];
-        rec[3]       = shift[i];
-        rec[4]       = offset;
-        rec[5]       = got[i];
-        rec[6]       = want;
+        int32_t *rec    = first_bad[first_bad_count];
+        rec[0]          = i;
+        rec[1]          = acc[i];
+        rec[2]          = mult[i];
+        rec[3]          = shift[i];
+        rec[4]          = offset;
+        rec[5]          = got[i];
+        rec[6]          = want;
         first_bad_count = first_bad_count + 1;
       }
       bad += got[i] != want;
@@ -238,12 +239,13 @@ int main(void) {
     bad += got[i] != rq::RequantRef(acc[i], mult[i], shift[i], 0, INT32_MIN, INT32_MAX);
   }
   requant_mismatches = bad;
-  bad = 0;
+  bad                = 0;
   for (int32_t offset : offsets) {
     OneInsn(1, acc, nullptr, nullptr, PackClamp(offset, kActMin, kActMax), got, kElems);
     for (int i = 0; i < kElems; ++i) {
-      int32_t want = static_cast<int32_t>(static_cast<uint32_t>(acc[i]) + static_cast<uint32_t>(offset));
-      want         = want < kActMin ? kActMin : (want > kActMax ? kActMax : want);
+      int32_t want =
+          static_cast<int32_t>(static_cast<uint32_t>(acc[i]) + static_cast<uint32_t>(offset));
+      want = want < kActMin ? kActMin : (want > kActMax ? kActMax : want);
       bad += got[i] != want;
     }
   }
