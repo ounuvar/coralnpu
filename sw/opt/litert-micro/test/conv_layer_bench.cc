@@ -25,6 +25,7 @@
 #include <cstring>
 
 #include "sw/opt/litert-micro/conv.h"
+#include "sw/opt/litert-micro/conv_tiled.h"
 #include "sw/utils/utils.h"
 #include "tensorflow/lite/micro/kernels/conv.h"
 
@@ -84,6 +85,15 @@ RESULT_VAR(uint32_t, tile_instret_lo);
 RESULT_VAR(uint32_t, tile_instret_hi);
 RESULT_VAR(int32_t, tile_checksum);
 RESULT_VAR(int32_t, tile_done);
+#ifdef BENCH_STATS
+RESULT_VAR(uint32_t, stat_chunks);
+RESULT_VAR(uint32_t, stat_tiles);
+RESULT_VAR(uint32_t, stat_prologue);
+RESULT_VAR(uint32_t, stat_prepare);
+RESULT_VAR(uint32_t, stat_compute);
+RESULT_VAR(uint32_t, stat_wait);
+RESULT_VAR(uint32_t, stat_blocking_copy);
+#endif
 }
 
 int main(void) {
@@ -127,6 +137,9 @@ int main(void) {
   data.output_activation_min         = -128;
   data.output_activation_max         = 127;
 
+#ifdef BENCH_STATS
+  ConvTiledResetStats();
+#endif
   const uint64_t c0 = mcycle_read();
   const uint64_t i0 = minstret_read();
   ConvPerChannel(params, data, multiplier, shift, &context, input_shape, input_data, filter_shape,
@@ -134,6 +147,16 @@ int main(void) {
   const uint64_t instret = minstret_read() - i0;
   const uint64_t cycles  = mcycle_read() - c0;
 
+#ifdef BENCH_STATS
+  const ConvTiledStats stats = ConvTiledGetStats();
+  stat_chunks                = stats.chunks;
+  stat_tiles                 = stats.tiles;
+  stat_prologue              = stats.prologue;
+  stat_prepare               = stats.prepare;
+  stat_compute               = stats.compute;
+  stat_wait                  = stats.wait;
+  stat_blocking_copy         = stats.blocking_copy;
+#endif
   tile_instret_lo = static_cast<uint32_t>(instret);
   tile_instret_hi = static_cast<uint32_t>(instret >> 32);
   tile_cycles_lo  = static_cast<uint32_t>(cycles);
