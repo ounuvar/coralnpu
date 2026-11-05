@@ -234,13 +234,24 @@ cc_library(
                 "CORALNPU_TILING_STATS=1",
             ],
         ),
+        (
+            "rvv_tiled_dma_prefetch_spread_stats",
+            [
+                "CORALNPU_RVV_CONV=1",
+                "CORALNPU_CONV_TILING=1",
+                "CORALNPU_DMA_TILING=1",
+                "CORALNPU_TILING_PREFETCH=1",
+                "CORALNPU_TILING_STATS=1",
+                "CORALNPU_TILING_SPREAD=1",
+            ],
+        ),
     ]
 ]
 
 # The conv library for the tiled-versus-untiled tests on npusim (memcpy copies; the kernel follows
 # --//sw/opt/litert-micro:rvv_conv). A real DMA moves data at some time between Start and Wait, so
 # the tests cover both extremes: copies at Start (default) and at Wait (CORALNPU_COPY_AT_WAIT),
-# with and without prefetch.
+# with and without prefetch, with the prefetch spread over the tiles, and with tile rounding.
 [
     cc_library(
         name = "conv_tiling_test_" + variant,
@@ -281,6 +292,45 @@ cc_library(
             "prefetch_wait",
             [
                 "CORALNPU_TILING_PREFETCH=1",
+                "CORALNPU_COPY_AT_WAIT=1",
+            ],
+        ),
+        (
+            "r4",
+            [
+                "CORALNPU_TILING_PREFETCH=1",
+                "CORALNPU_TILING_ROUND4=1",
+            ],
+        ),
+        (
+            "spread",
+            [
+                "CORALNPU_TILING_PREFETCH=1",
+                "CORALNPU_TILING_SPREAD=1",
+            ],
+        ),
+        (
+            "spread_wait",
+            [
+                "CORALNPU_TILING_PREFETCH=1",
+                "CORALNPU_TILING_SPREAD=1",
+                "CORALNPU_COPY_AT_WAIT=1",
+            ],
+        ),
+        (
+            "spread_r4",
+            [
+                "CORALNPU_TILING_PREFETCH=1",
+                "CORALNPU_TILING_SPREAD=1",
+                "CORALNPU_TILING_ROUND4=1",
+            ],
+        ),
+        (
+            "spread_r4_wait",
+            [
+                "CORALNPU_TILING_PREFETCH=1",
+                "CORALNPU_TILING_SPREAD=1",
+                "CORALNPU_TILING_ROUND4=1",
                 "CORALNPU_COPY_AT_WAIT=1",
             ],
         ),

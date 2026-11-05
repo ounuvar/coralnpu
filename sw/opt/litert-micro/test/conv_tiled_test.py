@@ -28,6 +28,8 @@ _SYMBOLS = [
     "cases_double_buffer",
     "cases_single_buffer",
     "cases_chunked_double",
+    "plan_failures",
+    "first_failure",
     "cases_chunked_single",
     "mismatches",
     "selftest_detected",
@@ -58,11 +60,17 @@ async def run_conv_tiled_test(fixture):
         f"single={v['cases_single_buffer']} "
         f"chunked_double={v['cases_chunked_double']} "
         f"chunked_single={v['cases_chunked_single']} "
-        f"mismatches={v['mismatches']} variant='{variant}'",
+        f"mismatches={v['mismatches']} plan_failures={v['plan_failures']} "
+        f"first_failure={v['first_failure']} variant='{variant}'",
         flush=True,
     )
     assert v["done"] == 1, "program did not finish"
     assert v["mismatches"] == 0, v
+    assert v["plan_failures"] == 0, (
+        "the planner accepted a layer that the wrapper then failed to run "
+        f"(first: case {(v['first_failure'] - 1) // 16}, budget "
+        f"{(v['first_failure'] - 1) % 16}): {v}"
+    )
     assert v["selftest_detected"] == 1, "the comparison missed a flipped byte"
     # The test must actually exercise the interesting plans.
     assert v["cases_tiled"] > 0, v

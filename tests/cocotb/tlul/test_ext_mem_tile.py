@@ -191,10 +191,8 @@ async def run_tile(dut, elf_name):
     if "_stats" in elf_name:
         # (An await inside a generator expression would make it an async generator.)
         phases = ""
-        for name in (
-                "chunks", "tiles", "prologue", "prepare", "compute", "wait",
-                "blocking_copy"
-        ):
+        for name in ("chunks", "tiles", "prologue", "prepare", "compute",
+                     "wait", "blocking_copy"):
             phases += f" {name}={await result('stat_' + name)}"
     if "_ref" in elf_name:
         ref_done = await result("tile_ref_done")
@@ -451,3 +449,27 @@ async def test_layer_l2_p128_tiled_pf(dut):
 async def test_layer_l2_p384_tiled_pf(dut):
     """Pointwise layer l2, 384 pixels, variant tiled_pf (#11)."""
     await run_tile(dut, "conv_layer_bench_l2_p384_tiled_pf.elf")
+
+
+@cocotb.test()
+async def test_layer_l30_p49_tiled_pf_spread_stats(dut):
+    """Pointwise layer l30, 49 pixels, variant tiled_pf_spread_stats (#11)."""
+    await run_tile(dut, "conv_layer_bench_l30_p49_tiled_pf_spread_stats.elf")
+
+
+@cocotb.test()
+async def test_layer_l28_p49_tiled_pf_spread_stats(dut):
+    """Pointwise layer l28, 49 pixels, variant tiled_pf_spread_stats (#11)."""
+    await run_tile(dut, "conv_layer_bench_l28_p49_tiled_pf_spread_stats.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p33_tiled_pf_spread_stats(dut):
+    """Pointwise layer l17, 33 pixels, variant tiled_pf_spread_stats (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p33_tiled_pf_spread_stats.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p99_tiled_pf_spread_stats(dut):
+    """Pointwise layer l17, 99 pixels, variant tiled_pf_spread_stats (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p99_tiled_pf_spread_stats.elf")

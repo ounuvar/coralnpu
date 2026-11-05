@@ -98,7 +98,8 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
     return false;
   const int pixels = input_shape.Dims(0) * input_shape.Dims(1) * input_shape.Dims(2);
 
-  const ConvTilePlan plan = PlanPointwise(pixels, in_d, out_d, kRvv, budget, kPrefetchDefault);
+  const ConvTilePlan plan =
+      PlanPointwise(pixels, in_d, out_d, kRvv, budget, kPrefetchDefault, kRound4Default);
   if (plan_out)
     *plan_out = plan;
   if (!plan.tiled)
@@ -132,18 +133,29 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
 
   const auto pixels_in_tile = [&](int t) { return std::min(tile, pixels - t * tile); };
 
-  // Adds the copies that bring chunk [n0, n0 + chunk) of the filter, bias, multipliers and shifts
-  // into the raw buffers `r`.
-  const auto add_raw = [&](auto &c, int n0, const Raw &r) {
-    const int cn = std::min(chunk, out_d - n0);
-    bool added   = c.Add(filter_data + static_cast<size_t>(n0) * in_d, r.filter,
-                         static_cast<uint32_t>(cn) * in_d);
-    if (bias_data)
-      added &= c.Add(bias_data + n0, r.bias, 4u * cn);
-    added &= c.Add(output_multiplier + n0, r.mult, 4u * cn);
-    added &= c.Add(output_shift + n0, r.shift, 4u * cn);
+  // Adds part `part` of `parts` of the copies that bring chunk [n0, n0 + chunk) of the filter,
+  // bias, multipliers and shifts into the raw buffers `r`. The filter rows are contiguous in the
+  // OHWI filter, so they split into pieces; part 0 also carries the small bias, multiplier and
+  // shift copies. Empty pieces add nothing.
+  const auto add_raw_part = [&](auto &c, int n0, const Raw &r, int part, int parts) {
+    const int cn         = std::min(chunk, out_d - n0);
+    const uint32_t total = static_cast<uint32_t>(cn) * in_d;
+    const uint32_t per   = RoundUp16((total + parts - 1) / parts);
+    const uint32_t off   = std::min(per * static_cast<uint32_t>(part), total);
+    const uint32_t len   = std::min(per, total - off);
+    bool added           = true;
+    if (len > 0) {
+      added &= c.Add(filter_data + static_cast<size_t>(n0) * in_d + off, r.filter + off, len);
+    }
+    if (part == 0) {
+      if (bias_data)
+        added &= c.Add(bias_data + n0, r.bias, 4u * cn);
+      added &= c.Add(output_multiplier + n0, r.mult, 4u * cn);
+      added &= c.Add(output_shift + n0, r.shift, 4u * cn);
+    }
     return added;
   };
+  const auto add_raw = [&](auto &c, int n0, const Raw &r) { return add_raw_part(c, n0, r, 0, 1); };
 
   bool ok         = true;
   int rs          = 0;      // which raw buffer set holds the current chunk
@@ -237,9 +249,14 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
         if (t + 1 < tiles) {
           ok &= c.Add(input_data + static_cast<size_t>(t + 1) * tile * in_d, in_tile[buf ^ 1],
                       static_cast<uint32_t>(pixels_in_tile(t + 1)) * in_d);
-        } else if (prefetch_next) {
-          ok &= add_raw(c, n0 + chunk, raws[rs ^ 1]);
-          ok &= c.Add(input_data, in_tile[buf ^ 1], static_cast<uint32_t>(np0) * in_d);
+        }
+        if (prefetch_next) {
+          if (kSpreadDefault)
+            ok &= add_raw_part(c, n0 + chunk, raws[rs ^ 1], t, tiles);
+          else if (t + 1 == tiles)
+            ok &= add_raw(c, n0 + chunk, raws[rs ^ 1]);
+          if (t + 1 == tiles)
+            ok &= c.Add(input_data, in_tile[buf ^ 1], static_cast<uint32_t>(np0) * in_d);
         }
         if (!ok)
           return false;
@@ -271,12 +288,16 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
           STAT_ADD(blocking_copy, t1);
           c.Clear();
         }
-        // During the last tile the DMA prefetches the next chunk's raw buffers.
-        const bool prefetch_now        = prefetch_next && t == tiles - 1;
+        // The DMA prefetches the next chunk's raw buffers: during the last tile, or spread over
+        // all.
+        const bool prefetch_now        = prefetch_next && (kSpreadDefault || t == tiles - 1);
         CopyChain<kMaxChainCopies> &pf = g_chains[1];
         if (prefetch_now) {
           pf.Clear();
-          ok &= add_raw(pf, n0 + chunk, raws[rs ^ 1]);
+          if (kSpreadDefault)
+            ok &= add_raw_part(pf, n0 + chunk, raws[rs ^ 1], t, tiles);
+          else
+            ok &= add_raw(pf, n0 + chunk, raws[rs ^ 1]);
           if (!ok)
             return false;
           pf.Start();

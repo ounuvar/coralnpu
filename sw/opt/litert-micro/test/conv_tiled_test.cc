@@ -93,6 +93,8 @@ RESULT(cases_multi_tile);
 RESULT(cases_double_buffer);
 RESULT(cases_single_buffer);
 RESULT(cases_chunked_double);
+RESULT(plan_failures);  // the plan said tiled but the wrapper returned false
+RESULT(first_failure);  // case index * 16 + budget index of the first such failure, plus 1
 RESULT(cases_chunked_single);
 RESULT(mismatches);
 RESULT(selftest_detected);
@@ -152,7 +154,9 @@ int main() {
     ConvPerChannel(params, data, multiplier, shift, &context, in_shape, input_data, flt_shape,
                    filter_data, bias_shape, bias, out_shape, out_ref);
 
+    int budget_index = -1;
     for (uint32_t budget : kBudgets) {
+      ++budget_index;
       ++cases_run;
       // Bytes the tiled path does not write stay 0xA5, so a missed tile shows up as a mismatch.
       memset(out_tiled, 0xA5, sizeof(out_tiled));
@@ -164,6 +168,11 @@ int main() {
                                        filter_data, bias, out_shape, out_tiled, budget, &plan);
       if (!tiled) {
         ++cases_not_tiled;
+        if (plan.tiled) {
+          if (!plan_failures)
+            first_failure = (case_index - 1) * 16 + budget_index + 1;
+          ++plan_failures;
+        }
         continue;
       }
       ++cases_tiled;

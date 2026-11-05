@@ -91,6 +91,11 @@ coralflow_test(
         ("_wait", "//sw/opt/litert-micro:conv_tiling_test_wait"),
         ("_prefetch", "//sw/opt/litert-micro:conv_tiling_test_prefetch"),
         ("_prefetch_wait", "//sw/opt/litert-micro:conv_tiling_test_prefetch_wait"),
+        ("_r4", "//sw/opt/litert-micro:conv_tiling_test_r4"),
+        ("_spread", "//sw/opt/litert-micro:conv_tiling_test_spread"),
+        ("_spread_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_wait"),
+        ("_spread_r4", "//sw/opt/litert-micro:conv_tiling_test_spread_r4"),
+        ("_spread_r4_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_r4_wait"),
     ]
 ]
 
@@ -111,6 +116,11 @@ coralflow_test(
         "_wait",
         "_prefetch",
         "_prefetch_wait",
+        "_r4",
+        "_spread",
+        "_spread_wait",
+        "_spread_r4",
+        "_spread_r4_wait",
     ]
 ]
 
@@ -137,6 +147,7 @@ coralflow_test(
                 "tiled_stats": "_stats",
                 "tiled_pf": "_prefetch",
                 "tiled_pf_stats": "_prefetch_stats",
+                "tiled_pf_spread_stats": "_prefetch_spread_stats",
             }[variant] if variant.startswith("tiled") else "//sw/opt/litert-micro:conv_rvv",
             "//sw/utils",
         ],
@@ -154,6 +165,7 @@ coralflow_test(
                 "tiled_pf",
                 "tiled_stats",
                 "tiled_pf_stats",
+                "tiled_pf_spread_stats",
             ],
         ),
         (
@@ -168,6 +180,7 @@ coralflow_test(
                 "tiled_pf",
                 "tiled_stats",
                 "tiled_pf_stats",
+                "tiled_pf_spread_stats",
             ],
         ),
         (
@@ -180,6 +193,7 @@ coralflow_test(
                 "ext",
                 "tiled",
                 "tiled_pf",
+                "tiled_pf_spread_stats",
             ],
         ),
         (
@@ -194,6 +208,7 @@ coralflow_test(
                 "tiled_pf",
                 "tiled_stats",
                 "tiled_pf_stats",
+                "tiled_pf_spread_stats",
             ],
         ),
         (

@@ -57,12 +57,35 @@ inline constexpr bool kPrefetchDefault = true;
 inline constexpr bool kPrefetchDefault = false;
 #endif
 
+// With prefetch, CORALNPU_TILING_SPREAD spreads the next chunk's filter rows over all the tiles of
+// the current chunk (one piece per tile) instead of copying them during the last tile only, so no
+// single tile's chain is much longer than its compute.
+#ifdef CORALNPU_TILING_SPREAD
+inline constexpr bool kSpreadDefault = true;
+#else
+inline constexpr bool kSpreadDefault = false;
+#endif
+
+// CORALNPU_TILING_ROUND4 rounds the tile size down to a multiple of the kernel's 4-pixel block, so
+// every kernel call runs full blocks (a partial block takes a slower path).
+#ifdef CORALNPU_TILING_ROUND4
+inline constexpr bool kRound4Default = true;
+#else
+inline constexpr bool kRound4Default = false;
+#endif
+
 // DMA descriptors (32 bytes each) live outside the arena, in the wrapper's copy chains: the
 // prologue chain (filter, bias, multiplier, shift, first input tile) and two per-tile chains, each
 // holding one input copy plus, when the output channels are chunked, one output copy per pixel
 // (the DMA has no strided mode). Each chain also has a 32-byte header.
-inline constexpr uint32_t kPrologueCopies  = 5;
-inline constexpr uint32_t kMaxChainCopies  = kMaxTilePixels + 2;
+inline constexpr uint32_t kPrologueCopies = 5;
+// The longest chain is a tile's: one output copy per pixel (the DMA has no strided mode), the next
+// tile's input, and with prefetch up to three more (a tile of the filter, and in the last tile the
+// bias, multiplier and shift copies of the next chunk and its first input tile). kPrefetchExtra
+// covers the larger of the two prefetch schedules.
+inline constexpr uint32_t kPrefetchExtraCopies = 3;
+inline constexpr uint32_t kMaxChainCopies =
+    kMaxTilePixels + 2 + (kPrefetchDefault ? kPrefetchExtraCopies : 0);
 inline constexpr uint32_t kDescriptorBytes = 32 * (kPrologueCopies + 2 * kMaxChainCopies + 3);
 
 // The arena the tiled path carves its buffers from, for a given total budget.
@@ -154,7 +177,8 @@ constexpr uint64_t PointwiseDmaBytes(int pixels, int in_d, int out_d, int num_ch
 
 constexpr ConvTilePlan PlanPointwise(int pixels, int in_d, int out_d, bool int16_weights,
                                      uint32_t budget = CORALNPU_TILE_BUDGET_BYTES,
-                                     bool prefetch   = kPrefetchDefault) {
+                                     bool prefetch   = kPrefetchDefault,
+                                     bool round4     = kRound4Default) {
   ConvTilePlan none{};
   if (pixels <= 0 || in_d <= 0 || out_d <= 0)
     return none;
@@ -183,6 +207,10 @@ constexpr ConvTilePlan PlanPointwise(int pixels, int in_d, int out_d, bool int16
           best = t;
           break;
         }
+      }
+      // Full 4-pixel blocks only (tiles of at least two blocks; smaller layers keep their size).
+      if (round4 && best >= 2 * static_cast<int>(kPointwiseKernelPixels)) {
+        best -= best % static_cast<int>(kPointwiseKernelPixels);
       }
       if (best > 0) {
         ConvTilePlan plan;

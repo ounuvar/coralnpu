@@ -206,5 +206,44 @@ TEST(ConvTilePlan, MobileNetLayersFitWithPrefetchAndNeverUseMoreThanTheBudget) {
   }
 }
 
+TEST(ConvTilePlan, Round4MakesTilesAMultipleOfTheKernelBlockWithoutChangingTheChunking) {
+  for (const Layer &l : kLayers) {
+    for (bool prefetch : {false, true}) {
+      const ConvTilePlan a = PlanPointwise(l.pixels, l.in_d, l.out_d, true,
+                                           CORALNPU_TILE_BUDGET_BYTES, prefetch, false);
+      const ConvTilePlan b = PlanPointwise(l.pixels, l.in_d, l.out_d, true,
+                                           CORALNPU_TILE_BUDGET_BYTES, prefetch, true);
+      ASSERT_TRUE(a.tiled && b.tiled) << "layer " << l.index;
+      EXPECT_EQ(a.channel_chunk, b.channel_chunk) << "layer " << l.index;
+      EXPECT_EQ(a.double_buffer, b.double_buffer) << "layer " << l.index;
+      EXPECT_LE(b.pixels_per_tile, a.pixels_per_tile);
+      EXPECT_LT(a.pixels_per_tile - b.pixels_per_tile, 4) << "layer " << l.index;
+      if (a.pixels_per_tile >= 8) {
+        EXPECT_EQ(b.pixels_per_tile % 4, 0) << "layer " << l.index;
+      } else {
+        EXPECT_EQ(a.pixels_per_tile, b.pixels_per_tile) << "layer " << l.index;
+      }
+      EXPECT_LE(b.footprint, a.footprint);
+    }
+  }
+}
+
+TEST(ConvTilePlan, ChainCapacityCoversTheLongestChain) {
+  // Outputs (one per pixel of a full tile) + next input + the prefetch schedule's extra copies.
+  EXPECT_GE(kMaxChainCopies, static_cast<uint32_t>(kMaxTilePixels) + 2 +
+                                 (kPrefetchDefault ? kPrefetchExtraCopies : 0));
+  // The last tile's chain without the spread: outputs, the next chunk's filter, bias, multiplier
+  // and shift copies, and its first input tile.
+  if (kPrefetchDefault) {
+    EXPECT_GE(kMaxChainCopies, static_cast<uint32_t>(kMaxTilePixels) + 4 + 1);
+  }
+  // Every plan the planner returns keeps its tile within the chain capacity.
+  for (const Layer &l : kLayers) {
+    const ConvTilePlan p = PlanPointwise(l.pixels, l.in_d, l.out_d, true);
+    ASSERT_TRUE(p.tiled);
+    EXPECT_LE(static_cast<uint32_t>(p.pixels_per_tile) + 5, kMaxChainCopies + 3);
+  }
+}
+
 }  // namespace
 }  // namespace coralnpu_v2::opt::litert_micro

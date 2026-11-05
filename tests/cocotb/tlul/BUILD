@@ -650,6 +650,10 @@ EXT_MEM_TILE_TESTCASES = [
     "test_layer_l17_p99_tiled_pf_stats",
     "test_layer_l2_p128_tiled_pf",
     "test_layer_l2_p384_tiled_pf",
+    "test_layer_l30_p49_tiled_pf_spread_stats",
+    "test_layer_l28_p49_tiled_pf_spread_stats",
+    "test_layer_l17_p33_tiled_pf_spread_stats",
+    "test_layer_l17_p99_tiled_pf_spread_stats",
 ]
 # END_TESTCASES_FOR_ext_mem_tile_zero_cocotb
 
@@ -712,6 +716,10 @@ cocotb_test_suite(
             "//sw/opt/litert-micro/test:conv_layer_bench_l17_p99_tiled_pf_stats.elf",
             "//sw/opt/litert-micro/test:conv_layer_bench_l2_p128_tiled_pf.elf",
             "//sw/opt/litert-micro/test:conv_layer_bench_l2_p384_tiled_pf.elf",
+            "//sw/opt/litert-micro/test:conv_layer_bench_l30_p49_tiled_pf_spread_stats.elf",
+            "//sw/opt/litert-micro/test:conv_layer_bench_l28_p49_tiled_pf_spread_stats.elf",
+            "//sw/opt/litert-micro/test:conv_layer_bench_l17_p33_tiled_pf_spread_stats.elf",
+            "//sw/opt/litert-micro/test:conv_layer_bench_l17_p99_tiled_pf_spread_stats.elf",
         ],
         "default_testcase_size": "enormous",
         "size": "enormous",
@@ -778,6 +786,10 @@ cocotb_test_suite(
             "//sw/opt/litert-micro/test:conv_layer_bench_l17_p99_tiled_pf_stats.elf",
             "//sw/opt/litert-micro/test:conv_layer_bench_l2_p128_tiled_pf.elf",
             "//sw/opt/litert-micro/test:conv_layer_bench_l2_p384_tiled_pf.elf",
+            "//sw/opt/litert-micro/test:conv_layer_bench_l30_p49_tiled_pf_spread_stats.elf",
+            "//sw/opt/litert-micro/test:conv_layer_bench_l28_p49_tiled_pf_spread_stats.elf",
+            "//sw/opt/litert-micro/test:conv_layer_bench_l17_p33_tiled_pf_spread_stats.elf",
+            "//sw/opt/litert-micro/test:conv_layer_bench_l17_p99_tiled_pf_spread_stats.elf",
         ],
         "default_testcase_size": "enormous",
         "size": "enormous",
