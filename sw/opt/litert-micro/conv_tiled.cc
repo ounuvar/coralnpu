@@ -98,8 +98,8 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
     return false;
   const int pixels = input_shape.Dims(0) * input_shape.Dims(1) * input_shape.Dims(2);
 
-  const ConvTilePlan plan =
-      PlanPointwise(pixels, in_d, out_d, kRvv, budget, kPrefetchDefault, kRound4Default);
+  const ConvTilePlan plan = PlanPointwise(pixels, in_d, out_d, kRvv, budget, kPrefetchDefault,
+                                          kRound4Default, kBalanceDefault);
   if (plan_out)
     *plan_out = plan;
   if (!plan.tiled)
@@ -243,6 +243,7 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
         const int buf                 = buf0 ^ (t & 1);
         last_buf                      = buf;
         CopyChain<kMaxChainCopies> &c = g_chains[t & 1];
+        STAT_START(tb);
         c.Clear();
         if (t > 0)
           ok &= add_output(c, t - 1, buf ^ 1);
@@ -258,6 +259,7 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
           if (t + 1 == tiles)
             ok &= c.Add(input_data, in_tile[buf ^ 1], static_cast<uint32_t>(np0) * in_d);
         }
+        STAT_ADD(build, tb);
         if (!ok)
           return false;
         c.Start();
@@ -269,8 +271,12 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
       }
       STAT_START(t2);
       CopyChain<kMaxChainCopies> &last = g_chains[0];
-      last.Clear();
-      ok &= add_output(last, tiles - 1, last_buf);
+      {
+        STAT_START(tb);
+        last.Clear();
+        ok &= add_output(last, tiles - 1, last_buf);
+        STAT_ADD(build, tb);
+      }
       if (!ok || !last.Run())
         return false;
       STAT_ADD(blocking_copy, t2);
@@ -293,11 +299,13 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
         const bool prefetch_now        = prefetch_next && (kSpreadDefault || t == tiles - 1);
         CopyChain<kMaxChainCopies> &pf = g_chains[1];
         if (prefetch_now) {
+          STAT_START(tb);
           pf.Clear();
           if (kSpreadDefault)
             ok &= add_raw_part(pf, n0 + chunk, raws[rs ^ 1], t, tiles);
           else
             ok &= add_raw(pf, n0 + chunk, raws[rs ^ 1]);
+          STAT_ADD(build, tb);
           if (!ok)
             return false;
           pf.Start();
@@ -309,8 +317,12 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
             return false;
           STAT_ADD(wait, t3);
         }
+        {
+          STAT_START(tb);
+          ok &= add_output(c, t, 0);
+          STAT_ADD(build, tb);
+        }
         STAT_START(t2);
-        ok &= add_output(c, t, 0);
         if (!ok || !c.Run())
           return false;
         STAT_ADD(blocking_copy, t2);

@@ -96,6 +96,8 @@ coralflow_test(
         ("_spread_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_wait"),
         ("_spread_r4", "//sw/opt/litert-micro:conv_tiling_test_spread_r4"),
         ("_spread_r4_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_r4_wait"),
+        ("_spread_balance", "//sw/opt/litert-micro:conv_tiling_test_spread_balance"),
+        ("_spread_balance_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_balance_wait"),
     ]
 ]
 
@@ -121,6 +123,8 @@ coralflow_test(
         "_spread_wait",
         "_spread_r4",
         "_spread_r4_wait",
+        "_spread_balance",
+        "_spread_balance_wait",
     ]
 ]
 
@@ -148,6 +152,7 @@ coralflow_test(
                 "tiled_pf": "_prefetch",
                 "tiled_pf_stats": "_prefetch_stats",
                 "tiled_pf_spread_stats": "_prefetch_spread_stats",
+                "tiled_pf_spread_balance_stats": "_prefetch_spread_balance_stats",
             }[variant] if variant.startswith("tiled") else "//sw/opt/litert-micro:conv_rvv",
             "//sw/utils",
         ],
@@ -166,6 +171,7 @@ coralflow_test(
                 "tiled_stats",
                 "tiled_pf_stats",
                 "tiled_pf_spread_stats",
+                "tiled_pf_spread_balance_stats",
             ],
         ),
         (
@@ -181,6 +187,7 @@ coralflow_test(
                 "tiled_stats",
                 "tiled_pf_stats",
                 "tiled_pf_spread_stats",
+                "tiled_pf_spread_balance_stats",
             ],
         ),
         (
@@ -194,6 +201,7 @@ coralflow_test(
                 "tiled",
                 "tiled_pf",
                 "tiled_pf_spread_stats",
+                "tiled_pf_spread_balance_stats",
             ],
         ),
         (
@@ -209,6 +217,7 @@ coralflow_test(
                 "tiled_stats",
                 "tiled_pf_stats",
                 "tiled_pf_spread_stats",
+                "tiled_pf_spread_balance_stats",
             ],
         ),
         (

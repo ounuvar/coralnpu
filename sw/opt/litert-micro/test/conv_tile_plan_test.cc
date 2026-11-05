@@ -245,5 +245,37 @@ TEST(ConvTilePlan, ChainCapacityCoversTheLongestChain) {
   }
 }
 
+TEST(ConvTilePlan, BalanceEvensOutTheTilesWithoutChangingTheirNumberOrTheChunking) {
+  for (const Layer &l : kLayers) {
+    for (bool prefetch : {false, true}) {
+      const ConvTilePlan a = PlanPointwise(l.pixels, l.in_d, l.out_d, true,
+                                           CORALNPU_TILE_BUDGET_BYTES, prefetch, false, false);
+      const ConvTilePlan b = PlanPointwise(l.pixels, l.in_d, l.out_d, true,
+                                           CORALNPU_TILE_BUDGET_BYTES, prefetch, false, true);
+      ASSERT_TRUE(a.tiled && b.tiled) << "layer " << l.index;
+      EXPECT_EQ(a.channel_chunk, b.channel_chunk) << "layer " << l.index;
+      EXPECT_EQ(a.double_buffer, b.double_buffer) << "layer " << l.index;
+      const int tiles_a = (l.pixels + a.pixels_per_tile - 1) / a.pixels_per_tile;
+      const int tiles_b = (l.pixels + b.pixels_per_tile - 1) / b.pixels_per_tile;
+      EXPECT_EQ(tiles_a, tiles_b) << "layer " << l.index;
+      EXPECT_LE(b.pixels_per_tile, a.pixels_per_tile) << "layer " << l.index;
+      EXPECT_LE(b.footprint, a.footprint) << "layer " << l.index;
+      // The last tile is at most (tiles - 1) pixels shorter than the others.
+      const int last = l.pixels - (tiles_b - 1) * b.pixels_per_tile;
+      EXPECT_GE(last, 1) << "layer " << l.index;
+      EXPECT_GE(last, b.pixels_per_tile - (tiles_b - 1)) << "layer " << l.index;
+    }
+  }
+  // The balanced tile is ceil(pixels / tiles), where tiles comes from the unbalanced plan: 49
+  // pixels in tiles of at most 12 would become 10, 10, 10, 10, 9 (here checked on the arithmetic).
+  const ConvTilePlan a =
+      PlanPointwise(49, 128, 256, true, CORALNPU_TILE_BUDGET_BYTES, true, false, false);
+  const ConvTilePlan b =
+      PlanPointwise(49, 128, 256, true, CORALNPU_TILE_BUDGET_BYTES, true, false, true);
+  ASSERT_TRUE(a.tiled && b.tiled);
+  const int tiles = (49 + a.pixels_per_tile - 1) / a.pixels_per_tile;
+  EXPECT_EQ(b.pixels_per_tile, (49 + tiles - 1) / tiles);
+}
+
 }  // namespace
 }  // namespace coralnpu_v2::opt::litert_micro

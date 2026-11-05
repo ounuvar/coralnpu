@@ -245,6 +245,18 @@ cc_library(
                 "CORALNPU_TILING_SPREAD=1",
             ],
         ),
+        (
+            "rvv_tiled_dma_prefetch_spread_balance_stats",
+            [
+                "CORALNPU_RVV_CONV=1",
+                "CORALNPU_CONV_TILING=1",
+                "CORALNPU_DMA_TILING=1",
+                "CORALNPU_TILING_PREFETCH=1",
+                "CORALNPU_TILING_STATS=1",
+                "CORALNPU_TILING_SPREAD=1",
+                "CORALNPU_TILING_BALANCE=1",
+            ],
+        ),
     ]
 ]
 
@@ -332,6 +344,23 @@ cc_library(
                 "CORALNPU_TILING_SPREAD=1",
                 "CORALNPU_TILING_ROUND4=1",
                 "CORALNPU_COPY_AT_WAIT=1",
+            ],
+        ),
+        (
+            "spread_balance_wait",
+            [
+                "CORALNPU_TILING_PREFETCH=1",
+                "CORALNPU_TILING_SPREAD=1",
+                "CORALNPU_TILING_BALANCE=1",
+                "CORALNPU_COPY_AT_WAIT=1",
+            ],
+        ),
+        (
+            "spread_balance",
+            [
+                "CORALNPU_TILING_PREFETCH=1",
+                "CORALNPU_TILING_SPREAD=1",
+                "CORALNPU_TILING_BALANCE=1",
             ],
         ),
     ]

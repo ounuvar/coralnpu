@@ -74,6 +74,17 @@ inline constexpr bool kRound4Default = true;
 inline constexpr bool kRound4Default = false;
 #endif
 
+// CORALNPU_TILING_BALANCE evens out the tiles: with the number of tiles fixed by the largest tile
+// that fits, every tile but the last gets ceil(pixels / tiles) pixels, so the last tile is nearly
+// as long as the others instead of a pixel or two (49 pixels in tiles of at most 12 become 10, 10,
+// 10, 10, 9, not 12, 12, 12, 12, 1). A very short last tile cannot hide the copies prefetched into
+// it.
+#ifdef CORALNPU_TILING_BALANCE
+inline constexpr bool kBalanceDefault = true;
+#else
+inline constexpr bool kBalanceDefault = false;
+#endif
+
 // DMA descriptors (32 bytes each) live outside the arena, in the wrapper's copy chains: the
 // prologue chain (filter, bias, multiplier, shift, first input tile) and two per-tile chains, each
 // holding one input copy plus, when the output channels are chunked, one output copy per pixel
@@ -177,8 +188,8 @@ constexpr uint64_t PointwiseDmaBytes(int pixels, int in_d, int out_d, int num_ch
 
 constexpr ConvTilePlan PlanPointwise(int pixels, int in_d, int out_d, bool int16_weights,
                                      uint32_t budget = CORALNPU_TILE_BUDGET_BYTES,
-                                     bool prefetch   = kPrefetchDefault,
-                                     bool round4     = kRound4Default) {
+                                     bool prefetch = kPrefetchDefault, bool round4 = kRound4Default,
+                                     bool balance = kBalanceDefault) {
   ConvTilePlan none{};
   if (pixels <= 0 || in_d <= 0 || out_d <= 0)
     return none;
@@ -211,6 +222,10 @@ constexpr ConvTilePlan PlanPointwise(int pixels, int in_d, int out_d, bool int16
       // Full 4-pixel blocks only (tiles of at least two blocks; smaller layers keep their size).
       if (round4 && best >= 2 * static_cast<int>(kPointwiseKernelPixels)) {
         best -= best % static_cast<int>(kPointwiseKernelPixels);
+      }
+      if (balance && best > 0 && best < pixels) {
+        const int tiles_needed = (pixels + best - 1) / best;
+        best                   = (pixels + tiles_needed - 1) / tiles_needed;
       }
       if (best > 0) {
         ConvTilePlan plan;

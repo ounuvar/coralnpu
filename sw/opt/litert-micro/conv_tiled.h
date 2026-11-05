@@ -39,6 +39,7 @@ struct ConvTiledStats {
   uint32_t compute;        // the kernel
   uint32_t wait;           // waiting for a chain after the kernel finished (overlapped copies)
   uint32_t blocking_copy;  // blocking copies: single-buffer input and all output write-backs
+  uint32_t build;          // building copy chains (descriptors) for the tiles, not waiting
 };
 void ConvTiledResetStats();
 ConvTiledStats ConvTiledGetStats();

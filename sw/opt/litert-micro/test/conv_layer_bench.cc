@@ -93,6 +93,7 @@ RESULT_VAR(uint32_t, stat_prepare);
 RESULT_VAR(uint32_t, stat_compute);
 RESULT_VAR(uint32_t, stat_wait);
 RESULT_VAR(uint32_t, stat_blocking_copy);
+RESULT_VAR(uint32_t, stat_build);
 #endif
 }
 
@@ -156,6 +157,7 @@ int main(void) {
   stat_compute               = stats.compute;
   stat_wait                  = stats.wait;
   stat_blocking_copy         = stats.blocking_copy;
+  stat_build                 = stats.build;
 #endif
   tile_instret_lo = static_cast<uint32_t>(instret);
   tile_instret_hi = static_cast<uint32_t>(instret >> 32);
