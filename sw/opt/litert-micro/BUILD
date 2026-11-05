@@ -160,10 +160,22 @@ config_setting(
     flag_values = {":rvv_conv": "True"},
 )
 
-# Idea 4 (#11): ConvPerChannel runs pointwise (1x1) convs in DMA-planned tiles through a DTCM
-# arena (conv_tiled.cc). Off by default; with it off conv.o is unchanged and conv_tiled.o is not
-# linked.
+# Idea 4 (#11): the one switch for DMA tiling. ConvPerChannel runs pointwise (1x1) and 3x3 convs, and
+# DepthwiseConvPerChannel depthwise convs, in DMA-planned tiles through a DTCM arena. Off by default;
+# with it off the kernels are unchanged (a build with every switch off matches baseline-v0). On, it
+# also turns on the four optimizations that measured best, which have no switches of their own in
+# the shipped build: prefetch of the next chunk, spread of that prefetch over the tiles, merged
+# tiles from the cost model, and the overlapped flush (see conv_tile_plan.h). The benchmark
+# libraries below with fixed defines turn the pieces on one by one, for the ablation measurements.
 #   bazel test --//sw/opt/litert-micro:conv_tiling ...
+CONV_TILING_DEFINES = [
+    "CORALNPU_CONV_TILING=1",
+    "CORALNPU_TILING_PREFETCH=1",
+    "CORALNPU_TILING_SPREAD=1",
+    "CORALNPU_TILING_MERGE=1",
+    "CORALNPU_TILING_OVERLAP_FLUSH=1",
+]
+
 bool_flag(
     name = "conv_tiling",
     build_setting_default = False,
@@ -174,8 +186,9 @@ config_setting(
     flag_values = {":conv_tiling": "True"},
 )
 
-# With conv_tiling, copy tiles with the DMA engine instead of memcpy (SoC builds; npusim has no
-# DMA engine).
+# With conv_tiling, copy tiles with the DMA engine instead of memcpy. This is not part of the
+# bundle because it depends on the target: SoC builds set it, npusim has no DMA engine and keeps
+# the memcpy copies (which is how the functional tests run).
 #   bazel test --//sw/opt/litert-micro:conv_tiling --//sw/opt/litert-micro:tiling_dma ...
 bool_flag(
     name = "tiling_dma",
@@ -202,7 +215,7 @@ cc_library(
         ":rvv_conv_enabled": ["CORALNPU_RVV_CONV=1"],
         "//conditions:default": [],
     }) + select({
-        ":conv_tiling_enabled": ["CORALNPU_CONV_TILING=1"],
+        ":conv_tiling_enabled": CONV_TILING_DEFINES,
         "//conditions:default": [],
     }) + select({
         ":tiling_dma_enabled": ["CORALNPU_DMA_TILING=1"],
