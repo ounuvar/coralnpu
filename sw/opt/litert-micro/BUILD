@@ -253,7 +253,7 @@ cc_library(
             ],
         ),
         (
-            "rvv_tiled_dma_prefetch_spread_lead_stats",
+            "rvv_tiled_dma_prefetch_spread_merge_stats",
             [
                 "CORALNPU_RVV_CONV=1",
                 "CORALNPU_CONV_TILING=1",
@@ -261,7 +261,7 @@ cc_library(
                 "CORALNPU_TILING_PREFETCH=1",
                 "CORALNPU_TILING_STATS=1",
                 "CORALNPU_TILING_SPREAD=1",
-                "CORALNPU_TILING_LEAD_REMAINDER=1",
+                "CORALNPU_TILING_MERGE=1",
             ],
         ),
     ]
@@ -315,13 +315,6 @@ cc_library(
             ],
         ),
         (
-            "r4",
-            [
-                "CORALNPU_TILING_PREFETCH=1",
-                "CORALNPU_TILING_ROUND4=1",
-            ],
-        ),
-        (
             "spread",
             [
                 "CORALNPU_TILING_PREFETCH=1",
@@ -337,36 +330,19 @@ cc_library(
             ],
         ),
         (
-            "spread_r4",
+            "spread_merge",
             [
                 "CORALNPU_TILING_PREFETCH=1",
                 "CORALNPU_TILING_SPREAD=1",
-                "CORALNPU_TILING_ROUND4=1",
+                "CORALNPU_TILING_MERGE=1",
             ],
         ),
         (
-            "spread_r4_wait",
+            "spread_merge_wait",
             [
                 "CORALNPU_TILING_PREFETCH=1",
                 "CORALNPU_TILING_SPREAD=1",
-                "CORALNPU_TILING_ROUND4=1",
-                "CORALNPU_COPY_AT_WAIT=1",
-            ],
-        ),
-        (
-            "spread_lead",
-            [
-                "CORALNPU_TILING_PREFETCH=1",
-                "CORALNPU_TILING_SPREAD=1",
-                "CORALNPU_TILING_LEAD_REMAINDER=1",
-            ],
-        ),
-        (
-            "spread_lead_wait",
-            [
-                "CORALNPU_TILING_PREFETCH=1",
-                "CORALNPU_TILING_SPREAD=1",
-                "CORALNPU_TILING_LEAD_REMAINDER=1",
+                "CORALNPU_TILING_MERGE=1",
                 "CORALNPU_COPY_AT_WAIT=1",
             ],
         ),

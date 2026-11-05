@@ -93,8 +93,9 @@ RESULT(cases_multi_tile);
 RESULT(cases_double_buffer);
 RESULT(cases_single_buffer);
 RESULT(cases_chunked_double);
-RESULT(plan_failures);  // the plan said tiled but the wrapper returned false
-RESULT(first_failure);  // case index * 16 + budget index of the first such failure, plus 1
+RESULT(guard_violations);  // bytes written past the end of the output
+RESULT(plan_failures);     // the plan said tiled but the wrapper returned false
+RESULT(first_failure);     // case index * 16 + budget index of the first such failure, plus 1
 RESULT(cases_chunked_single);
 RESULT(mismatches);
 RESULT(selftest_detected);
@@ -176,9 +177,16 @@ int main() {
         continue;
       }
       ++cases_tiled;
+      // Nothing may be written after the last output byte: the area behind it still holds 0xA5.
+      for (int i = pixels * c.out_d; i < pixels * c.out_d + 256; ++i) {
+        if (out_tiled[i] != static_cast<int8_t>(0xA5)) {
+          ++guard_violations;
+          break;
+        }
+      }
       if (plan.num_chunks > 1)
         ++cases_chunked;
-      if (plan.pixels_per_tile < pixels)
+      if (plan.tiles > 1)
         ++cases_multi_tile;
       if (plan.double_buffer) {
         ++cases_double_buffer;

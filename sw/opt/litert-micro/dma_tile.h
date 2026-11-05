@@ -60,19 +60,39 @@ constexpr uint32_t CopyLenFlags(uint32_t bytes, uint32_t beat_log2) {
   return (bytes & 0xFFFFFFu) | ((beat_log2 & 0x7u) << 24);
 }
 
-// Up to kMaxCopies copies, run back to back. Descriptors (DMA) live in this object, so it must sit
-// in DTCM (a static or a local) and must not be modified or destroyed while a transfer is running.
-// A chain being built is separate from a chain being run, so double buffering uses two chains.
-template <int kMaxCopies>
-class alignas(32) CopyChain {
+// Up to `capacity` copies, run back to back. The storage for the copies (DMA descriptors) is
+// provided by the caller, so it can sit in a DTCM arena sized for the plan: StorageBytes(capacity)
+// bytes, aligned to 32, not modified or freed while a transfer is running. A chain being built is
+// separate from a chain being run, so double buffering uses two chains.
+class CopyChain {
  public:
+  // The descriptors are 32 bytes, and so is the memcpy backend's entry at most.
+  static constexpr uint32_t StorageBytes(int capacity) {
+    return 32u * static_cast<uint32_t>(capacity);
+  }
+
+  // Uses `storage` for up to `capacity` copies and empties the chain. DMA: zeroes the storage, so
+  // that the descriptor fields no copy sets (polling, reserved) are zero.
+  void Init(void *storage, int capacity) {
+    capacity_ = capacity;
+    count_    = 0;
+#ifdef CORALNPU_DMA_TILING
+    desc_ = static_cast<dma_descriptor *>(storage);
+    std::memset(storage, 0, StorageBytes(capacity));
+#else
+    entries_ = static_cast<Entry *>(storage);
+    pending_ = false;
+#endif
+  }
+
   void Clear() { count_ = 0; }
   int size() const { return count_; }
+  int capacity() const { return capacity_; }
 
   // Appends one copy. Returns false (and adds nothing) if the chain is full or the copy is empty
   // or longer than the engine's 24-bit length field.
   bool Add(const void *src, void *dst, uint32_t bytes) {
-    if (count_ >= kMaxCopies || bytes == 0 || bytes > kMaxBytes)
+    if (count_ >= capacity_ || bytes == 0 || bytes > kMaxBytes)
       return false;
 #ifdef CORALNPU_DMA_TILING
     dma_descriptor &d = desc_[count_];
@@ -80,7 +100,7 @@ class alignas(32) CopyChain {
     d.dst_addr        = Addr(dst);
     d.len_flags       = CopyLenFlags(bytes, BeatLog2(Addr(src), Addr(dst), bytes));
     d.next_desc       = 0;
-    // poll_addr, poll_mask, poll_value and reserved stay zero: desc_ starts zeroed and no copy sets
+    // poll_addr, poll_mask, poll_value and reserved stay zero: Init zeroed them and no copy sets
     // them.
     if (count_ > 0)
       desc_[count_ - 1].next_desc = Addr(&d);
@@ -92,15 +112,17 @@ class alignas(32) CopyChain {
   }
 
   // Starts the chain. DMA: returns immediately and the copies proceed in the background; call
-  // Wait() before using the destinations or reusing the sources. memcpy: copies now.
+  // Wait() before using the destinations or reusing the sources. memcpy: copies now, or at Wait()
+  // with CORALNPU_COPY_AT_WAIT.
   void Start() {
     if (count_ == 0)
       return;
 #ifdef CORALNPU_DMA_TILING
     dma_start(Addr(&desc_[0]));
+#elif defined(CORALNPU_COPY_AT_WAIT)
+    pending_ = true;
 #else
-    for (int i = 0; i < count_; ++i)
-      std::memcpy(entries_[i].dst, entries_[i].src, entries_[i].n);
+    CopyNow();
 #endif
   }
 
@@ -125,25 +147,27 @@ class alignas(32) CopyChain {
 
  private:
   static constexpr uint32_t kMaxBytes = 0xFFFFFF;
+  int capacity_                       = 0;
   int count_                          = 0;
 #ifdef CORALNPU_DMA_TILING
   static uint32_t Addr(const void *p) {
     return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(p));
   }
-  dma_descriptor desc_[kMaxCopies] = {};
+  dma_descriptor *desc_ = nullptr;
 #else
   struct Entry {
     const void *src;
     void *dst;
     uint32_t n;
   };
+  static_assert(sizeof(Entry) <= 32, "an entry must fit in the 32 bytes StorageBytes gives it");
   void CopyNow() {
     for (int i = 0; i < count_; ++i)
       std::memcpy(entries_[i].dst, entries_[i].src, entries_[i].n);
     pending_ = false;
   }
-  Entry entries_[kMaxCopies];
-  bool pending_ = false;
+  Entry *entries_ = nullptr;
+  bool pending_   = false;
 #endif
 };
 

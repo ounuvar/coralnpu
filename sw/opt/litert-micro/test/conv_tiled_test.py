@@ -28,6 +28,7 @@ _SYMBOLS = [
     "cases_double_buffer",
     "cases_single_buffer",
     "cases_chunked_double",
+    "guard_violations",
     "plan_failures",
     "first_failure",
     "cases_chunked_single",
@@ -60,12 +61,16 @@ async def run_conv_tiled_test(fixture):
         f"single={v['cases_single_buffer']} "
         f"chunked_double={v['cases_chunked_double']} "
         f"chunked_single={v['cases_chunked_single']} "
-        f"mismatches={v['mismatches']} plan_failures={v['plan_failures']} "
+        f"mismatches={v['mismatches']} guard={v['guard_violations']} "
+        f"plan_failures={v['plan_failures']} "
         f"first_failure={v['first_failure']} variant='{variant}'",
         flush=True,
     )
     assert v["done"] == 1, "program did not finish"
     assert v["mismatches"] == 0, v
+    assert v[
+        "guard_violations"
+    ] == 0, "the tiled path wrote past the end of the output: " + str(v)
     assert v["plan_failures"] == 0, (
         "the planner accepted a layer that the wrapper then failed to run "
         f"(first: case {(v['first_failure'] - 1) // 16}, budget "

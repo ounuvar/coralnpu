@@ -91,13 +91,10 @@ coralflow_test(
         ("_wait", "//sw/opt/litert-micro:conv_tiling_test_wait"),
         ("_prefetch", "//sw/opt/litert-micro:conv_tiling_test_prefetch"),
         ("_prefetch_wait", "//sw/opt/litert-micro:conv_tiling_test_prefetch_wait"),
-        ("_r4", "//sw/opt/litert-micro:conv_tiling_test_r4"),
         ("_spread", "//sw/opt/litert-micro:conv_tiling_test_spread"),
         ("_spread_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_wait"),
-        ("_spread_r4", "//sw/opt/litert-micro:conv_tiling_test_spread_r4"),
-        ("_spread_r4_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_r4_wait"),
-        ("_spread_lead", "//sw/opt/litert-micro:conv_tiling_test_spread_lead"),
-        ("_spread_lead_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_lead_wait"),
+        ("_spread_merge", "//sw/opt/litert-micro:conv_tiling_test_spread_merge"),
+        ("_spread_merge_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_merge_wait"),
     ]
 ]
 
@@ -118,13 +115,10 @@ coralflow_test(
         "_wait",
         "_prefetch",
         "_prefetch_wait",
-        "_r4",
         "_spread",
         "_spread_wait",
-        "_spread_r4",
-        "_spread_r4_wait",
-        "_spread_lead",
-        "_spread_lead_wait",
+        "_spread_merge",
+        "_spread_merge_wait",
     ]
 ]
 
@@ -152,7 +146,7 @@ coralflow_test(
                 "tiled_pf": "_prefetch",
                 "tiled_pf_stats": "_prefetch_stats",
                 "tiled_pf_spread_stats": "_prefetch_spread_stats",
-                "tiled_pf_spread_lead_stats": "_prefetch_spread_lead_stats",
+                "tiled_pf_spread_merge_stats": "_prefetch_spread_merge_stats",
             }[variant] if variant.startswith("tiled") else "//sw/opt/litert-micro:conv_rvv",
             "//sw/utils",
         ],
@@ -171,7 +165,7 @@ coralflow_test(
                 "tiled_stats",
                 "tiled_pf_stats",
                 "tiled_pf_spread_stats",
-                "tiled_pf_spread_lead_stats",
+                "tiled_pf_spread_merge_stats",
             ],
         ),
         (
@@ -187,7 +181,7 @@ coralflow_test(
                 "tiled_stats",
                 "tiled_pf_stats",
                 "tiled_pf_spread_stats",
-                "tiled_pf_spread_lead_stats",
+                "tiled_pf_spread_merge_stats",
             ],
         ),
         (
@@ -201,7 +195,7 @@ coralflow_test(
                 "tiled",
                 "tiled_pf",
                 "tiled_pf_spread_stats",
-                "tiled_pf_spread_lead_stats",
+                "tiled_pf_spread_merge_stats",
             ],
         ),
         (
@@ -217,7 +211,7 @@ coralflow_test(
                 "tiled_stats",
                 "tiled_pf_stats",
                 "tiled_pf_spread_stats",
-                "tiled_pf_spread_lead_stats",
+                "tiled_pf_spread_merge_stats",
             ],
         ),
         (
@@ -261,14 +255,24 @@ cc_test(
 )
 
 # Host tests for the copy interface (#11): beat width, descriptor flags, chain bookkeeping.
-cc_test(
-    name = "dma_tile_test",
-    srcs = ["dma_tile_test.cc"],
-    deps = [
-        "//sw/opt/litert-micro:dma_tile_memcpy",
-        "@com_google_googletest//:gtest_main",
-    ],
-)
+[
+    cc_test(
+        name = "dma_tile_test" + variant,
+        srcs = ["dma_tile_test.cc"],
+        copts = copts,
+        deps = [
+            "//sw/opt/litert-micro:dma_tile_memcpy",
+            "@com_google_googletest//:gtest_main",
+        ],
+    )
+    for variant, copts in [
+        ("", []),
+        (
+            "_wait",
+            ["-DCORALNPU_COPY_AT_WAIT=1"],
+        ),
+    ]
+]
 
 # Host tests for the pointwise tile planner (#11).
 cc_test(

@@ -74,12 +74,25 @@ TEST(CopyLenFlags, PutsTheLengthInTheLowBitsAndTheBeatSizeAboveIt) {
   }
 }
 
+// Chain storage the way the wrapper provides it: 32-byte aligned, StorageBytes(capacity) bytes.
+struct Storage {
+  explicit Storage(int capacity) : bytes(CopyChain::StorageBytes(capacity) + 32) {}
+  void *get() {
+    return reinterpret_cast<void *>((reinterpret_cast<uintptr_t>(bytes.data()) + 31) &
+                                    ~uintptr_t{31});
+  }
+  std::vector<uint8_t> bytes;
+};
+
 TEST(CopyChain, CopiesInOrderAndRejectsEmptyOrOverfullChains) {
   std::vector<uint8_t> src(256), dst(256, 0);
   for (int i = 0; i < 256; ++i)
     src[i] = static_cast<uint8_t>(i);
-  CopyChain<3> chain;
+  Storage storage(3);
+  CopyChain chain;
+  chain.Init(storage.get(), 3);
   EXPECT_EQ(chain.size(), 0);
+  EXPECT_EQ(chain.capacity(), 3);
   EXPECT_FALSE(chain.Add(src.data(), dst.data(), 0));  // empty copy
   EXPECT_TRUE(chain.Add(src.data(), dst.data(), 64));
   EXPECT_TRUE(chain.Add(src.data() + 64, dst.data() + 128, 64));
@@ -95,6 +108,62 @@ TEST(CopyChain, CopiesInOrderAndRejectsEmptyOrOverfullChains) {
   EXPECT_EQ(chain.size(), 0);
   EXPECT_TRUE(chain.Run());  // an empty chain is a no-op
 }
+
+TEST(CopyChain, StorageIsSizedPerChainAndTwoChainsDoNotOverlap) {
+  EXPECT_EQ(CopyChain::StorageBytes(1), 32u);
+  EXPECT_EQ(CopyChain::StorageBytes(37), 37u * 32);
+  // Two chains side by side in one arena, as the layout places them.
+  Storage arena(5 + 4);
+  uint8_t *base = static_cast<uint8_t *>(arena.get());
+  CopyChain a, b;
+  a.Init(base, 5);
+  b.Init(base + CopyChain::StorageBytes(5), 4);
+  std::vector<uint8_t> src(64, 0xAB), dst_a(64, 0), dst_b(64, 0);
+  for (int i = 0; i < 5; ++i)
+    EXPECT_TRUE(a.Add(src.data() + i, dst_a.data() + i, 8));
+  for (int i = 0; i < 4; ++i)
+    EXPECT_TRUE(b.Add(src.data() + i, dst_b.data() + i, 8));
+  EXPECT_FALSE(a.Add(src.data(), dst_a.data(), 8));
+  EXPECT_FALSE(b.Add(src.data(), dst_b.data(), 8));
+  EXPECT_TRUE(a.Run());
+  EXPECT_TRUE(b.Run());
+  EXPECT_EQ(dst_a[11], 0xAB);
+  EXPECT_EQ(dst_b[10], 0xAB);
+}
+
+#ifdef CORALNPU_COPY_AT_WAIT
+// The other extreme of when a DMA moves data: nothing has moved after Start, everything has after
+// Wait. Code that is correct for both orders is correct on the DMA.
+TEST(CopyChain, CopyAtWaitMovesDataOnlyAtWait) {
+  std::vector<uint8_t> src(64, 0x5C), dst(64, 0);
+  Storage storage(2);
+  CopyChain chain;
+  chain.Init(storage.get(), 2);
+  EXPECT_TRUE(chain.Add(src.data(), dst.data(), 32));
+  EXPECT_TRUE(chain.Add(src.data() + 32, dst.data() + 32, 32));
+  chain.Start();
+  EXPECT_EQ(dst[0], 0);  // nothing has moved yet
+  EXPECT_EQ(dst[63], 0);
+  src[5] = 0x11;  // a source changed between Start and Wait is what the copy sees
+  EXPECT_TRUE(chain.Wait());
+  EXPECT_EQ(dst[0], 0x5C);
+  EXPECT_EQ(dst[5], 0x11);
+  EXPECT_EQ(dst[63], 0x5C);
+}
+#else
+TEST(CopyChain, CopyAtStartMovesDataAtStart) {
+  std::vector<uint8_t> src(64, 0x5C), dst(64, 0);
+  Storage storage(2);
+  CopyChain chain;
+  chain.Init(storage.get(), 2);
+  EXPECT_TRUE(chain.Add(src.data(), dst.data(), 64));
+  chain.Start();
+  EXPECT_EQ(dst[0], 0x5C);  // already moved
+  src[5] = 0x11;            // too late to be seen
+  EXPECT_TRUE(chain.Wait());
+  EXPECT_EQ(dst[5], 0x5C);
+}
+#endif
 
 }  // namespace
 }  // namespace coralnpu_v2::opt::litert_micro

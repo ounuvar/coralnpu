@@ -31,13 +31,14 @@ constexpr bool kRvv = true;
 constexpr bool kRvv = false;
 #endif
 
-constexpr uint32_t kArenaBytes = ArenaBudget(CORALNPU_TILE_BUDGET_BYTES);
+constexpr uint32_t kArenaBytes = CORALNPU_TILE_BUDGET_BYTES;
 
-// Everything the tiled path keeps in DTCM: the arena the buffers are carved from, and the copy
-// chains with their DMA descriptors. One layer at a time, so one set.
-alignas(16) uint8_t g_arena[kArenaBytes];
-CopyChain<kPrologueCopies> g_prologue;
-CopyChain<kMaxChainCopies> g_chains[2];
+// Everything the tiled path keeps in DTCM: one arena that the buffers and the copy chains' DMA
+// descriptors are carved from by the plan's layout. One layer at a time, so one set. The copy
+// chains' storage lives in the arena (32-byte aligned for the descriptors).
+alignas(32) uint8_t g_arena[kArenaBytes];
+CopyChain g_prologue;
+CopyChain g_chains[2];
 
 ConvTiledStats g_stats;
 
@@ -94,23 +95,26 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
       input_shape.Dims(1) != output_shape.Dims(1) || input_shape.Dims(2) != output_shape.Dims(2)) {
     return false;
   }
-  if (ArenaBudget(budget) > kArenaBytes)
+  if (budget > kArenaBytes)
     return false;
   const int pixels = input_shape.Dims(0) * input_shape.Dims(1) * input_shape.Dims(2);
 
   const ConvTilePlan plan =
-      PlanPointwise(pixels, in_d, out_d, kRvv, budget, kPrefetchDefault, kRound4Default);
+      PlanPointwise(pixels, in_d, out_d, kRvv, budget, kPrefetchDefault, kMergeDefault);
   if (plan_out)
     *plan_out = plan;
   if (!plan.tiled)
     return false;
 
-  const int tile    = plan.pixels_per_tile;
-  const int chunk   = plan.channel_chunk;
-  const int buffers = plan.double_buffer ? 2 : 1;
-  const int tiles   = (pixels + tile - 1) / tile;
-  const PointwiseLayout lay =
-      PointwiseLayoutFor(in_d, chunk, tile, buffers, kRvv, kPrefetchDefault);
+  const int tile            = plan.pixels_per_tile;
+  const int tiles           = plan.tiles;
+  const int chunk           = plan.channel_chunk;
+  const int buffers         = plan.double_buffer ? 2 : 1;
+  const PointwiseLayout lay = PointwiseLayoutFor(in_d, chunk, plan.buffer_pixels, buffers, kRvv,
+                                                 kPrefetchDefault, chunk < out_d);
+  g_prologue.Init(g_arena + lay.prologue_chain, kPrologueCopies);
+  for (int b = 0; b < 2; ++b)
+    g_chains[b].Init(g_arena + lay.chain[b], lay.chain_capacity);
 
   uint8_t *const base                         = g_arena;
   const Raw raws[2]                           = {{reinterpret_cast<int8_t *>(base + lay.filter),
@@ -131,19 +135,9 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
   int8_t *const out_tile[2]                   = {reinterpret_cast<int8_t *>(base + lay.out[0]),
                                                  reinterpret_cast<int8_t *>(base + lay.out[1])};
 
-  // Tiles are `tile` pixels, except one tile that holds the leftover pixels: the last, or with
-  // CORALNPU_TILING_LEAD_REMAINDER the first.
-  const int remainder       = pixels - (tiles - 1) * tile;  // 1 .. tile
-  const auto pixels_in_tile = [&](int t) {
-    if (kLeadRemainderDefault)
-      return t == 0 ? remainder : tile;
-    return std::min(tile, pixels - t * tile);
-  };
-  const auto tile_start = [&](int t) {
-    if (kLeadRemainderDefault)
-      return t == 0 ? 0 : remainder + (t - 1) * tile;
-    return t * tile;
-  };
+  // Tiles are `tile` pixels, except the last, which holds what is left (merged: more than `tile`).
+  const auto pixels_in_tile = [&](int t) { return t == tiles - 1 ? plan.last_tile_pixels : tile; };
+  const auto tile_start     = [&](int t) { return t * tile; };
 
   // Adds part `part` of `parts` of the copies that bring chunk [n0, n0 + chunk) of the filter,
   // bias, multipliers and shifts into the raw buffers `r`. The filter rows are contiguous in the
@@ -252,9 +246,9 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
       // the last tile it also prefetches the next chunk's raw buffers and first input tile.
       int last_buf = buf0;
       for (int t = 0; t < tiles; ++t) {
-        const int buf                 = buf0 ^ (t & 1);
-        last_buf                      = buf;
-        CopyChain<kMaxChainCopies> &c = g_chains[t & 1];
+        const int buf = buf0 ^ (t & 1);
+        last_buf      = buf;
+        CopyChain &c  = g_chains[t & 1];
         STAT_START(tb);
         c.Clear();
         if (t > 0)
@@ -282,7 +276,7 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
         STAT_ADD(wait, t1);
       }
       STAT_START(t2);
-      CopyChain<kMaxChainCopies> &last = g_chains[0];
+      CopyChain &last = g_chains[0];
       {
         STAT_START(tb);
         last.Clear();
@@ -294,7 +288,7 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
       STAT_ADD(blocking_copy, t2);
       buf0 = last_buf ^ 1;  // the next chunk's first tile uses the spare buffer
     } else {
-      CopyChain<kMaxChainCopies> &c = g_chains[0];
+      CopyChain &c = g_chains[0];
       for (int t = 0; t < tiles; ++t) {
         c.Clear();
         if (t > 0) {
@@ -308,8 +302,8 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
         }
         // The DMA prefetches the next chunk's raw buffers: during the last tile, or spread over
         // all.
-        const bool prefetch_now        = prefetch_next && (kSpreadDefault || t == tiles - 1);
-        CopyChain<kMaxChainCopies> &pf = g_chains[1];
+        const bool prefetch_now = prefetch_next && (kSpreadDefault || t == tiles - 1);
+        CopyChain &pf           = g_chains[1];
         if (prefetch_now) {
           STAT_START(tb);
           pf.Clear();
