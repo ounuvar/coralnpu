@@ -143,14 +143,20 @@ constexpr bool kDoubleBuffer = false;
 // Which DTCM buffer holds row r.
 static inline int BufferOf(int r) { return kDoubleBuffer ? (r & 1) : 0; }
 
-// Copy chains (their descriptors live in DTCM): the prologue, one chain per buffer parity (the DMA
-// may still be reading one while the next is being built), and one for the blocking copies of the
-// serial schedule.
-static CopyChain<3> prologue_chain;
+// Copy chains: the prologue, one chain per buffer parity (the DMA may still be reading one while
+// the next is being built), and one for the blocking copies of the serial schedule. Their
+// descriptors live in DTCM, in storage the chains are initialized with at the start of main.
+static CopyChain prologue_chain;
+static uint8_t prologue_storage[CopyChain::StorageBytes(3)]
+    __attribute__((section(".data"), aligned(32)));
 #ifdef TILE_DOUBLE_BUFFER
-static CopyChain<2> row_chain[2];
+static CopyChain row_chain[2];
+static uint8_t row_storage[2][CopyChain::StorageBytes(2)]
+    __attribute__((section(".data"), aligned(32)));
 #endif
-static CopyChain<1> single_chain;
+static CopyChain single_chain;
+static uint8_t single_storage[CopyChain::StorageBytes(1)]
+    __attribute__((section(".data"), aligned(32)));
 #else
 #define SRC_INPUT  tile_input
 #define SRC_FILTER tile_filter
@@ -159,6 +165,14 @@ static CopyChain<1> single_chain;
 #endif
 
 int main(void) {
+#ifdef TILE_DMA
+  prologue_chain.Init(prologue_storage, 3);
+#ifdef TILE_DOUBLE_BUFFER
+  row_chain[0].Init(row_storage[0], 2);
+  row_chain[1].Init(row_storage[1], 2);
+#endif
+  single_chain.Init(single_storage, 1);
+#endif
   for (int i = 0; i < kRows * kRowIn; ++i)
     SRC_INPUT[i] = NextByte();
   for (int i = 0; i < kOutDepth * kInDepth; ++i)
@@ -225,7 +239,7 @@ int main(void) {
 #ifdef TILE_DOUBLE_BUFFER
     // One chain per row, moving data for the neighbouring rows while this row computes:
     // row r-1's output out to external memory, row r+1's input in.
-    CopyChain<2> &chain = row_chain[r & 1];
+    CopyChain &chain = row_chain[r & 1];
     chain.Clear();
     if (r > 0)
       chain.Add(tile_output[BufferOf(r - 1)], ext_output + (r - 1) * kRowOut, kRowOut);
