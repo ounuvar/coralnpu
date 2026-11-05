@@ -75,6 +75,155 @@ coralflow_test(
     ],
 )
 
+# Tiled versus untiled pointwise conv (#11), on npusim with the memcpy copy path. Run it with and
+# without --//sw/opt/litert-micro:rvv_conv to cover the RVV and the reference kernel. Variants: copies
+# at Start (default) or at Wait, each with and without prefetch (conv_tiling_test_* libraries).
+[
+    coralnpu_v2_binary(
+        name = "conv_tiled_test" + variant,
+        srcs = ["conv_tiled_test.cc"],
+        dtcm_size_kbytes = 1024,
+        itcm_size_kbytes = 1024,
+        deps = [lib],
+    )
+    for variant, lib in [
+        ("", "//sw/opt/litert-micro:conv"),
+        ("_wait", "//sw/opt/litert-micro:conv_tiling_test_wait"),
+        ("_prefetch", "//sw/opt/litert-micro:conv_tiling_test_prefetch"),
+        ("_prefetch_wait", "//sw/opt/litert-micro:conv_tiling_test_prefetch_wait"),
+    ]
+]
+
+[
+    coralflow_test(
+        name = "conv_tiled_sim_test" + variant,
+        srcs = ["conv_tiled_test.py"],
+        elf = ":conv_tiled_test%s.elf" % variant,
+        highmem = True,
+        main = "conv_tiled_test.py",
+        targets = ["npusim"],
+        deps = [
+            "@bazel_tools//tools/python/runfiles",
+        ],
+    )
+    for variant in [
+        "",
+        "_wait",
+        "_prefetch",
+        "_prefetch_wait",
+    ]
+]
+
+# Whole pointwise layers through the real dispatcher on the SoC testharness (#11), all with the RVV
+# kernel: everything in DTCM (_local, the ceiling), data in external memory without tiling (_ext),
+# the DMA-tiled path (_tiled), with prefetch of the next chunk's start-up data (_tiled_pf), and the
+# last two with per-phase cycle counters (_stats). Layers l28 and l30 are measured at full size; l17
+# and l2 at two pixel counts each, to separate per-layer from per-pixel cost.
+[
+    coralnpu_v2_binary(
+        name = "conv_layer_bench_%s_p%d_%s" % (layer, pixels, variant),
+        srcs = ["conv_layer_bench.cc"],
+        copts = [
+                    "-DLAYER_PIXELS=%d" % pixels,
+                    "-DIN_D=%d" % in_d,
+                    "-DOUT_D=%d" % out_d,
+                ] + ([] if variant == "local" else ["-DPLACE_EXT"]) +
+                (["-DBENCH_STATS"] if variant.endswith("_stats") else []),
+        dtcm_size_kbytes = 1024,
+        itcm_size_kbytes = 1024,
+        deps = [
+            "//sw/opt/litert-micro:conv_rvv_tiled_dma" + {
+                "tiled": "",
+                "tiled_stats": "_stats",
+                "tiled_pf": "_prefetch",
+                "tiled_pf_stats": "_prefetch_stats",
+            }[variant] if variant.startswith("tiled") else "//sw/opt/litert-micro:conv_rvv",
+            "//sw/utils",
+        ],
+    )
+    for layer, pixels, in_d, out_d, variants in [
+        (
+            "l30",
+            49,
+            256,
+            256,
+            [
+                "local",
+                "ext",
+                "tiled",
+                "tiled_pf",
+                "tiled_stats",
+                "tiled_pf_stats",
+            ],
+        ),
+        (
+            "l28",
+            49,
+            128,
+            256,
+            [
+                "local",
+                "ext",
+                "tiled",
+                "tiled_pf",
+                "tiled_stats",
+                "tiled_pf_stats",
+            ],
+        ),
+        (
+            "l17",
+            33,
+            128,
+            128,
+            [
+                "local",
+                "ext",
+                "tiled",
+                "tiled_pf",
+            ],
+        ),
+        (
+            "l17",
+            99,
+            128,
+            128,
+            [
+                "local",
+                "ext",
+                "tiled",
+                "tiled_pf",
+                "tiled_stats",
+                "tiled_pf_stats",
+            ],
+        ),
+        (
+            "l2",
+            128,
+            8,
+            16,
+            [
+                "local",
+                "ext",
+                "tiled",
+                "tiled_pf",
+            ],
+        ),
+        (
+            "l2",
+            384,
+            8,
+            16,
+            [
+                "local",
+                "ext",
+                "tiled",
+                "tiled_pf",
+            ],
+        ),
+    ]
+    for variant in variants
+]
+
 # Golden tests for the requantization reference model (#9), run on the host.
 cc_test(
     name = "requant_ref_test",
@@ -84,6 +233,16 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@gemmlowp//:fixedpoint",
         "@tflite_micro//tensorflow/lite/kernels/internal:common",
+    ],
+)
+
+# Host tests for the pointwise tile planner (#11).
+cc_test(
+    name = "conv_tile_plan_test",
+    srcs = ["conv_tile_plan_test.cc"],
+    deps = [
+        "//sw/opt/litert-micro:conv_tile_plan",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 
@@ -191,6 +350,7 @@ coralnpu_v2_binary(
     itcm_size_kbytes = 1024,
     deps = [
         "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:dma_tile",
         "//sw/utils",
     ],
 )
@@ -203,6 +363,7 @@ coralnpu_v2_binary(
     itcm_size_kbytes = 1024,
     deps = [
         "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:dma_tile",
         "//sw/utils",
     ],
 )
@@ -219,6 +380,7 @@ coralnpu_v2_binary(
     deps = [
         "//fpga:dma",
         "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:dma_tile",
         "//sw/utils",
     ],
 )
@@ -235,6 +397,7 @@ coralnpu_v2_binary(
     deps = [
         "//fpga:dma",
         "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:dma_tile",
         "//sw/utils",
     ],
 )
@@ -249,6 +412,7 @@ coralnpu_v2_binary(
     itcm_size_kbytes = 1024,
     deps = [
         "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:dma_tile",
         "//sw/utils",
         "@tflite_micro//tensorflow/lite/kernels/internal:reference_base",
     ],
@@ -266,6 +430,7 @@ coralnpu_v2_binary(
         itcm_size_kbytes = 1024,
         deps = [
             "//sw/opt/litert-micro:conv",
+            "//sw/opt/litert-micro:dma_tile",
             "//sw/utils",
         ] + ([] if variant == "local" else ["//fpga:dma"]),
     )
@@ -312,6 +477,7 @@ coralnpu_v2_binary(
     deps = [
         "//sw/opt/litert-micro:conv",
         "//sw/opt/litert-micro:conv_vme",
+        "//sw/opt/litert-micro:dma_tile",
         "//sw/utils",
     ],
 )

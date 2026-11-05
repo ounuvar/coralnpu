@@ -17,6 +17,15 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+# Copy interface for DMA tiling (#11). Runs on the DMA engine when CORALNPU_DMA_TILING is
+# defined, and as memcpy otherwise (functional tests on npusim). Header only.
+cc_library(
+    name = "dma_tile",
+    hdrs = ["dma_tile.h"],
+    target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
+    deps = ["//fpga:dma"],
+)
+
 cc_library(
     name = "memory_util",
     hdrs = ["memory_util.h"],
@@ -60,6 +69,13 @@ cc_library(
     hdrs = ["requant_ref.h"],
 )
 
+# Tile planner for DMA-tiled pointwise conv (#11). Portable: builds for the host (unit tests) and
+# for CoralNPU.
+cc_library(
+    name = "conv_tile_plan",
+    hdrs = ["conv_tile_plan.h"],
+)
+
 cc_library(
     name = "depthwise_conv",
     srcs = [
@@ -89,25 +105,187 @@ config_setting(
     flag_values = {":rvv_conv": "True"},
 )
 
+# Idea 4 (#11): ConvPerChannel runs pointwise (1x1) convs in DMA-planned tiles through a DTCM
+# arena (conv_tiled.cc). Off by default; with it off conv.o is unchanged and conv_tiled.o is not
+# linked.
+#   bazel test --//sw/opt/litert-micro:conv_tiling ...
+bool_flag(
+    name = "conv_tiling",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "conv_tiling_enabled",
+    flag_values = {":conv_tiling": "True"},
+)
+
+# With conv_tiling, copy tiles with the DMA engine instead of memcpy (SoC builds; npusim has no
+# DMA engine).
+#   bazel test --//sw/opt/litert-micro:conv_tiling --//sw/opt/litert-micro:tiling_dma ...
+bool_flag(
+    name = "tiling_dma",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "tiling_dma_enabled",
+    flag_values = {":tiling_dma": "True"},
+)
+
 cc_library(
     name = "conv",
     srcs = [
         "conv.cc",
+        "conv_tiled.cc",
     ],
-    hdrs = ["conv.h"],
+    hdrs = [
+        "conv.h",
+        "conv_pointwise.h",
+        "conv_tiled.h",
+    ],
     local_defines = select({
         ":rvv_conv_enabled": ["CORALNPU_RVV_CONV=1"],
+        "//conditions:default": [],
+    }) + select({
+        ":conv_tiling_enabled": ["CORALNPU_CONV_TILING=1"],
+        "//conditions:default": [],
+    }) + select({
+        ":tiling_dma_enabled": ["CORALNPU_DMA_TILING=1"],
         "//conditions:default": [],
     }),
     target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
     deps = [
         ":accumulator_util",
+        ":conv_tile_plan",
+        ":dma_tile",
         ":memory_util",
         "//sw/opt:rvv_opt",
         "@tflite_micro//tensorflow/lite/kernels/internal:common",
         "@tflite_micro//tensorflow/lite/micro:op_resolvers",
     ],
 )
+
+# The conv library with fixed defines, for benchmarks that must not change the build configuration
+# (a Bazel flag would rebuild the RTL simulator): the RVV kernels untiled (configuration S), and
+# with DMA-engine tiling (#11), with per-phase cycle counters (CORALNPU_TILING_STATS) and with
+# prefetch of the next chunk's start-up data (CORALNPU_TILING_PREFETCH).
+[
+    cc_library(
+        name = "conv_" + variant,
+        srcs = [
+            "conv.cc",
+            "conv_tiled.cc",
+        ],
+        hdrs = [
+            "conv.h",
+            "conv_pointwise.h",
+            "conv_tiled.h",
+        ],
+        local_defines = defines,
+        target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
+        deps = [
+            ":accumulator_util",
+            ":conv_tile_plan",
+            ":dma_tile",
+            ":memory_util",
+            "//sw/opt:rvv_opt",
+            "@tflite_micro//tensorflow/lite/kernels/internal:common",
+            "@tflite_micro//tensorflow/lite/micro:op_resolvers",
+        ],
+    )
+    for variant, defines in [
+        (
+            "rvv",
+            ["CORALNPU_RVV_CONV=1"],
+        ),
+        (
+            "rvv_tiled_dma",
+            [
+                "CORALNPU_RVV_CONV=1",
+                "CORALNPU_CONV_TILING=1",
+                "CORALNPU_DMA_TILING=1",
+            ],
+        ),
+        (
+            "rvv_tiled_dma_stats",
+            [
+                "CORALNPU_RVV_CONV=1",
+                "CORALNPU_CONV_TILING=1",
+                "CORALNPU_DMA_TILING=1",
+                "CORALNPU_TILING_STATS=1",
+            ],
+        ),
+        (
+            "rvv_tiled_dma_prefetch",
+            [
+                "CORALNPU_RVV_CONV=1",
+                "CORALNPU_CONV_TILING=1",
+                "CORALNPU_DMA_TILING=1",
+                "CORALNPU_TILING_PREFETCH=1",
+            ],
+        ),
+        (
+            "rvv_tiled_dma_prefetch_stats",
+            [
+                "CORALNPU_RVV_CONV=1",
+                "CORALNPU_CONV_TILING=1",
+                "CORALNPU_DMA_TILING=1",
+                "CORALNPU_TILING_PREFETCH=1",
+                "CORALNPU_TILING_STATS=1",
+            ],
+        ),
+    ]
+]
+
+# The conv library for the tiled-versus-untiled tests on npusim (memcpy copies; the kernel follows
+# --//sw/opt/litert-micro:rvv_conv). A real DMA moves data at some time between Start and Wait, so
+# the tests cover both extremes: copies at Start (default) and at Wait (CORALNPU_COPY_AT_WAIT),
+# with and without prefetch.
+[
+    cc_library(
+        name = "conv_tiling_test_" + variant,
+        srcs = [
+            "conv.cc",
+            "conv_tiled.cc",
+        ],
+        hdrs = [
+            "conv.h",
+            "conv_pointwise.h",
+            "conv_tiled.h",
+        ],
+        local_defines = defines + select({
+            ":rvv_conv_enabled": ["CORALNPU_RVV_CONV=1"],
+            "//conditions:default": [],
+        }),
+        target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
+        deps = [
+            ":accumulator_util",
+            ":conv_tile_plan",
+            ":dma_tile",
+            ":memory_util",
+            "//sw/opt:rvv_opt",
+            "@tflite_micro//tensorflow/lite/kernels/internal:common",
+            "@tflite_micro//tensorflow/lite/micro:op_resolvers",
+        ],
+    )
+    for variant, defines in [
+        (
+            "wait",
+            ["CORALNPU_COPY_AT_WAIT=1"],
+        ),
+        (
+            "prefetch",
+            ["CORALNPU_TILING_PREFETCH=1"],
+        ),
+        (
+            "prefetch_wait",
+            [
+                "CORALNPU_TILING_PREFETCH=1",
+                "CORALNPU_COPY_AT_WAIT=1",
+            ],
+        ),
+    ]
+]
 
 # Matrix-engine (VME/Zvt) kernels for idea 5 (#12).
 cc_library(
