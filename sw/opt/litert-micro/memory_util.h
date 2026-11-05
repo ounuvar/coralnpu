@@ -23,6 +23,10 @@
 
 namespace coralnpu_v2::opt::litert_micro {
 
+namespace vme {
+struct ConvVmeWeights;
+}  // namespace vme
+
 struct OpDataConvCustom : public tflite::OpDataConv {
   int accs_buffer_index;
   int16_t *repacked_weights;
@@ -30,6 +34,9 @@ struct OpDataConvCustom : public tflite::OpDataConv {
   int tiled_input_buffer_index;
   int generic_tiled_buffer_index;
   int8_t *repacked_weights_generic;
+  // Set by ConvPrepare when the layer runs on the matrix engine (idea 5, #12).
+  vme::ConvVmeWeights *vme_weights;
+  int vme_scratch_index;
 };
 
 struct AlignedFree {
