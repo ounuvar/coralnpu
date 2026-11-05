@@ -22,6 +22,9 @@ cycles are meaningful only on RTL (npusim counts instructions).
 Build with both flags, or every run takes the vector path:
   bazel test --//sw/opt/litert-micro:rvv_conv \\
     --//sw/opt/litert-micro:conv_engine_select ...
+
+The arena (about 1.3 MB) is in EXTMEM. On RTL each run is long; pick runs with
+--test_env=MOBILENET_ENGINE_RUNS=all_vector,per_layer.
 """
 
 import os
@@ -45,6 +48,8 @@ _SYMBOLS = [
     "invoke_instret",
     "model_output",
     "heartbeat",
+    "arena_used",
+    "run_mask",
 ]
 
 
@@ -58,8 +63,16 @@ async def run_mobilenet_engine_select(fixture):
         raise FileNotFoundError(f"ELF file not found: {elf_file}")
     await fixture.load_elf_and_lookup_symbols(elf_file, _SYMBOLS)
 
+    selected = os.environ.get("MOBILENET_ENGINE_RUNS", "")
+    runs = [
+        i for i, name in enumerate(_RUNS)
+        if not selected or name in selected.split(",")
+    ]
+    assert runs, f"no runs selected by MOBILENET_ENGINE_RUNS={selected}"
+    await fixture.write_word("run_mask", sum(1 << i for i in runs))
+
     await fixture.run_to_halt(
-        timeout_sec=6 * 3600, timeout_cycles=20_000_000_000
+        timeout_sec=24 * 3600, timeout_cycles=20_000_000_000
     )
 
     heartbeat = int(
@@ -84,32 +97,41 @@ async def run_mobilenet_engine_select(fixture):
     outputs = await fixture.read(
         "model_output", dtype=np.int8, shape=(len(_RUNS), 5)
     )
+    arena = await fixture.read(
+        "arena_used", dtype=np.uint32, shape=(len(_RUNS), )
+    )
 
     print(
-        "CSV,run,conv_layers,matrix_layers,invoke_cycles,invoke_instret,output",
+        "CSV,run,conv_layers,matrix_layers,invoke_cycles,invoke_instret,"
+        "arena_bytes,output",
         flush=True
     )
-    for i, name in enumerate(_RUNS):
+    for i in runs:
         print(
-            f"CSV,{name},{conv_layers[i]},{matrix_layers[i]},{cycles[i]},"
-            f"{instret[i]},{' '.join(str(v) for v in outputs[i])}",
+            f"CSV,{_RUNS[i]},{conv_layers[i]},{matrix_layers[i]},{cycles[i]},"
+            f"{instret[i]},{arena[i]},{' '.join(str(v) for v in outputs[i])}",
             flush=True
         )
 
-    assert list(conv_layers) == [_CONV_LAYERS] * len(_RUNS), conv_layers
-    assert list(matrix_layers) == _MATRIX_LAYERS, (
-        f"matrix layers per run {list(matrix_layers)}, expected "
-        f"{_MATRIX_LAYERS}; build with --//sw/opt/litert-micro:conv_engine_select"
-    )
-    for i in range(1, len(_RUNS)):
+    for i in runs:
+        assert conv_layers[i] == _CONV_LAYERS, (_RUNS[i], conv_layers[i])
+        assert matrix_layers[i] == _MATRIX_LAYERS[i], (
+            f"{_RUNS[i]}: {matrix_layers[i]} matrix layers, expected "
+            f"{_MATRIX_LAYERS[i]}; build with "
+            "--//sw/opt/litert-micro:conv_engine_select"
+        )
+    first = runs[0]
+    for i in runs[1:]:
         diff = np.nonzero(
-            checksums[i, :_CONV_LAYERS] != checksums[0, :_CONV_LAYERS]
+            checksums[i, :_CONV_LAYERS] != checksums[first, :_CONV_LAYERS]
         )[0]
         assert diff.size == 0, (
-            f"{_RUNS[i]} differs from {_RUNS[0]} in conv layers {diff.tolist()}"
+            f"{_RUNS[i]} differs from {_RUNS[first]} in conv layers "
+            f"{diff.tolist()}"
         )
     print(
-        f"All {_CONV_LAYERS} conv outputs match across the three runs",
+        f"All {_CONV_LAYERS} conv outputs match across "
+        f"{', '.join(_RUNS[i] for i in runs)}",
         flush=True
     )
 

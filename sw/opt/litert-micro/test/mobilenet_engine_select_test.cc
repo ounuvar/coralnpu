@@ -87,6 +87,9 @@ uint32_t checksums[kRuns][kMaxConvLayers] __attribute__((section(".data"), used)
 uint64_t invoke_cycles[kRuns] __attribute__((section(".data"), used))             = {};
 uint64_t invoke_instret[kRuns] __attribute__((section(".data"), used))            = {};
 int8_t model_output[kRuns][5] __attribute__((section(".data"), used))             = {};
+uint32_t arena_used[kRuns] __attribute__((section(".data"), used))                = {};
+// Bit i set: do run i. The test may clear bits to save RTL time.
+int32_t run_mask __attribute__((section(".data"), used)) = (1 << kRuns) - 1;
 // 0x100 + run index while a run is in progress, 0x22 when all runs finished,
 // 0xA0 / 0xB0 + run index if AllocateTensors / Invoke failed.
 int32_t heartbeat __attribute__((section(".data"), used)) = 0xAA;
@@ -135,6 +138,7 @@ static int RunModel(int run, const tflite::Model *model, OpResolver &op_resolver
   }
   invoke_instret[run] = minstret_read() - i0;
   invoke_cycles[run]  = mcycle_read() - c0;
+  arena_used[run]     = interpreter.arena_used_bytes();
 
   const TfLiteTensor *output = interpreter.output(0);
   for (int i = 0; i < 5; ++i) {
@@ -151,6 +155,9 @@ int main(void) {
     return 1;
   }
   for (int run = 0; run < kRuns; ++run) {
+    if (!(run_mask & (1 << run))) {
+      continue;
+    }
     if (const int status = RunModel(run, model, op_resolver)) {
       heartbeat = status;
       return 1;
