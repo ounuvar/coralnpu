@@ -104,6 +104,10 @@ class Parameters(var m: Seq[MemoryRegion] = Seq(), val hartId: Int = 0, var xlen
   // Number of retirement lanes from RVV core (4 from ROB + 2 from decoder retirement)
   def rvvRetireLanes: Int = instructionLanes + 2
 
+  // Idea 2 (#9): fused requantization instructions vrequant.vv and
+  // vrqclamp.vx in the RVV backend (REQUANT_ON). Requires enableRvv.
+  var enableRequant = false
+
   // Enable VME (Zvt) non-tile state and mset* instructions. Requires enableRvv.
   var enableVme           = false
   val vmeTeRatio          = 8

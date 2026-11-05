@@ -205,6 +205,26 @@ verilator_model(
     deps = UVM_VERILATOR_DEPS,
 )
 
+# Idea 2 (#9): VME verification core with REQUANT_ON, so co-simulation checks
+# vrequant.vv / vrqclamp.vx against Spike and MPACT.
+verilator_model(
+    name = "uvm_sim_verilator_vme_requant",
+    cflags = UVM_VERILATOR_CFLAGS + [
+        "+define+ZVT_ON",
+        "+define+ZVTBF16FMM_ON",
+        "+define+REQUANT_ON",
+        "+define+DUT_MODULE=VmeCoreMiniVerificationRequantAxi",
+    ],
+    hdl_toplevel = "coralnpu_tb_top",
+    include_dirs = [":include_dirs"],
+    tags = ["manual"],
+    verilog_sources = [
+        "//hdl/chisel/src/coralnpu:vme_core_mini_verification_requant_axi_cc_library_emit_verilog_single_sv",
+        ":source_files",
+    ],
+    deps = UVM_VERILATOR_DEPS,
+)
+
 alias(
     name = "uvm_vme_sim_verilator",
     actual = ":uvm_sim_verilator_vme",

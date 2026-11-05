@@ -67,6 +67,13 @@ int8_t out_fused[kOutW * kOutD] __attribute__((aligned(16)));
 volatile int32_t insn_mismatches __attribute__((used))   = -1;
 volatile int32_t fused_mismatches __attribute__((used))  = -1;
 volatile int32_t ties_checked __attribute__((used))      = 0;
+// vrequant.vv alone (no clamp), and vrqclamp.vx alone, against the model.
+volatile int32_t requant_mismatches __attribute__((used)) = -1;
+volatile int32_t rqclamp_mismatches __attribute__((used)) = -1;
+// First few instruction-check mismatches: {i, acc, mult, shift, offset, got, want}.
+constexpr int kMaxBad = 8;
+int32_t first_bad[kMaxBad][7] __attribute__((used));
+volatile int32_t first_bad_count __attribute__((used))   = 0;
 volatile uint32_t baseline_instret __attribute__((used)) = 0;
 volatile uint32_t fused_instret __attribute__((used))    = 0;
 volatile int32_t done __attribute__((used))              = 0;
@@ -134,6 +141,42 @@ static void FusedPostprocess(const int32_t *in, const int32_t *bias_data, const 
   }
 }
 
+// One instruction over n elements at e32, m8: op 0 = vrequant.vv v8, v16, v24
+// (in, m, s); op 1 = vrqclamp.vx v8, v8, packed (in only).
+static void OneInsn(int op, const int32_t *in, const int32_t *m, const int32_t *s, uint32_t packed,
+                    int32_t *out, int n) {
+  while (n > 0) {
+    size_t vl;
+    asm volatile(
+        "vsetvli %[vl], %[n], e32, m8, ta, ma\n"
+        "vle32.v v8, (%[in])\n"
+        : [vl] "=&r"(vl)
+        : [n] "r"(n), [in] "r"(in)
+        : "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "memory");
+    if (op == 0) {
+      asm volatile(
+          "vle32.v v16, (%[m])\n"
+          "vle32.v v24, (%[s])\n"
+          ".insn r 0x57, 0x2, 0x27, x8, x24, x16\n"  // vrequant.vv v8, v16, v24
+          :
+          : [m] "r"(m), [s] "r"(s)
+          : "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17", "v18", "v19", "v20",
+            "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31");
+    } else {
+      asm volatile(".insn r 0x57, 0x6, 0x23, x8, %[packed], x8\n"  // vrqclamp.vx v8, v8, packed
+                   :
+                   : [packed] "r"(packed)
+                   : "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15");
+    }
+    asm volatile("vse32.v v8, (%[out])\n" : : [out] "r"(out) : "memory");
+    in += vl;
+    m += vl;
+    s += vl;
+    out += vl;
+    n -= vl;
+  }
+}
+
 int main(void) {
   // 1. Instruction check: random values, plus exact rounding ties of both
   // signs (multiplier 2^30 halves acc exactly), saturation and extreme shifts.
@@ -171,12 +214,42 @@ int main(void) {
     RequantClamp(acc, mult, shift, PackClamp(offset, kActMin, kActMax), got, kElems);
     for (int i = 0; i < kElems; ++i) {
       const int32_t want = rq::RequantRef(acc[i], mult[i], shift[i], offset, kActMin, kActMax);
+      if (got[i] != want && first_bad_count < kMaxBad) {
+        int32_t *rec    = first_bad[first_bad_count];
+        rec[0]          = i;
+        rec[1]          = acc[i];
+        rec[2]          = mult[i];
+        rec[3]          = shift[i];
+        rec[4]          = offset;
+        rec[5]          = got[i];
+        rec[6]          = want;
+        first_bad_count = first_bad_count + 1;
+      }
       bad += got[i] != want;
       ties += (i % 4 == 1) && want > kActMin && want < kActMax;
     }
   }
   insn_mismatches = bad;
   ties_checked    = ties;
+
+  // Each instruction on its own. No clamp: offset 0 and the full int32 range.
+  OneInsn(0, acc, mult, shift, 0, got, kElems);
+  bad = 0;
+  for (int i = 0; i < kElems; ++i) {
+    bad += got[i] != rq::RequantRef(acc[i], mult[i], shift[i], 0, INT32_MIN, INT32_MAX);
+  }
+  requant_mismatches = bad;
+  bad                = 0;
+  for (int32_t offset : offsets) {
+    OneInsn(1, acc, nullptr, nullptr, PackClamp(offset, kActMin, kActMax), got, kElems);
+    for (int i = 0; i < kElems; ++i) {
+      int32_t want =
+          static_cast<int32_t>(static_cast<uint32_t>(acc[i]) + static_cast<uint32_t>(offset));
+      want = want < kActMin ? kActMin : (want > kActMax ? kActMax : want);
+      bad += got[i] != want;
+    }
+  }
+  rqclamp_mismatches = bad;
 
   // 2. Postprocess block: existing PostprocessAcc vs the fused loop.
   for (int c = 0; c < kOutD; ++c) {

@@ -100,6 +100,8 @@ object EmitCore extends App {
       p.enableRvv = arg.split("=")(1).toBoolean
     } else if (arg.startsWith("--enableVme")) {
       p.enableVme = arg.split("=")(1).toBoolean
+    } else if (arg.startsWith("--enableRequant")) {
+      p.enableRequant = arg.split("=")(1).toBoolean
     } else if (arg.startsWith("--enableFloat")) {
       p.enableFloat = arg.split("=")(1).toBoolean
     } else if (arg.startsWith("--enableZfbfmin")) {
@@ -131,6 +133,7 @@ object EmitCore extends App {
   }
   assert(!(useAxi && useTlul))
   require(!p.enableVme || p.enableRvv, "--enableVme requires --enableRvv=True")
+  require(!p.enableRequant || p.enableRvv, "--enableRequant requires --enableRvv=True")
 
   val finalModuleName =
     if (
@@ -180,6 +183,9 @@ object EmitCore extends App {
   }
   if (p.enableVme) {
     defines += "+define+ZVT_ON"
+  }
+  if (p.enableRequant) {
+    defines += "+define+REQUANT_ON"
   }
   if (p.fpuPipeRegs != 4) {
     defines += s"+define+FPU_PIPEREGS=${p.fpuPipeRegs}"
