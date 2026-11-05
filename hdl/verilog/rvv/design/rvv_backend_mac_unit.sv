@@ -1092,6 +1092,7 @@ always_comb begin
     logic        [`WORD_WIDTH-1:0] mask;
     logic        [`WORD_WIDTH-1:0] remainder;
     logic        [`WORD_WIDTH-1:0] threshold;
+    logic signed [`WORD_WIDTH-1:0] shifted;
     logic signed [`WORD_WIDTH-1:0] sum;
     logic signed [`WORD_WIDTH-1:0] lo;
     logic signed [`WORD_WIDTH-1:0] hi;
@@ -1099,7 +1100,9 @@ always_comb begin
     mask      = (`WORD_WIDTH'(1) << rq_rshift_d1[k]) - `WORD_WIDTH'(1);
     remainder = y & mask;
     threshold = (mask >> 1) + {31'b0, y[`WORD_WIDTH-1]};
-    requant_rslt_d1[`WORD_WIDTH*k +: `WORD_WIDTH] = (y >>> rq_rshift_d1[k]) + {31'b0, remainder > threshold};
+    // Shift on its own: mixed with an unsigned operand, >>> would turn logical.
+    shifted   = y >>> rq_rshift_d1[k];
+    requant_rslt_d1[`WORD_WIDTH*k +: `WORD_WIDTH] = shifted + {31'b0, remainder > threshold};
 
     sum = mac_addsrc_d1[`WORD_WIDTH*k +: `WORD_WIDTH] + {{16{rq_rs1_d1[15]}}, rq_rs1_d1[15:0]};
     lo  = {{24{rq_rs1_d1[23]}}, rq_rs1_d1[23:16]};
