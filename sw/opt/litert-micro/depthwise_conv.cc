@@ -22,6 +22,7 @@
 
 #include "sw/opt/litert-micro/accumulator_util.h"
 #include "sw/opt/litert-micro/memory_util.h"
+#include "sw/opt/litert-micro/row_tiled_core.h"
 #include "sw/opt/rvv_opt.h"
 #include "tensorflow/lite/kernels/kernel_util.h"
 #include "tensorflow/lite/micro/kernels/kernel_util.h"
@@ -344,12 +345,15 @@ void DepthwiseConvPerChannelPatchCenter3x3Reuse6(
 }
 }  // namespace
 
-void DepthwiseConvPerChannel(const DepthwiseParams &params, const int32_t *output_multiplier,
-                             const int32_t *output_shift, const RuntimeShape &in_shape,
-                             const int8_t *in_data, const RuntimeShape &f_shape,
-                             const int8_t *f_data, const RuntimeShape &bias_shape,
-                             const int32_t *bias_data, const RuntimeShape &out_shape,
-                             int8_t *out_data, int32_t *accs_buf) {
+// The untiled kernel. With `pre_left` and `pre_right` (the shifts already split for vectorization)
+// the filter, bias and shifts are used as given, because the row-tiled path (#11) already holds
+// them in DTCM; otherwise they are copied and prepared here.
+static void DepthwiseConvPerChannelUntiled(
+    const DepthwiseParams &params, const int32_t *output_multiplier, const int32_t *output_shift,
+    const RuntimeShape &in_shape, const int8_t *in_data, const RuntimeShape &f_shape,
+    const int8_t *f_data, const RuntimeShape &bias_shape, const int32_t *bias_data,
+    const RuntimeShape &out_shape, int8_t *out_data, int32_t *accs_buf,
+    const uint8_t *pre_left = nullptr, const uint8_t *pre_right = nullptr) {
   // Check dimensions of the tensors.
   TFLITE_DCHECK_EQ(in_shape.DimensionsCount(), 4);
   TFLITE_DCHECK_EQ(f_shape.DimensionsCount(), 4);
@@ -374,68 +378,151 @@ void DepthwiseConvPerChannel(const DepthwiseParams &params, const int32_t *outpu
   TFLITE_DCHECK_EQ(bias_shape.FlatSize(), out_d);
 
   // Copy filter and bias to dtcm.
-  // Copy filter and bias to dtcm.
-  auto f_data_copy = make_aligned_array<int8_t>(16, f_shape.FlatSize(), f_data);
-  // TODO(davidgao): if allocation fails, don't copy, use orig
-  TFLITE_DCHECK_NE(f_data_copy, nullptr);
-
+  aligned_array<int8_t> f_data_copy;
   aligned_array<int32_t> bias_data_copy;
-  if (bias_data) {
-    bias_data_copy = make_aligned_array<int32_t>(16, out_d, bias_data);
+  aligned_array<uint8_t> shift_left_own, shift_right_own;
+  const int8_t *f_local       = f_data;
+  const int32_t *bias_local   = bias_data;
+  const uint8_t *shift_left_p = pre_left, *shift_right_p = pre_right;
+  if (pre_left == nullptr) {
+    f_data_copy = make_aligned_array<int8_t>(16, f_shape.FlatSize(), f_data);
     // TODO(davidgao): if allocation fails, don't copy, use orig
-    TFLITE_DCHECK_NE(bias_data_copy, nullptr);
-  }
+    TFLITE_DCHECK_NE(f_data_copy, nullptr);
+    f_local = f_data_copy.get();
+    if (bias_data) {
+      bias_data_copy = make_aligned_array<int32_t>(16, out_d, bias_data);
+      // TODO(davidgao): if allocation fails, don't copy, use orig
+      TFLITE_DCHECK_NE(bias_data_copy, nullptr);
+      bias_local = bias_data_copy.get();
+    } else {
+      bias_local = nullptr;
+    }
 
-  // Shifting from quantization params.
-  auto shift_left = make_aligned_array<uint8_t>(16, out_d);
-  TFLITE_DCHECK_NE(shift_left, nullptr);
-  auto shift_right = make_aligned_array<uint8_t>(16, out_d);
-  TFLITE_DCHECK_NE(shift_right, nullptr);
-  PrepareShiftParams(shift_left.get(), shift_right.get(), output_shift, out_d);
+    // Shifting from quantization params.
+    shift_left_own = make_aligned_array<uint8_t>(16, out_d);
+    TFLITE_DCHECK_NE(shift_left_own, nullptr);
+    shift_right_own = make_aligned_array<uint8_t>(16, out_d);
+    TFLITE_DCHECK_NE(shift_right_own, nullptr);
+    PrepareShiftParams(shift_left_own.get(), shift_right_own.get(), output_shift, out_d);
+    shift_left_p  = shift_left_own.get();
+    shift_right_p = shift_right_own.get();
+  }
 
   // Cut down into sections
   const int out_y_top    = idiv_ceil(pad_h, stride_h);
-  const int out_y_bottom = idiv_ceil(out_h + pad_h - f_h * dilation_h, stride_h);
+  int out_y_bottom       = idiv_ceil(out_h + pad_h - f_h * dilation_h, stride_h);
+  // A tile of a row-tiled layer (#11) can have fewer output rows than the filter is tall, which
+  // makes the section boundary negative and would start the bottom section above the tile. Never
+  // above the top section's end. The untiled call (whole image) is left as it was.
+  if (pre_left != nullptr)
+    out_y_bottom = std::max(out_y_bottom, out_y_top);
   const int out_x_left   = idiv_ceil(pad_w, stride_w);
   const int out_x_right  = idiv_ceil(out_w + pad_w - f_w * dilation_w, stride_w);
 
   // Top
-  DepthwiseConvPerChannelPatch(params, output_multiplier, shift_left.get(), shift_right.get(),
-                               in_shape, in_data, f_shape, f_data_copy.get(), bias_shape,
-                               bias_data_copy.get(), out_shape, out_data, 0, out_y_top, 0, out_w,
-                               accs_buf);
+  DepthwiseConvPerChannelPatch(params, output_multiplier, shift_left_p, shift_right_p, in_shape,
+                               in_data, f_shape, f_local, bias_shape, bias_local, out_shape,
+                               out_data, 0, out_y_top, 0, out_w, accs_buf);
   // Middle-left
-  DepthwiseConvPerChannelPatch(params, output_multiplier, shift_left.get(), shift_right.get(),
-                               in_shape, in_data, f_shape, f_data_copy.get(), bias_shape,
-                               bias_data_copy.get(), out_shape, out_data, out_y_top, out_y_bottom,
-                               0, out_x_left, accs_buf);
+  DepthwiseConvPerChannelPatch(params, output_multiplier, shift_left_p, shift_right_p, in_shape,
+                               in_data, f_shape, f_local, bias_shape, bias_local, out_shape,
+                               out_data, out_y_top, out_y_bottom, 0, out_x_left, accs_buf);
   // Center
   do {
     if ((f_h == 3) && (f_w == 3)) {
       if (stride_w == dilation_w) {
         DepthwiseConvPerChannelPatchCenter3x3Reuse6(
-            params, output_multiplier, shift_left.get(), shift_right.get(), in_shape, in_data,
-            f_shape, f_data_copy.get(), bias_shape, bias_data_copy.get(), out_shape, out_data,
-            out_y_top, out_y_bottom, out_x_left, out_x_right, accs_buf);
+            params, output_multiplier, shift_left_p, shift_right_p, in_shape, in_data, f_shape,
+            f_local, bias_shape, bias_local, out_shape, out_data, out_y_top, out_y_bottom,
+            out_x_left, out_x_right, accs_buf);
         break;
       }
       // More variations to be added here
     }
-    DepthwiseConvPerChannelPatch(params, output_multiplier, shift_left.get(), shift_right.get(),
-                                 in_shape, in_data, f_shape, f_data_copy.get(), bias_shape,
-                                 bias_data_copy.get(), out_shape, out_data, out_y_top, out_y_bottom,
-                                 out_x_left, out_x_right, accs_buf);
+    DepthwiseConvPerChannelPatch(params, output_multiplier, shift_left_p, shift_right_p, in_shape,
+                                 in_data, f_shape, f_local, bias_shape, bias_local, out_shape,
+                                 out_data, out_y_top, out_y_bottom, out_x_left, out_x_right,
+                                 accs_buf);
   } while (false);
   // Middle-right
-  DepthwiseConvPerChannelPatch(params, output_multiplier, shift_left.get(), shift_right.get(),
-                               in_shape, in_data, f_shape, f_data_copy.get(), bias_shape,
-                               bias_data_copy.get(), out_shape, out_data, out_y_top, out_y_bottom,
-                               out_x_right, out_w, accs_buf);
+  DepthwiseConvPerChannelPatch(params, output_multiplier, shift_left_p, shift_right_p, in_shape,
+                               in_data, f_shape, f_local, bias_shape, bias_local, out_shape,
+                               out_data, out_y_top, out_y_bottom, out_x_right, out_w, accs_buf);
   // Bottom
-  DepthwiseConvPerChannelPatch(params, output_multiplier, shift_left.get(), shift_right.get(),
-                               in_shape, in_data, f_shape, f_data_copy.get(), bias_shape,
-                               bias_data_copy.get(), out_shape, out_data, out_y_bottom, out_h, 0,
-                               out_w, accs_buf);
+  DepthwiseConvPerChannelPatch(params, output_multiplier, shift_left_p, shift_right_p, in_shape,
+                               in_data, f_shape, f_local, bias_shape, bias_local, out_shape,
+                               out_data, out_y_bottom, out_h, 0, out_w, accs_buf);
+}
+
+bool DepthwiseRowTiledWithBudget(const DepthwiseParams &params, const int32_t *output_multiplier,
+                                 const int32_t *output_shift, const RuntimeShape &in_shape,
+                                 const int8_t *in_data, const RuntimeShape &f_shape,
+                                 const int8_t *f_data, const int32_t *bias_data,
+                                 const RuntimeShape &out_shape, int8_t *out_data, uint32_t budget,
+                                 RowPlan *plan_out) {
+  if (in_shape.DimensionsCount() != 4 || f_shape.DimensionsCount() != 4 ||
+      out_shape.DimensionsCount() != 4) {
+    return false;
+  }
+  if (params.dilation_width_factor != 1 || params.dilation_height_factor != 1)
+    return false;
+  RowGeom g{};
+  g.in_h              = in_shape.Dims(1);
+  g.in_w              = in_shape.Dims(2);
+  g.in_d              = in_shape.Dims(3);
+  g.out_h             = out_shape.Dims(1);
+  g.out_w             = out_shape.Dims(2);
+  g.out_d             = out_shape.Dims(3);
+  g.fh                = f_shape.Dims(1);
+  g.fw                = f_shape.Dims(2);
+  g.stride_h          = params.stride_height;
+  g.pad_h             = params.padding_values.height;
+  g.filter_bytes      = g.fh * g.fw * g.out_d;
+  g.scratch_row_bytes = g.out_w * g.out_d * static_cast<int>(sizeof(int32_t));
+  if (in_shape.Dims(0) != out_shape.Dims(0) || f_shape.Dims(0) != 1 || f_shape.Dims(3) != g.out_d ||
+      g.out_d != g.in_d * params.depth_multiplier || g.stride_h < 1 || g.pad_h < 0 || g.in_h < 1) {
+    return false;
+  }
+  RowData d{};
+  d.input      = in_data;
+  d.output     = out_data;
+  d.batches    = in_shape.Dims(0);
+  d.filter     = f_data;
+  d.bias       = bias_data;
+  d.multiplier = output_multiplier;
+  d.shift      = output_shift;
+  return RunRowTiled(g, d, budget, plan_out, [&](const RowTileArgs &a) {
+    DepthwiseParams sub        = params;
+    sub.padding_values.height  = a.pad_top;
+    const int32_t in_dims[4]   = {1, a.in_rows, g.in_w, g.in_d};
+    const int32_t out_dims[4]  = {1, a.out_rows, g.out_w, g.out_d};
+    const int32_t bias_dims[1] = {g.out_d};
+    DepthwiseConvPerChannelUntiled(sub, a.multiplier, a.shift_raw, RuntimeShape(4, in_dims), a.in,
+                                   f_shape, a.filter, RuntimeShape(1, bias_dims), a.bias,
+                                   RuntimeShape(4, out_dims), a.out, a.scratch, a.shift_left,
+                                   a.shift_right);
+    return true;
+  });
+}
+
+void DepthwiseConvPerChannel(const DepthwiseParams &params, const int32_t *output_multiplier,
+                             const int32_t *output_shift, const RuntimeShape &in_shape,
+                             const int8_t *in_data, const RuntimeShape &f_shape,
+                             const int8_t *f_data, const RuntimeShape &bias_shape,
+                             const int32_t *bias_data, const RuntimeShape &out_shape,
+                             int8_t *out_data, int32_t *accs_buf) {
+#ifdef CORALNPU_CONV_TILING
+  // DMA-tiled path (#11), behind --//sw/opt/litert-micro:conv_tiling. Anything it does not handle,
+  // or a DMA error, continues on the untiled path below.
+  if (DepthwiseRowTiledWithBudget(params, output_multiplier, output_shift, in_shape, in_data,
+                                  f_shape, f_data, bias_data, out_shape, out_data,
+                                  CORALNPU_TILE_BUDGET_BYTES, nullptr)) {
+    return;
+  }
+#endif  // CORALNPU_CONV_TILING
+  DepthwiseConvPerChannelUntiled(params, output_multiplier, output_shift, in_shape, in_data,
+                                 f_shape, f_data, bias_shape, bias_data, out_shape, out_data,
+                                 accs_buf);
 }
 
 void *DepthwiseConvInit(TfLiteContext *context, const char *buffer, size_t length) {

@@ -41,6 +41,21 @@ using namespace coralnpu_v2::opt::litert_micro;
 #error "define OUT_D"
 #endif
 
+// Optional spatial layer (the 3x3 stride-2 first layer, #11): LAYER_H x LAYER_W input pixels
+// (LAYER_PIXELS is their product), FILTER x FILTER filter, STRIDE, SAME padding. Without LAYER_H
+// the layer is pointwise.
+#ifdef LAYER_H
+#ifndef LAYER_W
+#error "define LAYER_W"
+#endif
+#ifndef FILTER
+#error "define FILTER"
+#endif
+#ifndef STRIDE
+#error "define STRIDE"
+#endif
+#endif
+
 #ifdef PLACE_EXT
 #define DATA_SECTION ".extdata"
 #else
@@ -52,13 +67,33 @@ namespace {
 constexpr int kPixels = LAYER_PIXELS;
 constexpr int kInD    = IN_D;
 constexpr int kOutD   = OUT_D;
+#ifdef LAYER_H
+constexpr int kInH  = LAYER_H;
+constexpr int kInW  = LAYER_W;
+constexpr int kF    = FILTER;
+constexpr int kS    = STRIDE;
+constexpr int kOutH = (kInH + kS - 1) / kS;
+constexpr int kOutW = (kInW + kS - 1) / kS;
+constexpr int kPadH = ((kOutH - 1) * kS + kF - kInH > 0) ? ((kOutH - 1) * kS + kF - kInH) / 2 : 0;
+constexpr int kPadW = ((kOutW - 1) * kS + kF - kInW > 0) ? ((kOutW - 1) * kS + kF - kInW) / 2 : 0;
+#else
+constexpr int kInH  = 1;
+constexpr int kInW  = kPixels;
+constexpr int kF    = 1;
+constexpr int kS    = 1;
+constexpr int kOutH = 1;
+constexpr int kOutW = kPixels;
+constexpr int kPadH = 0;
+constexpr int kPadW = 0;
+#endif
+constexpr int kOutPixels = kOutH * kOutW;
 
 int8_t input_data[kPixels * kInD] __attribute__((section(DATA_SECTION), aligned(16)));
-int8_t filter_data[kOutD * kInD] __attribute__((section(DATA_SECTION), aligned(16)));
+int8_t filter_data[kOutD * kF * kF * kInD] __attribute__((section(DATA_SECTION), aligned(16)));
 int32_t bias_data[kOutD] __attribute__((section(DATA_SECTION), aligned(16)));
 int32_t multiplier[kOutD] __attribute__((section(DATA_SECTION), aligned(16)));
 int32_t shift[kOutD] __attribute__((section(DATA_SECTION), aligned(16)));
-int8_t output_data[kPixels * kOutD] __attribute__((section(DATA_SECTION), aligned(16)));
+int8_t output_data[kOutPixels * kOutD] __attribute__((section(DATA_SECTION), aligned(16)));
 
 // One result per 16-byte beat: the cocotb test host is 32 bits wide and reads only the first word
 // of each 128-bit DTCM beat.
@@ -100,7 +135,7 @@ RESULT_VAR(uint32_t, stat_build);
 int main(void) {
   for (int i = 0; i < kPixels * kInD; ++i)
     input_data[i] = NextByte();
-  for (int i = 0; i < kOutD * kInD; ++i)
+  for (int i = 0; i < kOutD * kF * kF * kInD; ++i)
     filter_data[i] = NextByte();
   for (int i = 0; i < kOutD; ++i) {
     bias_data[i]  = (i * 37) - 2000;
@@ -108,20 +143,20 @@ int main(void) {
     shift[i]      = -8;
   }
 
-  const int32_t input_dims[4]  = {1, 1, kPixels, kInD};
-  const int32_t filter_dims[4] = {kOutD, 1, 1, kInD};
-  const int32_t output_dims[4] = {1, 1, kPixels, kOutD};
+  const int32_t input_dims[4]  = {1, kInH, kInW, kInD};
+  const int32_t filter_dims[4] = {kOutD, kF, kF, kInD};
+  const int32_t output_dims[4] = {1, kOutH, kOutW, kOutD};
   const int32_t bias_dims[1]   = {kOutD};
   const tflite::RuntimeShape input_shape(4, input_dims), filter_shape(4, filter_dims),
       output_shape(4, output_dims), bias_shape(1, bias_dims);
 
   tflite::ConvParams params;
-  params.stride_width             = 1;
-  params.stride_height            = 1;
+  params.stride_width             = kS;
+  params.stride_height            = kS;
   params.dilation_width_factor    = 1;
   params.dilation_height_factor   = 1;
-  params.padding_values.width     = 0;
-  params.padding_values.height    = 0;
+  params.padding_values.width     = kPadW;
+  params.padding_values.height    = kPadH;
   params.input_offset             = 128;
   params.weights_offset           = 0;
   params.output_offset            = 5;
@@ -165,7 +200,7 @@ int main(void) {
   tile_cycles_hi  = static_cast<uint32_t>(cycles >> 32);
 
   int32_t sum = 0;
-  for (int i = 0; i < kPixels * kOutD; ++i)
+  for (int i = 0; i < kOutPixels * kOutD; ++i)
     sum = sum * 31 + output_data[i];
   tile_checksum = sum;
   tile_done     = 0x600D;

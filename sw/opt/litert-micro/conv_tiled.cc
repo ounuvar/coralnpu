@@ -31,16 +31,13 @@ constexpr bool kRvv = true;
 constexpr bool kRvv = false;
 #endif
 
-constexpr uint32_t kArenaBytes = CORALNPU_TILE_BUDGET_BYTES;
+constexpr uint32_t kArenaBytes = kTileArenaBytes;
 
 // Everything the tiled path keeps in DTCM: one arena that the buffers and the copy chains' DMA
 // descriptors are carved from by the plan's layout. One layer at a time, so one set. The copy
 // chains' storage lives in the arena (32-byte aligned for the descriptors).
-alignas(32) uint8_t g_arena[kArenaBytes];
 CopyChain g_prologue;
 CopyChain g_chains[2];
-
-ConvTiledStats g_stats;
 
 #ifdef CORALNPU_TILING_STATS
 inline uint32_t Cycles() {
@@ -49,8 +46,8 @@ inline uint32_t Cycles() {
   return v;
 }
 #define STAT_START(t)      const uint32_t t = Cycles()
-#define STAT_ADD(field, t) g_stats.field += Cycles() - (t)
-#define STAT_COUNT(field)  ++g_stats.field
+#define STAT_ADD(field, t) TileStats().field += Cycles() - (t)
+#define STAT_COUNT(field)  ++TileStats().field
 #else
 #define STAT_START(t)
 #define STAT_ADD(field, t)
@@ -67,8 +64,8 @@ struct Raw {
 
 }  // namespace
 
-void ConvTiledResetStats() { g_stats = ConvTiledStats{}; }
-ConvTiledStats ConvTiledGetStats() { return g_stats; }
+void ConvTiledResetStats() { TileStats() = ConvTiledStats{}; }
+ConvTiledStats ConvTiledGetStats() { return TileStats(); }
 
 bool ConvTiledUsesRvvKernel() { return kRvv; }
 
@@ -112,11 +109,11 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
   const int buffers         = plan.double_buffer ? 2 : 1;
   const PointwiseLayout lay = PointwiseLayoutFor(in_d, chunk, plan.buffer_pixels, buffers, kRvv,
                                                  kPrefetchDefault, chunk < out_d);
-  g_prologue.Init(g_arena + lay.prologue_chain, kPrologueCopies);
+  g_prologue.Init(TileArena() + lay.prologue_chain, kPrologueCopies);
   for (int b = 0; b < 2; ++b)
-    g_chains[b].Init(g_arena + lay.chain[b], lay.chain_capacity);
+    g_chains[b].Init(TileArena() + lay.chain[b], lay.chain_capacity);
 
-  uint8_t *const base                         = g_arena;
+  uint8_t *const base                         = TileArena();
   const Raw raws[2]                           = {{reinterpret_cast<int8_t *>(base + lay.filter),
                                                   reinterpret_cast<int32_t *>(base + lay.bias_raw),
                                                   reinterpret_cast<int32_t *>(base + lay.multiplier),
@@ -365,6 +362,91 @@ bool ConvPointwiseTiled(const tflite::ConvParams &params, const int32_t *output_
   return ConvPointwiseTiledWithBudget(
       params, output_multiplier, output_shift, input_shape, input_data, filter_shape, filter_data,
       bias_data, output_shape, output_data, CORALNPU_TILE_BUDGET_BYTES, nullptr);
+}
+
+namespace {
+
+// One tile of the row-tiled conv on the local buffers: the RVV 3x3 kernel with CORALNPU_RVV_CONV,
+// the TFLite reference kernel otherwise. Returns false if the kernel could not run.
+bool RowKernel(
+    [[maybe_unused]] const tflite::ConvParams &params, [[maybe_unused]] const int32_t *multiplier,
+    [[maybe_unused]] const int32_t *shift_raw, [[maybe_unused]] const uint8_t *shift_left,
+    [[maybe_unused]] const uint8_t *shift_right,
+    [[maybe_unused]] const tflite::RuntimeShape &in_shape, [[maybe_unused]] const int8_t *in,
+    [[maybe_unused]] const tflite::RuntimeShape &filter_shape,
+    [[maybe_unused]] const int8_t *filter, [[maybe_unused]] const int32_t *bias,
+    [[maybe_unused]] const tflite::RuntimeShape &out_shape, [[maybe_unused]] int8_t *out) {
+#if CORALNPU_RVV_CONV
+  if (filter_shape.Dims(1) == 3 && filter_shape.Dims(2) == 3) {
+    return Conv3x3PerChannel(params, multiplier, shift_left, shift_right, in_shape, in,
+                             filter_shape, filter, bias, out_shape, out);
+  }
+#endif
+  const int32_t bias_dims[1] = {out_shape.Dims(3)};
+  tflite::reference_integer_ops::ConvPerChannel(
+      params, multiplier, shift_raw, in_shape, in, filter_shape, filter,
+      tflite::RuntimeShape(1, bias_dims), bias, out_shape, out);
+  return true;
+}
+
+}  // namespace
+
+bool ConvRowTiledWithBudget(const tflite::ConvParams &params, const int32_t *output_multiplier,
+                            const int32_t *output_shift, const tflite::RuntimeShape &input_shape,
+                            const int8_t *input_data, const tflite::RuntimeShape &filter_shape,
+                            const int8_t *filter_data, const int32_t *bias_data,
+                            const tflite::RuntimeShape &output_shape, int8_t *output_data,
+                            uint32_t budget, RowPlan *plan_out) {
+  if (input_shape.DimensionsCount() != 4 || filter_shape.DimensionsCount() != 4 ||
+      output_shape.DimensionsCount() != 4) {
+    return false;
+  }
+  if (params.dilation_width_factor != 1 || params.dilation_height_factor != 1)
+    return false;
+  RowGeom g{};
+  g.in_h         = input_shape.Dims(1);
+  g.in_w         = input_shape.Dims(2);
+  g.in_d         = input_shape.Dims(3);
+  g.out_h        = output_shape.Dims(1);
+  g.out_w        = output_shape.Dims(2);
+  g.out_d        = output_shape.Dims(3);
+  g.fh           = filter_shape.Dims(1);
+  g.fw           = filter_shape.Dims(2);
+  g.stride_h     = params.stride_height;
+  g.pad_h        = params.padding_values.height;
+  g.filter_bytes = g.out_d * g.fh * g.fw * g.in_d;
+  // One group only: the filter's depth is the input depth.
+  if (input_shape.Dims(0) != output_shape.Dims(0) || filter_shape.Dims(0) != g.out_d ||
+      filter_shape.Dims(3) != g.in_d || g.stride_h < 1 || g.pad_h < 0 || g.in_h < 1) {
+    return false;
+  }
+  RowData d{};
+  d.input      = input_data;
+  d.output     = output_data;
+  d.batches    = input_shape.Dims(0);
+  d.filter     = filter_data;
+  d.bias       = bias_data;
+  d.multiplier = output_multiplier;
+  d.shift      = output_shift;
+  return RunRowTiled(g, d, budget, plan_out, [&](const RowTileArgs &a) {
+    tflite::ConvParams sub    = params;
+    sub.padding_values.height = a.pad_top;
+    const int32_t in_dims[4]  = {1, a.in_rows, g.in_w, g.in_d};
+    const int32_t out_dims[4] = {1, a.out_rows, g.out_w, g.out_d};
+    return RowKernel(sub, a.multiplier, a.shift_raw, a.shift_left, a.shift_right,
+                     tflite::RuntimeShape(4, in_dims), a.in, filter_shape, a.filter, a.bias,
+                     tflite::RuntimeShape(4, out_dims), a.out);
+  });
+}
+
+bool ConvRowTiled(const tflite::ConvParams &params, const int32_t *output_multiplier,
+                  const int32_t *output_shift, const tflite::RuntimeShape &input_shape,
+                  const int8_t *input_data, const tflite::RuntimeShape &filter_shape,
+                  const int8_t *filter_data, const int32_t *bias_data,
+                  const tflite::RuntimeShape &output_shape, int8_t *output_data) {
+  return ConvRowTiledWithBudget(params, output_multiplier, output_shift, input_shape, input_data,
+                                filter_shape, filter_data, bias_data, output_shape, output_data,
+                                CORALNPU_TILE_BUDGET_BYTES, nullptr);
 }
 
 }  // namespace coralnpu_v2::opt::litert_micro

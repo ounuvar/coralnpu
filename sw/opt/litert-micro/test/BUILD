@@ -126,6 +126,142 @@ coralflow_test(
     ]
 ]
 
+# Row-tiled versus untiled spatial conv (#11), on npusim with the memcpy copy path: copies at Start
+# (default) or at Wait. Run with and without --//sw/opt/litert-micro:rvv_conv.
+[
+    coralnpu_v2_binary(
+        name = "conv_row_tiled_test" + variant,
+        srcs = ["conv_row_tiled_test.cc"],
+        dtcm_size_kbytes = 1024,
+        itcm_size_kbytes = 1024,
+        deps = [lib],
+    )
+    for variant, lib in [
+        ("", "//sw/opt/litert-micro:conv"),
+        ("_wait", "//sw/opt/litert-micro:conv_tiling_test_wait"),
+    ]
+]
+
+[
+    coralflow_test(
+        name = "conv_row_tiled_sim_test" + variant,
+        srcs = ["conv_row_tiled_test.py"],
+        elf = ":conv_row_tiled_test%s.elf" % variant,
+        highmem = True,
+        main = "conv_row_tiled_test.py",
+        targets = ["npusim"],
+        deps = [
+            "@bazel_tools//tools/python/runfiles",
+        ],
+    )
+    for variant in [
+        "",
+        "_wait",
+    ]
+]
+
+# MobileNet layer 0 (3x3, stride 2, 3 to 8 channels, SAME) through the dispatcher on the SoC
+# testharness (#11): the top 56 rows of the 224x224 input, the same geometry as the whole layer with
+# a quarter of the rows (a full layer takes too long to simulate), so cycles are extrapolated by
+# four. _local is the ceiling, _ext untiled with data in external memory, _tiled_stats the row-tiled
+# path with per-phase counters.
+[
+    coralnpu_v2_binary(
+        name = "conv_layer_bench_l0_h56_" + variant,
+        srcs = ["conv_layer_bench.cc"],
+        copts = [
+                    "-DLAYER_PIXELS=%d" % (56 * 224),
+                    "-DLAYER_H=56",
+                    "-DLAYER_W=224",
+                    "-DFILTER=3",
+                    "-DSTRIDE=2",
+                    "-DIN_D=3",
+                    "-DOUT_D=8",
+                ] + ([] if variant == "local" else ["-DPLACE_EXT"]) +
+                (["-DBENCH_STATS"] if variant.endswith("_stats") else []),
+        dtcm_size_kbytes = 1024,
+        itcm_size_kbytes = 1024,
+        deps = [
+            "//sw/opt/litert-micro:conv_rvv_tiled_dma_prefetch_spread_merge_overlap_stats" if variant.startswith("tiled") else "//sw/opt/litert-micro:conv_rvv",
+            "//sw/utils",
+        ],
+    )
+    for variant in [
+        "local",
+        "ext",
+        "tiled_stats",
+    ]
+]
+
+# Row-tiled versus untiled depthwise conv (#11), on npusim with the memcpy copy path: copies at
+# Start (default) or at Wait (the depthwise_conv_wait library).
+[
+    coralnpu_v2_binary(
+        name = "depthwise_row_tiled_test" + variant,
+        srcs = ["depthwise_row_tiled_test.cc"],
+        dtcm_size_kbytes = 1024,
+        itcm_size_kbytes = 1024,
+        deps = [lib],
+    )
+    for variant, lib in [
+        ("", "//sw/opt/litert-micro:depthwise_conv"),
+        ("_wait", "//sw/opt/litert-micro:depthwise_conv_wait"),
+    ]
+]
+
+[
+    coralflow_test(
+        name = "depthwise_row_tiled_sim_test" + variant,
+        srcs = ["depthwise_row_tiled_test.py"],
+        elf = ":depthwise_row_tiled_test%s.elf" % variant,
+        highmem = True,
+        main = "depthwise_row_tiled_test.py",
+        targets = ["npusim"],
+        deps = [
+            "@bazel_tools//tools/python/runfiles",
+        ],
+    )
+    for variant in [
+        "",
+        "_wait",
+    ]
+]
+
+# Depthwise layers through the real kernel entry on the SoC testharness (#11), the same three ways
+# as the layer 0 benchmark: _local (ceiling), _ext (untiled, data in external memory) and
+# _tiled_stats (row-tiled path with per-phase counters). dw1_h28 is the top 28 rows of layer 1
+# (112x112x8, stride 1, the largest accumulators per row), dw6_h28 the top 28 rows of layer 6
+# (56x56x32, stride 2) and dw13 layer 13 whole (14x14x128, stride 1, as layers 15 to 23).
+[
+    coralnpu_v2_binary(
+        name = "depthwise_layer_bench_%s_%s" % (layer, variant),
+        srcs = ["depthwise_layer_bench.cc"],
+        copts = [
+                    "-DDW_H=%d" % h,
+                    "-DDW_W=%d" % w,
+                    "-DDW_C=%d" % c,
+                    "-DDW_STRIDE=%d" % stride,
+                ] + ([] if variant == "local" else ["-DPLACE_EXT"]) +
+                (["-DBENCH_STATS"] if variant.endswith("_stats") else []),
+        dtcm_size_kbytes = 1024,
+        itcm_size_kbytes = 1024,
+        deps = [
+            "//sw/opt/litert-micro:depthwise_conv_tiled_dma_stats" if variant.startswith("tiled") else "//sw/opt/litert-micro:depthwise_conv",
+            "//sw/utils",
+        ],
+    )
+    for layer, h, w, c, stride in [
+        ("dw1_h28", 28, 112, 8, 1),
+        ("dw6_h28", 28, 56, 32, 2),
+        ("dw13", 14, 14, 128, 1),
+    ]
+    for variant in [
+        "local",
+        "ext",
+        "tiled_stats",
+    ]
+]
+
 # Whole pointwise layers through the real dispatcher on the SoC testharness (#11), all with the RVV
 # kernel: everything in DTCM (_local, the ceiling), data in external memory without tiling (_ext),
 # the DMA-tiled path (_tiled), with prefetch of the next chunk's start-up data (_tiled_pf), and the
@@ -247,6 +383,61 @@ coralflow_test(
                 "tiled_pf",
             ],
         ),
+        (
+            "l5",
+            256,
+            16,
+            32,
+            [
+                "local",
+                "ext",
+                "tiled_pf_spread_merge_overlap_stats",
+            ],
+        ),
+        (
+            "l7",
+            256,
+            32,
+            32,
+            [
+                "local",
+                "ext",
+                "tiled_pf_spread_merge_overlap_stats",
+            ],
+        ),
+        (
+            "l10",
+            196,
+            32,
+            64,
+            [
+                "local",
+                "ext",
+                "tiled_pf_spread_merge_overlap_stats",
+            ],
+        ),
+        (
+            "l12",
+            196,
+            64,
+            64,
+            [
+                "local",
+                "ext",
+                "tiled_pf_spread_merge_overlap_stats",
+            ],
+        ),
+        (
+            "l15",
+            196,
+            64,
+            128,
+            [
+                "local",
+                "ext",
+                "tiled_pf_spread_merge_overlap_stats",
+            ],
+        ),
     ]
     for variant in variants
 ]
@@ -287,6 +478,16 @@ cc_test(
 cc_test(
     name = "conv_tile_plan_test",
     srcs = ["conv_tile_plan_test.cc"],
+    deps = [
+        "//sw/opt/litert-micro:conv_tile_plan",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+# Host tests for the row planner of DMA-tiled spatial conv (#11).
+cc_test(
+    name = "conv_row_plan_test",
+    srcs = ["conv_row_plan_test.cc"],
     deps = [
         "//sw/opt/litert-micro:conv_tile_plan",
         "@com_google_googletest//:gtest_main",

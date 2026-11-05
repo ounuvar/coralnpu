@@ -33,6 +33,18 @@ cc_library(
     deps = ["//fpga:dma"],
 )
 
+# The DTCM arena of the tiled paths and the row-tiled loop, shared by conv and depthwise (#11).
+cc_library(
+    name = "row_tiled_core",
+    hdrs = ["row_tiled_core.h"],
+    target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
+    deps = [
+        ":accumulator_util",
+        ":conv_tile_plan",
+        ":dma_tile",
+    ],
+)
+
 cc_library(
     name = "memory_util",
     hdrs = ["memory_util.h"],
@@ -80,23 +92,59 @@ cc_library(
 # for CoralNPU.
 cc_library(
     name = "conv_tile_plan",
-    hdrs = ["conv_tile_plan.h"],
+    hdrs = [
+        "conv_row_plan.h",
+        "conv_tile_plan.h",
+    ],
 )
 
-cc_library(
-    name = "depthwise_conv",
-    srcs = [
-        "depthwise_conv.cc",
-    ],
-    hdrs = ["depthwise_conv.h"],
-    target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
-    deps = [
-        ":accumulator_util",
-        ":memory_util",
-        "//sw/opt:rvv_opt",
-        "@tflite_micro//tensorflow/lite/micro:op_resolvers",
-    ],
-)
+# Depthwise conv. With --//sw/opt/litert-micro:conv_tiling the dispatcher runs it in DMA-planned row
+# tiles (#11); the variants with fixed defines are for the tiled-versus-untiled tests (copies at
+# Wait) and for benchmarks that must not change the build configuration.
+[
+    cc_library(
+        name = name,
+        srcs = [
+            "depthwise_conv.cc",
+        ],
+        hdrs = ["depthwise_conv.h"],
+        local_defines = defines,
+        target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
+        deps = [
+            ":accumulator_util",
+            ":conv_tile_plan",
+            ":dma_tile",
+            ":memory_util",
+            ":row_tiled_core",
+            "//sw/opt:rvv_opt",
+            "@tflite_micro//tensorflow/lite/micro:op_resolvers",
+        ],
+    )
+    for name, defines in [
+        (
+            "depthwise_conv",
+            select({
+                ":conv_tiling_enabled": ["CORALNPU_CONV_TILING=1"],
+                "//conditions:default": [],
+            }) + select({
+                ":tiling_dma_enabled": ["CORALNPU_DMA_TILING=1"],
+                "//conditions:default": [],
+            }),
+        ),
+        (
+            "depthwise_conv_wait",
+            ["CORALNPU_COPY_AT_WAIT=1"],
+        ),
+        (
+            "depthwise_conv_tiled_dma_stats",
+            [
+                "CORALNPU_CONV_TILING=1",
+                "CORALNPU_DMA_TILING=1",
+                "CORALNPU_TILING_STATS=1",
+            ],
+        ),
+    ]
+]
 
 # Configuration S (#26): ConvPerChannel dispatches 1x1 and 3x3 convs to RVV
 # kernels instead of the scalar TFLite reference. Off by default, so the
@@ -166,6 +214,7 @@ cc_library(
         ":conv_tile_plan",
         ":dma_tile",
         ":memory_util",
+        ":row_tiled_core",
         "//sw/opt:rvv_opt",
         "@tflite_micro//tensorflow/lite/kernels/internal:common",
         "@tflite_micro//tensorflow/lite/micro:op_resolvers",
@@ -195,6 +244,7 @@ cc_library(
             ":conv_tile_plan",
             ":dma_tile",
             ":memory_util",
+            ":row_tiled_core",
             "//sw/opt:rvv_opt",
             "@tflite_micro//tensorflow/lite/kernels/internal:common",
             "@tflite_micro//tensorflow/lite/micro:op_resolvers",
@@ -306,6 +356,7 @@ cc_library(
             ":conv_tile_plan",
             ":dma_tile",
             ":memory_util",
+            ":row_tiled_core",
             "//sw/opt:rvv_opt",
             "@tflite_micro//tensorflow/lite/kernels/internal:common",
             "@tflite_micro//tensorflow/lite/micro:op_resolvers",

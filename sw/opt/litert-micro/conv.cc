@@ -1275,7 +1275,7 @@ __attribute__((noinline)) static bool Conv1x1PerChannel(
 // skip those taps, as the reference does, in a scalar loop. Each output row
 // is requantized with PostprocessAcc. Returns false if scratch allocation
 // fails. noinline for the same reason as Conv1x1PerChannel.
-__attribute__((noinline)) static bool Conv3x3PerChannel(
+__attribute__((noinline)) bool Conv3x3PerChannel(
     const ConvParams &params, const int32_t *output_multiplier, const uint8_t *shift_left,
     const uint8_t *shift_right, const RuntimeShape &input_shape, const int8_t *input_data,
     const RuntimeShape &filter_shape, const int8_t *filter_data, const int32_t *bias_data,
@@ -1455,6 +1455,11 @@ void ConvPerChannel(const ConvParams &params, const OpDataConvCustom &data,
       params.padding_values.height == 0 &&
       ConvPointwiseTiled(params, output_multiplier, output_shift, input_shape, input_data,
                          filter_shape, filter_data, bias_data, output_shape, output_data)) {
+    return;
+  }
+  if (filter_height == 3 && filter_width == 3 && groups == 1 &&
+      ConvRowTiled(params, output_multiplier, output_shift, input_shape, input_data, filter_shape,
+                   filter_data, bias_data, output_shape, output_data)) {
     return;
   }
 #endif  // CORALNPU_CONV_TILING

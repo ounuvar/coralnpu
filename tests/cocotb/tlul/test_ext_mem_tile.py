@@ -567,3 +567,178 @@ async def test_layer_l17_p99_tiled_pf_spread_merge_overlap_stats(dut):
     await run_tile(
         dut, "conv_layer_bench_l17_p99_tiled_pf_spread_merge_overlap_stats.elf"
     )
+
+
+@cocotb.test()
+async def test_layer_l0_h56_local(dut):
+    """Layer 0 (3x3 stride 2), top 56 rows, everything in DTCM (#11)."""
+    await run_tile(dut, "conv_layer_bench_l0_h56_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l0_h56_ext(dut):
+    """Layer 0 (3x3 stride 2), top 56 rows, untiled, data in external memory (#11)."""
+    await run_tile(dut, "conv_layer_bench_l0_h56_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l0_h56_tiled_stats(dut):
+    """Layer 0 (3x3 stride 2), top 56 rows, row-tiled path with counters (#11)."""
+    await run_tile(dut, "conv_layer_bench_l0_h56_tiled_stats.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw1_h28_local(dut):
+    """Depthwise layer dw1_h28_local (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw1_h28_local.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw1_h28_ext(dut):
+    """Depthwise layer dw1_h28_ext (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw1_h28_ext.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw1_h28_tiled_stats(dut):
+    """Depthwise layer dw1_h28_tiled_stats (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw1_h28_tiled_stats.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw6_h28_local(dut):
+    """Depthwise layer dw6_h28_local (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw6_h28_local.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw6_h28_ext(dut):
+    """Depthwise layer dw6_h28_ext (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw6_h28_ext.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw6_h28_tiled_stats(dut):
+    """Depthwise layer dw6_h28_tiled_stats (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw6_h28_tiled_stats.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw13_local(dut):
+    """Depthwise layer dw13_local (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw13_local.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw13_ext(dut):
+    """Depthwise layer dw13_ext (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw13_ext.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw13_tiled_stats(dut):
+    """Depthwise layer dw13_tiled_stats (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw13_tiled_stats.elf")
+
+
+@cocotb.test()
+async def test_layer_l5_p256_local(dut):
+    """Pointwise layer l5_p256_local (#11)."""
+    await run_tile(dut, "conv_layer_bench_l5_p256_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l5_p256_ext(dut):
+    """Pointwise layer l5_p256_ext (#11)."""
+    await run_tile(dut, "conv_layer_bench_l5_p256_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l5_p256_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l5_p256_tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l5_p256_tiled_pf_spread_merge_overlap_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l7_p256_local(dut):
+    """Pointwise layer l7_p256_local (#11)."""
+    await run_tile(dut, "conv_layer_bench_l7_p256_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l7_p256_ext(dut):
+    """Pointwise layer l7_p256_ext (#11)."""
+    await run_tile(dut, "conv_layer_bench_l7_p256_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l7_p256_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l7_p256_tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l7_p256_tiled_pf_spread_merge_overlap_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l10_p196_local(dut):
+    """Pointwise layer l10_p196_local (#11)."""
+    await run_tile(dut, "conv_layer_bench_l10_p196_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l10_p196_ext(dut):
+    """Pointwise layer l10_p196_ext (#11)."""
+    await run_tile(dut, "conv_layer_bench_l10_p196_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l10_p196_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l10_p196_tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut,
+        "conv_layer_bench_l10_p196_tiled_pf_spread_merge_overlap_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l12_p196_local(dut):
+    """Pointwise layer l12_p196_local (#11)."""
+    await run_tile(dut, "conv_layer_bench_l12_p196_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l12_p196_ext(dut):
+    """Pointwise layer l12_p196_ext (#11)."""
+    await run_tile(dut, "conv_layer_bench_l12_p196_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l12_p196_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l12_p196_tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut,
+        "conv_layer_bench_l12_p196_tiled_pf_spread_merge_overlap_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l15_p196_local(dut):
+    """Pointwise layer l15_p196_local (#11)."""
+    await run_tile(dut, "conv_layer_bench_l15_p196_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l15_p196_ext(dut):
+    """Pointwise layer l15_p196_ext (#11)."""
+    await run_tile(dut, "conv_layer_bench_l15_p196_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l15_p196_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l15_p196_tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut,
+        "conv_layer_bench_l15_p196_tiled_pf_spread_merge_overlap_stats.elf"
+    )

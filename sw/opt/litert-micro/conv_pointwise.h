@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// The two steps of the RVV pointwise (1x1) conv kernel (configuration S, #26), exposed for the
-// DMA-tiled path (#11). Only declared with CORALNPU_RVV_CONV, like the kernel itself.
+// The two steps of the RVV pointwise (1x1) conv kernel and the 3x3 kernel (configuration S, #26),
+// exposed for the DMA-tiled paths (#11). Only declared with CORALNPU_RVV_CONV, like the kernel
+// itself.
 
 #ifndef SW_OPT_LITERT_MICRO_CONV_POINTWISE_H_
 #define SW_OPT_LITERT_MICRO_CONV_POINTWISE_H_
@@ -39,6 +40,16 @@ void Conv1x1Run(const tflite::ConvParams &params, const int32_t *output_multipli
                 const uint8_t *shift_left, const uint8_t *shift_right, int in_d, int out_d,
                 int pixels, const int8_t *input_data, const int16_t *weights, const int32_t *bias,
                 int32_t *accs, int8_t *output_data);
+
+// The 3x3 conv kernel (MobileNet's first layer), exposed for the row-tiled path (#11). It
+// allocates its own scratch and returns false if that fails. `shift_left` and `shift_right` are
+// indexed by output channel.
+bool Conv3x3PerChannel(const tflite::ConvParams &params, const int32_t *output_multiplier,
+                       const uint8_t *shift_left, const uint8_t *shift_right,
+                       const tflite::RuntimeShape &input_shape, const int8_t *input_data,
+                       const tflite::RuntimeShape &filter_shape, const int8_t *filter_data,
+                       const int32_t *bias_data, const tflite::RuntimeShape &output_shape,
+                       int8_t *output_data);
 
 }  // namespace coralnpu_v2::opt::litert_micro
 
