@@ -167,6 +167,7 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
   int rs          = 0;      // which raw buffer set holds the current chunk
   int buf0        = 0;      // input/output buffer of the current chunk's first tile
   bool prefetched = false;  // raw set rs (and, double buffered, the first input tile) are in place
+  bool flush_pending = false;  // the last tile's output copy of the previous chunk is still running
   for (int n0 = 0; n0 < out_d; n0 += chunk) {
     STAT_COUNT(chunks);
     const int cn             = std::min(chunk, out_d - n0);
@@ -206,6 +207,16 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
       STAT_ADD(prepare, t0);
     }
 
+    // The previous chunk's output flush, started without waiting, must be done before this chunk
+    // builds or starts any copy chain (chain 0 is shared, and the DMA runs one transfer at a time).
+    if (flush_pending) {
+      STAT_START(tw);
+      if (!g_chains[0].Wait())
+        return false;
+      STAT_ADD(blocking_copy, tw);
+      flush_pending = false;
+    }
+
     const auto compute = [&](int buf, int np) {
       STAT_START(t0);
 #if CORALNPU_RVV_CONV
@@ -233,12 +244,9 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
       if (cn == out_d) {
         return c.Add(out_tile[buf], dst, static_cast<uint32_t>(np) * out_d);
       }
-      bool added = true;
-      for (int p = 0; p < np; ++p) {
-        added &= c.Add(out_tile[buf] + static_cast<size_t>(p) * cn,
-                       dst + static_cast<size_t>(p) * out_d + n0, static_cast<uint32_t>(cn));
-      }
-      return added;
+      // One copy per pixel, with the pixel's slice of the channels: equal copies, strided.
+      return c.AddStrided(out_tile[buf], static_cast<uint32_t>(cn), dst + n0,
+                          static_cast<uint32_t>(out_d), static_cast<uint32_t>(cn), np);
     };
 
     if (buffers == 2) {
@@ -283,8 +291,15 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
         ok &= add_output(last, tiles - 1, last_buf);
         STAT_ADD(build, tb);
       }
-      if (!ok || !last.Run())
+      if (!ok)
         return false;
+      if (kOverlapFlushDefault && prefetch_next) {
+        // The next chunk starts with weight preparation (no DMA), which runs while this copies.
+        last.Start();
+        flush_pending = true;
+      } else if (!last.Run()) {
+        return false;
+      }
       STAT_ADD(blocking_copy, t2);
       buf0 = last_buf ^ 1;  // the next chunk's first tile uses the spare buffer
     } else {

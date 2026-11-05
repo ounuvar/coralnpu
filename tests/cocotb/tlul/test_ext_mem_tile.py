@@ -505,3 +505,65 @@ async def test_layer_l17_p99_tiled_pf_spread_merge_stats(dut):
     await run_tile(
         dut, "conv_layer_bench_l17_p99_tiled_pf_spread_merge_stats.elf"
     )
+
+
+@cocotb.test()
+async def test_tile_local_r4_w1(dut):
+    """One-pixel smoke test of the four-row local variant (#11)."""
+    await run_tile(dut, "ext_mem_tile_bench_local_r4_w1.elf")
+
+
+@cocotb.test()
+async def test_tile_dma4_r4_w1(dut):
+    """One-pixel smoke test of the four-row dma4 variant (#11)."""
+    await run_tile(dut, "ext_mem_tile_bench_dma4_r4_w1.elf")
+
+
+@cocotb.test()
+async def test_tile_dma16_r4_w1(dut):
+    """One-pixel smoke test of the four-row dma16 variant (#11)."""
+    await run_tile(dut, "ext_mem_tile_bench_dma16_r4_w1.elf")
+
+
+@cocotb.test()
+async def test_tile_db4_r4_w1(dut):
+    """One-pixel smoke test of the four-row db4 variant (#11)."""
+    await run_tile(dut, "ext_mem_tile_bench_db4_r4_w1.elf")
+
+
+@cocotb.test()
+async def test_tile_db16_r4_w1(dut):
+    """One-pixel smoke test of the four-row db16 variant (#11)."""
+    await run_tile(dut, "ext_mem_tile_bench_db16_r4_w1.elf")
+
+
+@cocotb.test()
+async def test_layer_l30_p49_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l30, 49 pixels, variant tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l30_p49_tiled_pf_spread_merge_overlap_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l28_p49_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l28, 49 pixels, variant tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l28_p49_tiled_pf_spread_merge_overlap_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l17_p33_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l17, 33 pixels, variant tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l17_p33_tiled_pf_spread_merge_overlap_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l17_p99_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l17, 99 pixels, variant tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l17_p99_tiled_pf_spread_merge_overlap_stats.elf"
+    )

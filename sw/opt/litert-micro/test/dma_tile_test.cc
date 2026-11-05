@@ -131,6 +131,63 @@ TEST(CopyChain, StorageIsSizedPerChainAndTwoChainsDoNotOverlap) {
   EXPECT_EQ(dst_b[10], 0xAB);
 }
 
+// A strided add is the same chain as the equal copies added one at a time.
+TEST(CopyChain, AddStridedEqualsTheCopiesAddedOneAtATime) {
+  struct Shape {
+    uint32_t src_stride, dst_stride, bytes;
+    int count;
+  };
+  // Per-pixel output slices: 16 channels of 256 (the layer-30 shape), 8 of 24, and odd sizes.
+  const Shape shapes[] = {{16, 256, 16, 8}, {8, 24, 8, 5},   {5, 7, 5, 11},
+                          {16, 16, 16, 1},  {32, 64, 16, 3}, {1, 1, 1, 9}};
+  for (const Shape &sh : shapes) {
+    std::vector<uint8_t> src(4096), a(4096, 0), b(4096, 0);
+    std::mt19937 rng(11);
+    for (auto &x : src)
+      x = static_cast<uint8_t>(rng());
+    Storage storage_a(sh.count + 2), storage_b(sh.count + 2);
+    CopyChain strided, plain;
+    strided.Init(storage_a.get(), sh.count + 2);
+    plain.Init(storage_b.get(), sh.count + 2);
+    // A copy before and after, so the strided run joins an existing chain.
+    EXPECT_TRUE(strided.Add(src.data(), a.data() + 2048, 4));
+    EXPECT_TRUE(plain.Add(src.data(), b.data() + 2048, 4));
+    EXPECT_TRUE(strided.AddStrided(src.data() + 100, sh.src_stride, a.data() + 3, sh.dst_stride,
+                                   sh.bytes, sh.count));
+    for (int i = 0; i < sh.count; ++i) {
+      EXPECT_TRUE(plain.Add(src.data() + 100 + i * sh.src_stride, b.data() + 3 + i * sh.dst_stride,
+                            sh.bytes));
+    }
+    EXPECT_TRUE(strided.Add(src.data() + 8, a.data() + 3000, 8));
+    EXPECT_TRUE(plain.Add(src.data() + 8, b.data() + 3000, 8));
+    EXPECT_EQ(strided.size(), plain.size());
+    EXPECT_TRUE(strided.Run());
+    EXPECT_TRUE(plain.Run());
+    EXPECT_EQ(a, b) << sh.src_stride << " " << sh.dst_stride << " " << sh.bytes << " " << sh.count;
+    // And something was copied.
+    EXPECT_EQ(std::memcmp(a.data() + 3, src.data() + 100, sh.bytes), 0);
+  }
+}
+
+TEST(CopyChain, AddStridedRejectsWhatDoesNotFitAndAddsNothing) {
+  std::vector<uint8_t> src(256, 1), dst(256, 0);
+  Storage storage(4);
+  CopyChain chain;
+  chain.Init(storage.get(), 4);
+  EXPECT_TRUE(chain.Add(src.data(), dst.data(), 8));
+  EXPECT_FALSE(chain.AddStrided(src.data(), 8, dst.data() + 8, 8, 8, 4));  // 1 + 4 > 4
+  EXPECT_EQ(chain.size(), 1);
+  EXPECT_FALSE(chain.AddStrided(src.data(), 8, dst.data() + 8, 8, 0, 2));  // empty copies
+  EXPECT_FALSE(chain.AddStrided(src.data(), 8, dst.data() + 8, 8, 8, 0));  // no copies
+  EXPECT_EQ(chain.size(), 1);
+  EXPECT_TRUE(chain.AddStrided(src.data(), 8, dst.data() + 8, 8, 8, 3));  // exactly fits
+  EXPECT_EQ(chain.size(), 4);
+  EXPECT_FALSE(chain.Add(src.data(), dst.data(), 8));
+  EXPECT_TRUE(chain.Run());
+  EXPECT_EQ(dst[8 + 8 * 2 + 7], 1);
+  EXPECT_EQ(dst[8 + 8 * 3], 0);
+}
+
 #ifdef CORALNPU_COPY_AT_WAIT
 // The other extreme of when a DMA moves data: nothing has moved after Start, everything has after
 // Wait. Code that is correct for both orders is correct on the DMA.

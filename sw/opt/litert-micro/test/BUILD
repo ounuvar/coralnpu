@@ -95,6 +95,8 @@ coralflow_test(
         ("_spread_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_wait"),
         ("_spread_merge", "//sw/opt/litert-micro:conv_tiling_test_spread_merge"),
         ("_spread_merge_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_merge_wait"),
+        ("_spread_merge_overlap", "//sw/opt/litert-micro:conv_tiling_test_spread_merge_overlap"),
+        ("_spread_merge_overlap_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_merge_overlap_wait"),
     ]
 ]
 
@@ -119,6 +121,8 @@ coralflow_test(
         "_spread_wait",
         "_spread_merge",
         "_spread_merge_wait",
+        "_spread_merge_overlap",
+        "_spread_merge_overlap_wait",
     ]
 ]
 
@@ -147,6 +151,7 @@ coralflow_test(
                 "tiled_pf_stats": "_prefetch_stats",
                 "tiled_pf_spread_stats": "_prefetch_spread_stats",
                 "tiled_pf_spread_merge_stats": "_prefetch_spread_merge_stats",
+                "tiled_pf_spread_merge_overlap_stats": "_prefetch_spread_merge_overlap_stats",
             }[variant] if variant.startswith("tiled") else "//sw/opt/litert-micro:conv_rvv",
             "//sw/utils",
         ],
@@ -166,6 +171,7 @@ coralflow_test(
                 "tiled_pf_stats",
                 "tiled_pf_spread_stats",
                 "tiled_pf_spread_merge_stats",
+                "tiled_pf_spread_merge_overlap_stats",
             ],
         ),
         (
@@ -182,6 +188,7 @@ coralflow_test(
                 "tiled_pf_stats",
                 "tiled_pf_spread_stats",
                 "tiled_pf_spread_merge_stats",
+                "tiled_pf_spread_merge_overlap_stats",
             ],
         ),
         (
@@ -196,6 +203,7 @@ coralflow_test(
                 "tiled_pf",
                 "tiled_pf_spread_stats",
                 "tiled_pf_spread_merge_stats",
+                "tiled_pf_spread_merge_overlap_stats",
             ],
         ),
         (
@@ -212,6 +220,7 @@ coralflow_test(
                 "tiled_pf_stats",
                 "tiled_pf_spread_stats",
                 "tiled_pf_spread_merge_stats",
+                "tiled_pf_spread_merge_overlap_stats",
             ],
         ),
         (
@@ -461,9 +470,9 @@ coralnpu_v2_binary(
 # copied with the DMA overlapped with compute (_db). 4 and 16 are the DMA beat width in bytes.
 [
     coralnpu_v2_binary(
-        name = "ext_mem_tile_bench_%s_r4" % variant,
+        name = "ext_mem_tile_bench_%s_r4%s" % (variant, width_suffix),
         srcs = ["ext_mem_tile_bench.cc"],
-        copts = ["-DTILE_ROWS=4"] + flags,
+        copts = ["-DTILE_ROWS=4"] + flags + width_flags,
         dtcm_size_kbytes = 1024,
         itcm_size_kbytes = 1024,
         deps = [
@@ -503,6 +512,14 @@ coralnpu_v2_binary(
                 "-DTILE_DOUBLE_BUFFER",
                 "-DDMA_BEAT_LOG2=4",
             ],
+        ),
+    ]
+    for width_suffix, width_flags in [
+        ("", []),
+        # 1-pixel tiles: the short smoke test (_w1) of the same variants.
+        (
+            "_w1",
+            ["-DTILE_WIDTH=1"],
         ),
     ]
 ]

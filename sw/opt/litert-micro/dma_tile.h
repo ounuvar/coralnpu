@@ -111,6 +111,56 @@ class CopyChain {
     return true;
   }
 
+  // Appends `count` equal copies of `bytes` bytes: copy i goes from src + i * src_stride to
+  // dst + i * dst_stride (strides in bytes). The same chain as `count` calls to Add, built in one
+  // tight loop: the DMA has no strided mode, so a strided transfer is a chain of equal copies, and
+  // the beat width is worked out once for all of them. Returns false (and adds nothing) if the
+  // chain cannot hold all of them or a copy is empty or too long.
+  bool AddStrided(const void *src, uint32_t src_stride, void *dst, uint32_t dst_stride,
+                  uint32_t bytes, int count) {
+    const int first = count_;
+    if (count <= 0 || bytes == 0 || bytes > kMaxBytes || count > capacity_ - first)
+      return false;
+#ifdef CORALNPU_DMA_TILING
+    // Every address is base + i * stride, so the alignment of all of them is the lowest set bit
+    // of the bases, the strides and the length together.
+    const uint32_t s = Addr(src), d = Addr(dst);
+    uint32_t bits = s | d | bytes;
+    if (count > 1)
+      bits |= src_stride | dst_stride;
+    const uint32_t beat        = static_cast<uint32_t>(__builtin_ctz(bits)) < CORALNPU_DMA_BEAT_LOG2
+                                     ? static_cast<uint32_t>(__builtin_ctz(bits))
+                                     : CORALNPU_DMA_BEAT_LOG2;
+    const uint32_t flags       = CopyLenFlags(bytes, beat);
+    dma_descriptor *const base = desc_ + first;
+    if (first > 0)
+      desc_[first - 1].next_desc = Addr(base);
+    uint32_t next = Addr(base) + 32;
+    uint32_t cs = s, cd = d;
+    dma_descriptor *p = base;
+    for (int i = 0; i < count; ++i, ++p) {
+      p->src_addr  = cs;
+      p->dst_addr  = cd;
+      p->len_flags = flags;
+      p->next_desc = next;
+      cs += src_stride;
+      cd += dst_stride;
+      next += 32;
+    }
+    (p - 1)->next_desc = 0;
+#else
+    const uint8_t *cs = static_cast<const uint8_t *>(src);
+    uint8_t *cd       = static_cast<uint8_t *>(dst);
+    for (int i = 0; i < count; ++i) {
+      entries_[first + i] = {cs, cd, bytes};
+      cs += src_stride;
+      cd += dst_stride;
+    }
+#endif
+    count_ = first + count;
+    return true;
+  }
+
   // Starts the chain. DMA: returns immediately and the copies proceed in the background; call
   // Wait() before using the destinations or reusing the sources. memcpy: copies now, or at Wait()
   // with CORALNPU_COPY_AT_WAIT.

@@ -77,6 +77,15 @@ inline constexpr bool kMergeDefault = true;
 inline constexpr bool kMergeDefault = false;
 #endif
 
+// CORALNPU_TILING_OVERLAP_FLUSH (with prefetch): the last tile's output copy of a chunk is started
+// without waiting, and the next chunk's weight preparation, which touches none of the buffers being
+// copied, runs while it proceeds. Only the wait for what is left is counted as blocking.
+#ifdef CORALNPU_TILING_OVERLAP_FLUSH
+inline constexpr bool kOverlapFlushDefault = true;
+#else
+inline constexpr bool kOverlapFlushDefault = false;
+#endif
+
 constexpr uint32_t RoundUp16(uint32_t v) { return (v + 15u) & ~15u; }
 
 // DMA descriptors are 32 bytes. The prologue chain holds the filter, bias, multiplier and shift of
