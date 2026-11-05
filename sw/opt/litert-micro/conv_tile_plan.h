@@ -47,6 +47,16 @@ inline constexpr int kMinTilePixels = 8;
 // Larger tiles do not amortize the per-tile overhead any further and only cost DTCM.
 inline constexpr int kMaxTilePixels = 32;
 
+// Prefetch (CORALNPU_TILING_PREFETCH): while a chunk's last tile computes, the DMA brings in the
+// next chunk's filter rows, bias, multipliers and shifts (a second set of raw buffers) and, when
+// double buffering, its first input tile (into the spare input buffer), so the next chunk does not
+// start with a blocking copy. The copies join the last tile's chain.
+#ifdef CORALNPU_TILING_PREFETCH
+inline constexpr bool kPrefetchDefault = true;
+#else
+inline constexpr bool kPrefetchDefault = false;
+#endif
+
 // DMA descriptors (32 bytes each) live outside the arena, in the wrapper's copy chains: the
 // prologue chain (filter, bias, multiplier, shift, first input tile) and two per-tile chains, each
 // holding one input copy plus, when the output channels are chunked, one output copy per pixel
@@ -71,17 +81,19 @@ constexpr uint32_t RoundUp16(uint32_t v) { return (v + 15u) & ~15u; }
 //   shift_raw    int32 per-channel output shift of the chunk
 //   shift_left / shift_right  the uint8 forms the kernel reads
 //   accs         int32 accumulators, kPointwiseKernelPixels x chunk (RVV kernel only)
+//   filter2, bias_raw2, multiplier2, shift_raw2  a second set of the raw buffers for the next
+//                chunk (prefetch only)
 //   in[b]        input tile b: pixels x in_d int8
 //   out[b]       output tile b: pixels x chunk int8
 struct PointwiseLayout {
   uint32_t filter, weights16, bias_raw, bias_folded, multiplier, shift_raw, shift_left, shift_right,
-      accs;
+      accs, filter2, bias_raw2, multiplier2, shift_raw2;
   uint32_t in[2], out[2];
   uint32_t total;
 };
 
 constexpr PointwiseLayout PointwiseLayoutFor(int in_d, int chunk, int pixels, int buffers,
-                                             bool int16_weights) {
+                                             bool int16_weights, bool prefetch = kPrefetchDefault) {
   PointwiseLayout l{};
   uint32_t at = 0;
   auto take   = [&at](uint32_t bytes) {
@@ -101,6 +113,10 @@ constexpr PointwiseLayout PointwiseLayoutFor(int in_d, int chunk, int pixels, in
   l.shift_left     = take(c);
   l.shift_right    = take(c);
   l.accs           = take(int16_weights ? 4 * kPointwiseKernelPixels * c : 0);
+  l.filter2        = take(prefetch ? c * d : 0);
+  l.bias_raw2      = take(prefetch ? 4 * c : 0);
+  l.multiplier2    = take(prefetch ? 4 * c : 0);
+  l.shift_raw2     = take(prefetch ? 4 * c : 0);
   for (int b = 0; b < 2; ++b) {
     const bool used = b < buffers;
     l.in[b]         = take(used ? p * d : 0);
@@ -137,7 +153,8 @@ constexpr uint64_t PointwiseDmaBytes(int pixels, int in_d, int out_d, int num_ch
 }
 
 constexpr ConvTilePlan PlanPointwise(int pixels, int in_d, int out_d, bool int16_weights,
-                                     uint32_t budget = CORALNPU_TILE_BUDGET_BYTES) {
+                                     uint32_t budget = CORALNPU_TILE_BUDGET_BYTES,
+                                     bool prefetch   = kPrefetchDefault) {
   ConvTilePlan none{};
   if (pixels <= 0 || in_d <= 0 || out_d <= 0)
     return none;
@@ -161,7 +178,8 @@ constexpr ConvTilePlan PlanPointwise(int pixels, int in_d, int out_d, bool int16
       // The footprint grows with the tile, so the largest tile that fits is found by search.
       int best = 0;
       for (int t = max_tile; t >= min_tile; --t) {
-        if (PointwiseLayoutFor(in_d, chunk, t, buffers, int16_weights).total <= arena_budget) {
+        if (PointwiseLayoutFor(in_d, chunk, t, buffers, int16_weights, prefetch).total <=
+            arena_budget) {
           best = t;
           break;
         }
@@ -174,7 +192,8 @@ constexpr ConvTilePlan PlanPointwise(int pixels, int in_d, int out_d, bool int16
         plan.num_chunks      = (out_d + chunk - 1) / chunk;
         plan.double_buffer   = buffers == 2;
         plan.footprint =
-            PointwiseLayoutFor(in_d, chunk, best, buffers, int16_weights).total + kDescriptorBytes;
+            PointwiseLayoutFor(in_d, chunk, best, buffers, int16_weights, prefetch).total +
+            kDescriptorBytes;
         plan.dma_bytes = PointwiseDmaBytes(pixels, in_d, out_d, plan.num_chunks);
         return plan;
       }

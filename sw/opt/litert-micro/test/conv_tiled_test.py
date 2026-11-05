@@ -27,6 +27,8 @@ _SYMBOLS = [
     "cases_multi_tile",
     "cases_double_buffer",
     "cases_single_buffer",
+    "cases_chunked_double",
+    "cases_chunked_single",
     "mismatches",
     "selftest_detected",
     "rvv_kernel",
@@ -36,8 +38,11 @@ _SYMBOLS = [
 @coralflow_test()
 async def run_conv_tiled_test(fixture):
     r = runfiles.Create()
+    # The test target conv_tiled_sim_test<variant>_npusim runs conv_tiled_test<variant>.elf.
+    target = os.environ.get("TEST_TARGET", "")
+    variant = target.split("conv_tiled_sim_test")[-1].rsplit("_npusim", 1)[0]
     elf_file = r.Rlocation(
-        "coralnpu_hw/sw/opt/litert-micro/test/conv_tiled_test.elf"
+        f"coralnpu_hw/sw/opt/litert-micro/test/conv_tiled_test{variant}.elf"
     )
     if not os.path.exists(elf_file):
         raise FileNotFoundError(f"ELF file not found: {elf_file}")
@@ -50,7 +55,10 @@ async def run_conv_tiled_test(fixture):
         f"runs={v['cases_run']} tiled={v['cases_tiled']} "
         f"not_tiled={v['cases_not_tiled']} chunked={v['cases_chunked']} "
         f"multi_tile={v['cases_multi_tile']} double={v['cases_double_buffer']} "
-        f"single={v['cases_single_buffer']} mismatches={v['mismatches']}",
+        f"single={v['cases_single_buffer']} "
+        f"chunked_double={v['cases_chunked_double']} "
+        f"chunked_single={v['cases_chunked_single']} "
+        f"mismatches={v['mismatches']} variant='{variant}'",
         flush=True,
     )
     assert v["done"] == 1, "program did not finish"
@@ -62,6 +70,8 @@ async def run_conv_tiled_test(fixture):
     assert v["cases_multi_tile"] > 0, "no case used more than one tile"
     assert v["cases_double_buffer"] > 0, "no case used double buffering"
     assert v["cases_single_buffer"] > 0, "no case used single buffering"
+    assert v["cases_chunked_double"] > 0, "no chunked case was double buffered"
+    assert v["cases_chunked_single"] > 0, "no chunked case was single buffered"
     assert v["cases_tiled"] + v["cases_not_tiled"] == v["cases_run"], v
 
 

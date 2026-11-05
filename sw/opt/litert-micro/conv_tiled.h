@@ -29,6 +29,20 @@
 
 namespace coralnpu_v2::opt::litert_micro {
 
+// Cycle counters for the tiled path, collected only when built with CORALNPU_TILING_STATS (all
+// zero otherwise). They add up over every call since the last reset.
+struct ConvTiledStats {
+  uint32_t chunks;         // output-channel chunks run
+  uint32_t tiles;          // tiles run
+  uint32_t prologue;       // blocking copies at the start of a chunk
+  uint32_t prepare;        // shift and weight preparation
+  uint32_t compute;        // the kernel
+  uint32_t wait;           // waiting for a chain after the kernel finished (overlapped copies)
+  uint32_t blocking_copy;  // blocking copies: single-buffer input and all output write-backs
+};
+void ConvTiledResetStats();
+ConvTiledStats ConvTiledGetStats();
+
 // True if the tiles are computed with the RVV kernel, false for the reference kernel.
 bool ConvTiledUsesRvvKernel();
 

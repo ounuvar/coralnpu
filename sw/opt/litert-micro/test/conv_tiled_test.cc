@@ -92,6 +92,8 @@ RESULT(cases_chunked);
 RESULT(cases_multi_tile);
 RESULT(cases_double_buffer);
 RESULT(cases_single_buffer);
+RESULT(cases_chunked_double);
+RESULT(cases_chunked_single);
 RESULT(mismatches);
 RESULT(selftest_detected);
 RESULT(rvv_kernel);
@@ -169,10 +171,15 @@ int main() {
         ++cases_chunked;
       if (plan.pixels_per_tile < pixels)
         ++cases_multi_tile;
-      if (plan.double_buffer)
+      if (plan.double_buffer) {
         ++cases_double_buffer;
-      else
+        if (plan.num_chunks > 1)
+          ++cases_chunked_double;
+      } else {
         ++cases_single_buffer;
+        if (plan.num_chunks > 1)
+          ++cases_chunked_single;
+      }
 
       if (memcmp(out_ref, out_tiled, static_cast<size_t>(pixels) * c.out_d) != 0)
         ++mismatches;

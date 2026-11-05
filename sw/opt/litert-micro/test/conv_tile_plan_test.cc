@@ -157,11 +157,11 @@ TEST(ConvTilePlan, LayoutIsAlignedOrderedAndSizedByTheBuffersInUse) {
   for (int buffers : {1, 2}) {
     for (bool int16_weights : {false, true}) {
       const PointwiseLayout l  = PointwiseLayoutFor(128, 48, 20, buffers, int16_weights);
-      const uint32_t offsets[] = {l.filter,     l.weights16, l.bias_raw,   l.bias_folded,
-                                  l.multiplier, l.shift_raw, l.shift_left, l.shift_right,
-                                  l.accs,       l.in[0],     l.out[0],     l.in[1],
-                                  l.out[1]};
-      uint32_t previous        = 0;
+      const uint32_t offsets[] = {
+          l.filter,     l.weights16,   l.bias_raw, l.bias_folded, l.multiplier, l.shift_raw,
+          l.shift_left, l.shift_right, l.accs,     l.filter2,     l.bias_raw2,  l.multiplier2,
+          l.shift_raw2, l.in[0],       l.out[0],   l.in[1],       l.out[1]};
+      uint32_t previous = 0;
       for (uint32_t o : offsets) {
         EXPECT_EQ(o % 16, 0u);
         EXPECT_GE(o, previous);
@@ -175,6 +175,34 @@ TEST(ConvTilePlan, LayoutIsAlignedOrderedAndSizedByTheBuffersInUse) {
       // The int16 weights and accumulators exist only for the RVV kernel.
       EXPECT_EQ(l.bias_raw - l.weights16, int16_weights ? 2u * 128 * 48 : 0u);
     }
+  }
+}
+
+TEST(ConvTilePlan, PrefetchAddsASecondSetOfRawBuffers) {
+  const PointwiseLayout off = PointwiseLayoutFor(128, 48, 20, 2, true, false);
+  const PointwiseLayout on  = PointwiseLayoutFor(128, 48, 20, 2, true, true);
+  EXPECT_EQ(off.filter2, off.bias_raw2);  // nothing reserved without prefetch
+  // The second set mirrors the first: filter rows, bias, multipliers and shifts of one chunk.
+  EXPECT_EQ(on.bias_raw2 - on.filter2, RoundUp16(48u * 128));
+  EXPECT_EQ(on.multiplier2 - on.bias_raw2, RoundUp16(4u * 48));
+  EXPECT_EQ(on.shift_raw2 - on.multiplier2, RoundUp16(4u * 48));
+  EXPECT_EQ(on.total - off.total, RoundUp16(48u * 128) + 3 * RoundUp16(4u * 48));
+}
+
+TEST(ConvTilePlan, MobileNetLayersFitWithPrefetchAndNeverUseMoreThanTheBudget) {
+  for (const Layer &l : kLayers) {
+    const ConvTilePlan p = PlanPointwise(l.pixels, l.in_d, l.out_d, true,
+                                         CORALNPU_TILE_BUDGET_BYTES, /*prefetch=*/true);
+    ASSERT_TRUE(p.tiled) << "layer " << l.index;
+    EXPECT_LE(p.footprint, CORALNPU_TILE_BUDGET_BYTES) << "layer " << l.index;
+    EXPECT_EQ(p.footprint, PointwiseLayoutFor(l.in_d, p.channel_chunk, p.pixels_per_tile,
+                                              p.double_buffer ? 2 : 1, true, true)
+                                   .total +
+                               kDescriptorBytes);
+    // Prefetch costs memory, so it never allows a bigger chunk than without it.
+    const ConvTilePlan q = PlanPointwise(l.pixels, l.in_d, l.out_d, true,
+                                         CORALNPU_TILE_BUDGET_BYTES, /*prefetch=*/false);
+    EXPECT_LE(p.channel_chunk, q.channel_chunk) << "layer " << l.index;
   }
 }
 

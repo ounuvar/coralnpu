@@ -39,7 +39,35 @@ alignas(16) uint8_t g_arena[kArenaBytes];
 CopyChain<kPrologueCopies> g_prologue;
 CopyChain<kMaxChainCopies> g_chains[2];
 
+ConvTiledStats g_stats;
+
+#ifdef CORALNPU_TILING_STATS
+inline uint32_t Cycles() {
+  uint32_t v;
+  asm volatile("csrr %0, mcycle" : "=r"(v));
+  return v;
+}
+#define STAT_START(t)      const uint32_t t = Cycles()
+#define STAT_ADD(field, t) g_stats.field += Cycles() - (t)
+#define STAT_COUNT(field)  ++g_stats.field
+#else
+#define STAT_START(t)
+#define STAT_ADD(field, t)
+#define STAT_COUNT(field)
+#endif
+
+// The per-chunk raw buffers: filter rows, bias, multipliers and shifts of one chunk.
+struct Raw {
+  int8_t *filter;
+  int32_t *bias;
+  int32_t *mult;
+  int32_t *shift;
+};
+
 }  // namespace
+
+void ConvTiledResetStats() { g_stats = ConvTiledStats{}; }
+ConvTiledStats ConvTiledGetStats() { return g_stats; }
 
 bool ConvTiledUsesRvvKernel() { return kRvv; }
 
@@ -70,25 +98,30 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
     return false;
   const int pixels = input_shape.Dims(0) * input_shape.Dims(1) * input_shape.Dims(2);
 
-  const ConvTilePlan plan = PlanPointwise(pixels, in_d, out_d, kRvv, budget);
+  const ConvTilePlan plan = PlanPointwise(pixels, in_d, out_d, kRvv, budget, kPrefetchDefault);
   if (plan_out)
     *plan_out = plan;
   if (!plan.tiled)
     return false;
 
-  const int tile            = plan.pixels_per_tile;
-  const int chunk           = plan.channel_chunk;
-  const int buffers         = plan.double_buffer ? 2 : 1;
-  const int tiles           = (pixels + tile - 1) / tile;
-  const PointwiseLayout lay = PointwiseLayoutFor(in_d, chunk, tile, buffers, kRvv);
+  const int tile    = plan.pixels_per_tile;
+  const int chunk   = plan.channel_chunk;
+  const int buffers = plan.double_buffer ? 2 : 1;
+  const int tiles   = (pixels + tile - 1) / tile;
+  const PointwiseLayout lay =
+      PointwiseLayoutFor(in_d, chunk, tile, buffers, kRvv, kPrefetchDefault);
 
   uint8_t *const base                         = g_arena;
-  int8_t *const filter                        = reinterpret_cast<int8_t *>(base + lay.filter);
+  const Raw raws[2]                           = {{reinterpret_cast<int8_t *>(base + lay.filter),
+                                                  reinterpret_cast<int32_t *>(base + lay.bias_raw),
+                                                  reinterpret_cast<int32_t *>(base + lay.multiplier),
+                                                  reinterpret_cast<int32_t *>(base + lay.shift_raw)},
+                                                 {reinterpret_cast<int8_t *>(base + lay.filter2),
+                                                  reinterpret_cast<int32_t *>(base + lay.bias_raw2),
+                                                  reinterpret_cast<int32_t *>(base + lay.multiplier2),
+                                                  reinterpret_cast<int32_t *>(base + lay.shift_raw2)}};
   [[maybe_unused]] int16_t *const weights16   = reinterpret_cast<int16_t *>(base + lay.weights16);
-  int32_t *const bias_raw                     = reinterpret_cast<int32_t *>(base + lay.bias_raw);
   [[maybe_unused]] int32_t *const bias_folded = reinterpret_cast<int32_t *>(base + lay.bias_folded);
-  int32_t *const mult                         = reinterpret_cast<int32_t *>(base + lay.multiplier);
-  int32_t *const shift_raw                    = reinterpret_cast<int32_t *>(base + lay.shift_raw);
   uint8_t *const shift_left                   = base + lay.shift_left;
   uint8_t *const shift_right                  = base + lay.shift_right;
   [[maybe_unused]] int32_t *const accs        = reinterpret_cast<int32_t *>(base + lay.accs);
@@ -99,32 +132,66 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
 
   const auto pixels_in_tile = [&](int t) { return std::min(tile, pixels - t * tile); };
 
-  bool ok = true;
-  for (int n0 = 0; n0 < out_d; n0 += chunk) {
+  // Adds the copies that bring chunk [n0, n0 + chunk) of the filter, bias, multipliers and shifts
+  // into the raw buffers `r`.
+  const auto add_raw = [&](auto &c, int n0, const Raw &r) {
     const int cn = std::min(chunk, out_d - n0);
-
-    // The chunk's filter rows are contiguous in the OHWI filter, so one copy brings them in. The
-    // first input tile comes with them.
-    g_prologue.Clear();
-    ok &= g_prologue.Add(filter_data + static_cast<size_t>(n0) * in_d, filter,
+    bool added   = c.Add(filter_data + static_cast<size_t>(n0) * in_d, r.filter,
                          static_cast<uint32_t>(cn) * in_d);
     if (bias_data)
-      ok &= g_prologue.Add(bias_data + n0, bias_raw, 4u * cn);
-    ok &= g_prologue.Add(output_multiplier + n0, mult, 4u * cn);
-    ok &= g_prologue.Add(output_shift + n0, shift_raw, 4u * cn);
-    ok &= g_prologue.Add(input_data, in_tile[0], static_cast<uint32_t>(pixels_in_tile(0)) * in_d);
-    if (!ok || !g_prologue.Run())
-      return false;
+      added &= c.Add(bias_data + n0, r.bias, 4u * cn);
+    added &= c.Add(output_multiplier + n0, r.mult, 4u * cn);
+    added &= c.Add(output_shift + n0, r.shift, 4u * cn);
+    return added;
+  };
 
-    PrepareShiftParams(shift_left, shift_right, shift_raw, cn);
+  bool ok         = true;
+  int rs          = 0;      // which raw buffer set holds the current chunk
+  int buf0        = 0;      // input/output buffer of the current chunk's first tile
+  bool prefetched = false;  // raw set rs (and, double buffered, the first input tile) are in place
+  for (int n0 = 0; n0 < out_d; n0 += chunk) {
+    STAT_COUNT(chunks);
+    const int cn             = std::min(chunk, out_d - n0);
+    const Raw &r             = raws[rs];
+    const bool more_chunks   = n0 + chunk < out_d;
+    const bool prefetch_next = kPrefetchDefault && more_chunks;
+    const int np0            = pixels_in_tile(0);
+
+    // The chunk's filter rows are contiguous in the OHWI filter, so one copy brings them in. The
+    // first input tile comes with them, unless the previous chunk already prefetched it.
+    if (!prefetched) {
+      STAT_START(t0);
+      g_prologue.Clear();
+      ok &= add_raw(g_prologue, n0, r);
+      ok &= g_prologue.Add(input_data, in_tile[buf0], static_cast<uint32_t>(np0) * in_d);
+      if (!ok || !g_prologue.Run())
+        return false;
+      STAT_ADD(prologue, t0);
+    } else if (buffers == 1) {
+      // The raw buffers were prefetched; the first input tile was not (no spare buffer).
+      STAT_START(t0);
+      g_prologue.Clear();
+      ok &= g_prologue.Add(input_data, in_tile[buf0], static_cast<uint32_t>(np0) * in_d);
+      if (!ok || !g_prologue.Run())
+        return false;
+      STAT_ADD(prologue, t0);
+    }
+    prefetched = false;
+
+    {
+      STAT_START(t0);
+      PrepareShiftParams(shift_left, shift_right, r.shift, cn);
 #if CORALNPU_RVV_CONV
-    Conv1x1Prepare(params, in_d, cn, filter, bias_data ? bias_raw : nullptr, weights16,
-                   bias_folded);
+      Conv1x1Prepare(params, in_d, cn, r.filter, bias_data ? r.bias : nullptr, weights16,
+                     bias_folded);
 #endif
+      STAT_ADD(prepare, t0);
+    }
 
     const auto compute = [&](int buf, int np) {
+      STAT_START(t0);
 #if CORALNPU_RVV_CONV
-      Conv1x1Run(params, mult, shift_left, shift_right, in_d, cn, np, in_tile[buf], weights16,
+      Conv1x1Run(params, r.mult, shift_left, shift_right, in_d, cn, np, in_tile[buf], weights16,
                  bias_folded, accs, out_tile[buf]);
 #else
       const int32_t in_dims[4]   = {1, 1, np, in_d};
@@ -132,15 +199,17 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
       const int32_t out_dims[4]  = {1, 1, np, cn};
       const int32_t bias_dims[1] = {cn};
       tflite::reference_integer_ops::ConvPerChannel(
-          params, mult, shift_raw, tflite::RuntimeShape(4, in_dims), in_tile[buf],
-          tflite::RuntimeShape(4, flt_dims), filter, tflite::RuntimeShape(1, bias_dims),
-          bias_data ? bias_raw : nullptr, tflite::RuntimeShape(4, out_dims), out_tile[buf]);
+          params, r.mult, r.shift, tflite::RuntimeShape(4, in_dims), in_tile[buf],
+          tflite::RuntimeShape(4, flt_dims), r.filter, tflite::RuntimeShape(1, bias_dims),
+          bias_data ? r.bias : nullptr, tflite::RuntimeShape(4, out_dims), out_tile[buf]);
 #endif
+      STAT_ADD(compute, t0);
+      STAT_COUNT(tiles);
     };
 
     // Writes tile t's output (in out_tile[buf]) back: one copy if the tile holds every channel,
     // otherwise one copy per pixel, since the DMA has no strided mode.
-    const auto add_output = [&](CopyChain<kMaxChainCopies> &c, int t, int buf) {
+    const auto add_output = [&](auto &c, int t, int buf) {
       const int np = pixels_in_tile(t);
       int8_t *dst  = output_data + static_cast<size_t>(t) * tile * out_d;
       if (cn == out_d) {
@@ -155,45 +224,80 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
     };
 
     if (buffers == 2) {
-      // While tile t computes, the DMA writes tile t-1's output back and brings tile t+1 in.
+      // While tile t computes, the DMA writes tile t-1's output back and brings tile t+1 in. During
+      // the last tile it also prefetches the next chunk's raw buffers and first input tile.
+      int last_buf = buf0;
       for (int t = 0; t < tiles; ++t) {
-        const int buf                 = t & 1;
-        CopyChain<kMaxChainCopies> &c = g_chains[buf];
+        const int buf                 = buf0 ^ (t & 1);
+        last_buf                      = buf;
+        CopyChain<kMaxChainCopies> &c = g_chains[t & 1];
         c.Clear();
         if (t > 0)
           ok &= add_output(c, t - 1, buf ^ 1);
         if (t + 1 < tiles) {
           ok &= c.Add(input_data + static_cast<size_t>(t + 1) * tile * in_d, in_tile[buf ^ 1],
                       static_cast<uint32_t>(pixels_in_tile(t + 1)) * in_d);
+        } else if (prefetch_next) {
+          ok &= add_raw(c, n0 + chunk, raws[rs ^ 1]);
+          ok &= c.Add(input_data, in_tile[buf ^ 1], static_cast<uint32_t>(np0) * in_d);
         }
         if (!ok)
           return false;
         c.Start();
         compute(buf, pixels_in_tile(t));
+        STAT_START(t1);
         if (!c.Wait())
           return false;
+        STAT_ADD(wait, t1);
       }
+      STAT_START(t2);
       CopyChain<kMaxChainCopies> &last = g_chains[0];
       last.Clear();
-      ok &= add_output(last, tiles - 1, (tiles - 1) & 1);
+      ok &= add_output(last, tiles - 1, last_buf);
       if (!ok || !last.Run())
         return false;
+      STAT_ADD(blocking_copy, t2);
+      buf0 = last_buf ^ 1;  // the next chunk's first tile uses the spare buffer
     } else {
       CopyChain<kMaxChainCopies> &c = g_chains[0];
       for (int t = 0; t < tiles; ++t) {
         c.Clear();
         if (t > 0) {
+          STAT_START(t1);
           ok &= c.Add(input_data + static_cast<size_t>(t) * tile * in_d, in_tile[0],
                       static_cast<uint32_t>(pixels_in_tile(t)) * in_d);
           if (!ok || !c.Run())
             return false;
+          STAT_ADD(blocking_copy, t1);
           c.Clear();
         }
+        // During the last tile the DMA prefetches the next chunk's raw buffers.
+        const bool prefetch_now        = prefetch_next && t == tiles - 1;
+        CopyChain<kMaxChainCopies> &pf = g_chains[1];
+        if (prefetch_now) {
+          pf.Clear();
+          ok &= add_raw(pf, n0 + chunk, raws[rs ^ 1]);
+          if (!ok)
+            return false;
+          pf.Start();
+        }
         compute(0, pixels_in_tile(t));
+        if (prefetch_now) {
+          STAT_START(t3);
+          if (!pf.Wait())
+            return false;
+          STAT_ADD(wait, t3);
+        }
+        STAT_START(t2);
         ok &= add_output(c, t, 0);
         if (!ok || !c.Run())
           return false;
+        STAT_ADD(blocking_copy, t2);
       }
+    }
+    if (prefetch_next) {
+      prefetched = true;
+      rs ^= 1;
     }
   }
   return true;

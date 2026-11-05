@@ -19,6 +19,10 @@
 // exercise the same tiling code. The default build does not include this header's DMA code.
 //
 // The DMA engine has no 2D or strided mode, so every contiguous run is its own copy.
+//
+// A DMA moves data at some unknown time between Start() and Wait(), so code that is correct on the
+// DMA is correct whether the copies happen at Start() or at Wait(). The memcpy backend copies at
+// Start(); with CORALNPU_COPY_AT_WAIT it copies at Wait(), the other extreme. Tests run both.
 
 #ifndef SW_OPT_LITERT_MICRO_DMA_TILE_H_
 #define SW_OPT_LITERT_MICRO_DMA_TILE_H_
@@ -102,6 +106,8 @@ class alignas(32) CopyChain {
 #ifdef CORALNPU_DMA_TILING
     return dma_wait_done() == 0;
 #else
+    if (pending_)
+      CopyNow();
     return true;
 #endif
   }
@@ -126,7 +132,13 @@ class alignas(32) CopyChain {
     void *dst;
     uint32_t n;
   };
+  void CopyNow() {
+    for (int i = 0; i < count_; ++i)
+      std::memcpy(entries_[i].dst, entries_[i].src, entries_[i].n);
+    pending_ = false;
+  }
   Entry entries_[kMaxCopies];
+  bool pending_ = false;
 #endif
 };
 
