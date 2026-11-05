@@ -96,8 +96,8 @@ coralflow_test(
         ("_spread_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_wait"),
         ("_spread_r4", "//sw/opt/litert-micro:conv_tiling_test_spread_r4"),
         ("_spread_r4_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_r4_wait"),
-        ("_spread_balance", "//sw/opt/litert-micro:conv_tiling_test_spread_balance"),
-        ("_spread_balance_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_balance_wait"),
+        ("_spread_lead", "//sw/opt/litert-micro:conv_tiling_test_spread_lead"),
+        ("_spread_lead_wait", "//sw/opt/litert-micro:conv_tiling_test_spread_lead_wait"),
     ]
 ]
 
@@ -123,8 +123,8 @@ coralflow_test(
         "_spread_wait",
         "_spread_r4",
         "_spread_r4_wait",
-        "_spread_balance",
-        "_spread_balance_wait",
+        "_spread_lead",
+        "_spread_lead_wait",
     ]
 ]
 
@@ -152,7 +152,7 @@ coralflow_test(
                 "tiled_pf": "_prefetch",
                 "tiled_pf_stats": "_prefetch_stats",
                 "tiled_pf_spread_stats": "_prefetch_spread_stats",
-                "tiled_pf_spread_balance_stats": "_prefetch_spread_balance_stats",
+                "tiled_pf_spread_lead_stats": "_prefetch_spread_lead_stats",
             }[variant] if variant.startswith("tiled") else "//sw/opt/litert-micro:conv_rvv",
             "//sw/utils",
         ],
@@ -171,7 +171,7 @@ coralflow_test(
                 "tiled_stats",
                 "tiled_pf_stats",
                 "tiled_pf_spread_stats",
-                "tiled_pf_spread_balance_stats",
+                "tiled_pf_spread_lead_stats",
             ],
         ),
         (
@@ -187,7 +187,7 @@ coralflow_test(
                 "tiled_stats",
                 "tiled_pf_stats",
                 "tiled_pf_spread_stats",
-                "tiled_pf_spread_balance_stats",
+                "tiled_pf_spread_lead_stats",
             ],
         ),
         (
@@ -201,7 +201,7 @@ coralflow_test(
                 "tiled",
                 "tiled_pf",
                 "tiled_pf_spread_stats",
-                "tiled_pf_spread_balance_stats",
+                "tiled_pf_spread_lead_stats",
             ],
         ),
         (
@@ -217,7 +217,7 @@ coralflow_test(
                 "tiled_stats",
                 "tiled_pf_stats",
                 "tiled_pf_spread_stats",
-                "tiled_pf_spread_balance_stats",
+                "tiled_pf_spread_lead_stats",
             ],
         ),
         (
@@ -257,6 +257,16 @@ cc_test(
         "@com_google_googletest//:gtest_main",
         "@gemmlowp//:fixedpoint",
         "@tflite_micro//tensorflow/lite/kernels/internal:common",
+    ],
+)
+
+# Host tests for the copy interface (#11): beat width, descriptor flags, chain bookkeeping.
+cc_test(
+    name = "dma_tile_test",
+    srcs = ["dma_tile_test.cc"],
+    deps = [
+        "//sw/opt/litert-micro:dma_tile_memcpy",
+        "@com_google_googletest//:gtest_main",
     ],
 )
 

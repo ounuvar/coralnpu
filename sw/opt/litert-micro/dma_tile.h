@@ -43,17 +43,21 @@
 namespace coralnpu_v2::opt::litert_micro {
 
 // Largest beat size, as log2 of bytes, such that source, destination and length are all multiples
-// of it and it does not exceed `max_log2`.
+// of it and it does not exceed `max_log2`: the number of trailing zero bits of the three together.
 constexpr uint32_t BeatLog2(uintptr_t src, uintptr_t dst, uint32_t bytes,
                             uint32_t max_log2 = CORALNPU_DMA_BEAT_LOG2) {
-  uint32_t log2 = max_log2;
-  while (log2 > 0) {
-    const uintptr_t mask = (static_cast<uintptr_t>(1) << log2) - 1;
-    if (((src | dst | bytes) & mask) == 0)
-      break;
-    --log2;
-  }
-  return log2;
+  const uint32_t all = static_cast<uint32_t>(src | dst | bytes);
+  if (all == 0)
+    return max_log2;
+  const uint32_t low = static_cast<uint32_t>(__builtin_ctz(all));
+  return low < max_log2 ? low : max_log2;
+}
+
+// The DMA descriptor's length and flags word for a plain copy (no fixed addresses, no polling), the
+// same value as dma_make_len_flags(bytes, beat_log2, 0, 0, 0): length in bits 0 to 23, beat size
+// in bits 24 to 26. Computed inline because that function is a call in another translation unit.
+constexpr uint32_t CopyLenFlags(uint32_t bytes, uint32_t beat_log2) {
+  return (bytes & 0xFFFFFFu) | ((beat_log2 & 0x7u) << 24);
 }
 
 // Up to kMaxCopies copies, run back to back. Descriptors (DMA) live in this object, so it must sit
@@ -74,9 +78,10 @@ class alignas(32) CopyChain {
     dma_descriptor &d = desc_[count_];
     d.src_addr        = Addr(src);
     d.dst_addr        = Addr(dst);
-    d.len_flags       = dma_make_len_flags(bytes, BeatLog2(Addr(src), Addr(dst), bytes), 0, 0, 0);
+    d.len_flags       = CopyLenFlags(bytes, BeatLog2(Addr(src), Addr(dst), bytes));
     d.next_desc       = 0;
-    d.poll_addr = d.poll_mask = d.poll_value = d.reserved = 0;
+    // poll_addr, poll_mask, poll_value and reserved stay zero: desc_ starts zeroed and no copy sets
+    // them.
     if (count_ > 0)
       desc_[count_ - 1].next_desc = Addr(&d);
 #else
@@ -125,7 +130,7 @@ class alignas(32) CopyChain {
   static uint32_t Addr(const void *p) {
     return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(p));
   }
-  dma_descriptor desc_[kMaxCopies];
+  dma_descriptor desc_[kMaxCopies] = {};
 #else
   struct Entry {
     const void *src;

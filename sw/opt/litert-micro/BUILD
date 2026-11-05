@@ -17,6 +17,13 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+# The copy interface in its memcpy form, portable to the host (unit tests). Do not define
+# CORALNPU_DMA_TILING with it.
+cc_library(
+    name = "dma_tile_memcpy",
+    hdrs = ["dma_tile.h"],
+)
+
 # Copy interface for DMA tiling (#11). Runs on the DMA engine when CORALNPU_DMA_TILING is
 # defined, and as memcpy otherwise (functional tests on npusim). Header only.
 cc_library(
@@ -246,7 +253,7 @@ cc_library(
             ],
         ),
         (
-            "rvv_tiled_dma_prefetch_spread_balance_stats",
+            "rvv_tiled_dma_prefetch_spread_lead_stats",
             [
                 "CORALNPU_RVV_CONV=1",
                 "CORALNPU_CONV_TILING=1",
@@ -254,7 +261,7 @@ cc_library(
                 "CORALNPU_TILING_PREFETCH=1",
                 "CORALNPU_TILING_STATS=1",
                 "CORALNPU_TILING_SPREAD=1",
-                "CORALNPU_TILING_BALANCE=1",
+                "CORALNPU_TILING_LEAD_REMAINDER=1",
             ],
         ),
     ]
@@ -347,20 +354,20 @@ cc_library(
             ],
         ),
         (
-            "spread_balance_wait",
+            "spread_lead",
             [
                 "CORALNPU_TILING_PREFETCH=1",
                 "CORALNPU_TILING_SPREAD=1",
-                "CORALNPU_TILING_BALANCE=1",
-                "CORALNPU_COPY_AT_WAIT=1",
+                "CORALNPU_TILING_LEAD_REMAINDER=1",
             ],
         ),
         (
-            "spread_balance",
+            "spread_lead_wait",
             [
                 "CORALNPU_TILING_PREFETCH=1",
                 "CORALNPU_TILING_SPREAD=1",
-                "CORALNPU_TILING_BALANCE=1",
+                "CORALNPU_TILING_LEAD_REMAINDER=1",
+                "CORALNPU_COPY_AT_WAIT=1",
             ],
         ),
     ]

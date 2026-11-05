@@ -476,32 +476,32 @@ async def test_layer_l17_p99_tiled_pf_spread_stats(dut):
 
 
 @cocotb.test()
-async def test_layer_l30_p49_tiled_pf_spread_balance_stats(dut):
-    """Pointwise layer l30, 49 pixels, variant tiled_pf_spread_balance_stats (#11)."""
+async def test_layer_l30_p49_tiled_pf_spread_lead_stats(dut):
+    """Pointwise layer l30, 49 pixels, variant tiled_pf_spread_lead_stats (#11)."""
     await run_tile(
-        dut, "conv_layer_bench_l30_p49_tiled_pf_spread_balance_stats.elf"
+        dut, "conv_layer_bench_l30_p49_tiled_pf_spread_lead_stats.elf"
     )
 
 
 @cocotb.test()
-async def test_layer_l28_p49_tiled_pf_spread_balance_stats(dut):
-    """Pointwise layer l28, 49 pixels, variant tiled_pf_spread_balance_stats (#11)."""
+async def test_layer_l28_p49_tiled_pf_spread_lead_stats(dut):
+    """Pointwise layer l28, 49 pixels, variant tiled_pf_spread_lead_stats (#11)."""
     await run_tile(
-        dut, "conv_layer_bench_l28_p49_tiled_pf_spread_balance_stats.elf"
+        dut, "conv_layer_bench_l28_p49_tiled_pf_spread_lead_stats.elf"
     )
 
 
 @cocotb.test()
-async def test_layer_l17_p33_tiled_pf_spread_balance_stats(dut):
-    """Pointwise layer l17, 33 pixels, variant tiled_pf_spread_balance_stats (#11)."""
+async def test_layer_l17_p33_tiled_pf_spread_lead_stats(dut):
+    """Pointwise layer l17, 33 pixels, variant tiled_pf_spread_lead_stats (#11)."""
     await run_tile(
-        dut, "conv_layer_bench_l17_p33_tiled_pf_spread_balance_stats.elf"
+        dut, "conv_layer_bench_l17_p33_tiled_pf_spread_lead_stats.elf"
     )
 
 
 @cocotb.test()
-async def test_layer_l17_p99_tiled_pf_spread_balance_stats(dut):
-    """Pointwise layer l17, 99 pixels, variant tiled_pf_spread_balance_stats (#11)."""
+async def test_layer_l17_p99_tiled_pf_spread_lead_stats(dut):
+    """Pointwise layer l17, 99 pixels, variant tiled_pf_spread_lead_stats (#11)."""
     await run_tile(
-        dut, "conv_layer_bench_l17_p99_tiled_pf_spread_balance_stats.elf"
+        dut, "conv_layer_bench_l17_p99_tiled_pf_spread_lead_stats.elf"
     )

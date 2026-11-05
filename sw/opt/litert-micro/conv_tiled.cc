@@ -98,8 +98,8 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
     return false;
   const int pixels = input_shape.Dims(0) * input_shape.Dims(1) * input_shape.Dims(2);
 
-  const ConvTilePlan plan = PlanPointwise(pixels, in_d, out_d, kRvv, budget, kPrefetchDefault,
-                                          kRound4Default, kBalanceDefault);
+  const ConvTilePlan plan =
+      PlanPointwise(pixels, in_d, out_d, kRvv, budget, kPrefetchDefault, kRound4Default);
   if (plan_out)
     *plan_out = plan;
   if (!plan.tiled)
@@ -131,7 +131,19 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
   int8_t *const out_tile[2]                   = {reinterpret_cast<int8_t *>(base + lay.out[0]),
                                                  reinterpret_cast<int8_t *>(base + lay.out[1])};
 
-  const auto pixels_in_tile = [&](int t) { return std::min(tile, pixels - t * tile); };
+  // Tiles are `tile` pixels, except one tile that holds the leftover pixels: the last, or with
+  // CORALNPU_TILING_LEAD_REMAINDER the first.
+  const int remainder       = pixels - (tiles - 1) * tile;  // 1 .. tile
+  const auto pixels_in_tile = [&](int t) {
+    if (kLeadRemainderDefault)
+      return t == 0 ? remainder : tile;
+    return std::min(tile, pixels - t * tile);
+  };
+  const auto tile_start = [&](int t) {
+    if (kLeadRemainderDefault)
+      return t == 0 ? 0 : remainder + (t - 1) * tile;
+    return t * tile;
+  };
 
   // Adds part `part` of `parts` of the copies that bring chunk [n0, n0 + chunk) of the filter,
   // bias, multipliers and shifts into the raw buffers `r`. The filter rows are contiguous in the
@@ -223,7 +235,7 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
     // otherwise one copy per pixel, since the DMA has no strided mode.
     const auto add_output = [&](auto &c, int t, int buf) {
       const int np = pixels_in_tile(t);
-      int8_t *dst  = output_data + static_cast<size_t>(t) * tile * out_d;
+      int8_t *dst  = output_data + static_cast<size_t>(tile_start(t)) * out_d;
       if (cn == out_d) {
         return c.Add(out_tile[buf], dst, static_cast<uint32_t>(np) * out_d);
       }
@@ -248,7 +260,7 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
         if (t > 0)
           ok &= add_output(c, t - 1, buf ^ 1);
         if (t + 1 < tiles) {
-          ok &= c.Add(input_data + static_cast<size_t>(t + 1) * tile * in_d, in_tile[buf ^ 1],
+          ok &= c.Add(input_data + static_cast<size_t>(tile_start(t + 1)) * in_d, in_tile[buf ^ 1],
                       static_cast<uint32_t>(pixels_in_tile(t + 1)) * in_d);
         }
         if (prefetch_next) {
@@ -287,7 +299,7 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
         c.Clear();
         if (t > 0) {
           STAT_START(t1);
-          ok &= c.Add(input_data + static_cast<size_t>(t) * tile * in_d, in_tile[0],
+          ok &= c.Add(input_data + static_cast<size_t>(tile_start(t)) * in_d, in_tile[0],
                       static_cast<uint32_t>(pixels_in_tile(t)) * in_d);
           if (!ok || !c.Run())
             return false;
