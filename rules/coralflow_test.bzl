@@ -50,6 +50,15 @@ _TOPLEVEL_MODELS = {
         "//tests/cocotb:vme_core_mini_highmem_axi_model",
         "//tests/cocotb:vme_core_mini_highmem_axi_vcs_model",
     ),
+    # Idea 2 (#9): Verilator only.
+    "RvvCoreMiniRequantAxi": (
+        "//tests/cocotb:rvv_core_mini_requant_axi_model",
+        None,
+    ),
+    "VmeCoreMiniRequantHighmemAxi": (
+        "//tests/cocotb:vme_core_mini_requant_highmem_axi_model",
+        None,
+    ),
 }
 
 _SIZE_ORDER = {
@@ -335,6 +344,7 @@ def coralflow_test(
         "RvvCoreMiniHighmemAxi",
         "RvvCoreMini_ITCM512KB_DTCM512KBAxi",
         "VmeCoreMiniHighmemAxi",
+        "VmeCoreMiniRequantHighmemAxi",
     )
     highmem_env = "1" if is_highmem_map else "0"
     main_src = main if main else (srcs[0] if len(srcs) == 1 else None)

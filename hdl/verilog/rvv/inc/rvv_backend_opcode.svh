@@ -110,6 +110,11 @@
   parameter VWMACC          =   6'b111_101;
   parameter VWMACCUS        =   6'b111_110;
   parameter VWMACCSU        =   6'b111_111;  
+`ifdef REQUANT_ON
+  // Idea 2 (#9): fused requantization, SEW=32 only (sw/opt/litert-micro/requant_ref.h)
+  parameter VREQUANT        =   6'b010_011;     // OPMVV: vd = RoundingDivideByPOT(SRDHM(vd << ls, vs2), rs), shift from vs1
+  parameter VRQCLAMP        =   6'b010_001;     // OPMVX: vd = clamp(vs2 + sext(rs1[15:0]), sext(rs1[23:16]), sext(rs1[31:24]))
+`endif
 
 // vwxunary0 and vrxunary0, the uop could be vcpop.m, vfirst.m and vmv. They can be distinguished by vs1 field(inst_encoding[19:15]).
   parameter VMV_X_S         =   5'b00000;

@@ -1110,6 +1110,9 @@ module rvv_backend_decode_unit_ari
           end
  
           // SEW = SEW op SEW
+`ifdef REQUANT_ON
+          VREQUANT,
+`endif
           VMUL,
           VMULH,
           VMULHU,
@@ -1425,6 +1428,9 @@ module rvv_backend_decode_unit_ari
           end
 
           // SEW = SEW op SEW
+`ifdef REQUANT_ON
+          VRQCLAMP,
+`endif
           VMUL,
           VMULH,
           VMULHU,
@@ -2582,6 +2588,22 @@ module rvv_backend_decode_unit_ari
             endcase
           end
 
+`ifdef REQUANT_ON
+          // Idea 2 (#9): SEW=32 only, vd = f(vd, vs2, vs1) or f(vs2, rs1)
+          VREQUANT,
+          VRQCLAMP: begin
+            if((csr_sew==SEW32)&&
+               (((inst_funct3==OPMVV)&&(inst_funct6==VREQUANT))||
+                ((inst_funct3==OPMVX)&&(inst_funct6==VRQCLAMP)))) begin
+              eew_vd      = EEW32;
+              eew_vs2     = EEW32;
+              if(inst_funct3==OPMVV)
+                eew_vs1   = EEW32;
+              eew_max     = EEW32;
+            end
+          end
+`endif
+
           // SEW = SEW op SEW
           VMUL,
           VMULH,
@@ -3481,6 +3503,9 @@ module rvv_backend_decode_unit_ari
             endcase
           end
 
+`ifdef REQUANT_ON
+          VREQUANT,
+`endif
           VMUL,
           VMULH,
           VMULHU,
@@ -3577,6 +3602,9 @@ module rvv_backend_decode_unit_ari
           VWSUBU_W,
           VWADD_W,
           VWSUB_W,
+`ifdef REQUANT_ON
+          VRQCLAMP,
+`endif
           VMUL,
           VMULH,
           VMULHU,

@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Runs requant_iss_test.elf on npusim (idea 2, #9, step 3)."""
+"""Runs requant_iss_test.elf on npusim and on the REQUANT_ON RTL (idea 2, #9)."""
 
 import os
 
@@ -47,7 +47,7 @@ async def run_requant_iss_test(fixture):
     baseline = values["baseline_instret"]
     fused = values["fused_instret"]
     print(
-        f"npusim instret: PostprocessAcc {baseline}, fused {fused} "
+        f"instret: PostprocessAcc {baseline}, fused {fused} "
         f"({baseline / max(fused, 1):.2f}x fewer)",
         flush=True
     )

@@ -865,6 +865,49 @@ template_rule(
     vopts = VME_CORE_MINI_AXI_VOPTS,
 )
 
+# Idea 2 (#9): fused requantization instructions (vrequant.vv, vrqclamp.vx)
+# in the RVV backend. Separate targets so every existing core stays
+# byte-identical; REQUANT_ON is off everywhere else.
+chisel_cc_library(
+    name = "rvv_core_mini_requant_axi_cc_library",
+    chisel_lib = ":coralnpu",
+    emit_class = "coralnpu.EmitCore",
+    extra_outs = [
+        "VRvvCoreMiniRequantAxi_parameters.h",
+        "RvvCoreMiniRequantAxi.zip",
+    ],
+    gen_flags = [
+        "--moduleName=RvvCoreMiniRequant",
+        "--itcmSizeKBytes=8",
+        "--dtcmSizeKBytes=32",
+        "--enableRequant=True",
+    ] + RVV_CORE_MINI_AXI_COMMON_GEN_FLAGS,
+    module_name = "RvvCoreMiniRequantAxi",
+    verilog_file_path = "RvvCoreMiniRequantAxi.sv",
+    vopts = RVV_CORE_MINI_AXI_VOPTS + ["-DREQUANT_ON"],
+)
+
+# With the matrix engine (ZVT_ON) and 1 MB ITCM / DTCM: the combined
+# configuration for whole-model runs.
+chisel_cc_library(
+    name = "vme_core_mini_requant_highmem_axi_cc_library",
+    chisel_lib = ":coralnpu",
+    emit_class = "coralnpu.EmitCore",
+    extra_outs = [
+        "VVmeCoreMiniRequantHighmemAxi_parameters.h",
+        "VmeCoreMiniRequantHighmemAxi.zip",
+    ],
+    gen_flags = [
+        "--moduleName=VmeCoreMiniRequant",
+        "--itcmSizeKBytes=1024",
+        "--dtcmSizeKBytes=1024",
+        "--enableRequant=True",
+    ] + VME_CORE_MINI_AXI_COMMON_GEN_FLAGS,
+    module_name = "VmeCoreMiniRequantHighmemAxi",
+    tags = ["manual"],
+    vopts = VME_CORE_MINI_AXI_VOPTS + ["-DREQUANT_ON"],
+)
+
 filter_files_by_extension(
     name = "vme_core_mini_verification_axi_cc_library_emit_verilog_single_sv",
     src = ":vme_core_mini_verification_axi_cc_library_emit_verilog",
