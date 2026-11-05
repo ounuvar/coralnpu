@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_cc//cc:defs.bzl", "cc_library")
 
@@ -124,7 +125,7 @@ cc_library(
         (
             "depthwise_conv",
             select({
-                ":conv_tiling_enabled": ["CORALNPU_CONV_TILING=1"],
+                ":tiling_enabled": ["CORALNPU_CONV_TILING=1"],
                 "//conditions:default": [],
             }) + select({
                 ":tiling_dma_enabled": ["CORALNPU_DMA_TILING=1"],
@@ -160,8 +161,10 @@ config_setting(
     flag_values = {":rvv_conv": "True"},
 )
 
-# Idea 4 (#11): the one switch for DMA tiling. ConvPerChannel runs pointwise (1x1) and 3x3 convs, and
-# DepthwiseConvPerChannel depthwise convs, in DMA-planned tiles through a DTCM arena. Off by default;
+# Idea 4 (#11): the switch for DMA tiling. ConvPerChannel runs pointwise (1x1) and 3x3 convs, and
+# DepthwiseConvPerChannel depthwise convs, in DMA-planned tiles through a DTCM arena. For SoC and F2
+# builds use tiling_dma below, which includes this switch; conv_tiling alone copies with memcpy
+# (npusim). Off by default;
 # with it off the kernels are unchanged (a build with every switch off matches baseline-v0). On, it
 # also turns on the four optimizations that measured best, which have no switches of their own in
 # the shipped build: prefetch of the next chunk, spread of that prefetch over the tiles, merged
@@ -186,10 +189,10 @@ config_setting(
     flag_values = {":conv_tiling": "True"},
 )
 
-# With conv_tiling, copy tiles with the DMA engine instead of memcpy. This is not part of the
-# bundle because it depends on the target: SoC builds set it, npusim has no DMA engine and keeps
-# the memcpy copies (which is how the functional tests run).
-#   bazel test --//sw/opt/litert-micro:conv_tiling --//sw/opt/litert-micro:tiling_dma ...
+# Tiling with the DMA engine doing the copies (SoC and F2 builds): this alone is the whole switch
+# for those targets, it includes everything conv_tiling turns on. conv_tiling without it copies
+# with memcpy, which is how the functional tests run on npusim (it has no DMA engine).
+#   bazel build --//sw/opt/litert-micro:tiling_dma ...
 bool_flag(
     name = "tiling_dma",
     build_setting_default = False,
@@ -198,6 +201,15 @@ bool_flag(
 config_setting(
     name = "tiling_dma_enabled",
     flag_values = {":tiling_dma": "True"},
+)
+
+# Tiling is on with either flag.
+selects.config_setting_group(
+    name = "tiling_enabled",
+    match_any = [
+        ":conv_tiling_enabled",
+        ":tiling_dma_enabled",
+    ],
 )
 
 cc_library(
@@ -215,7 +227,7 @@ cc_library(
         ":rvv_conv_enabled": ["CORALNPU_RVV_CONV=1"],
         "//conditions:default": [],
     }) + select({
-        ":conv_tiling_enabled": CONV_TILING_DEFINES,
+        ":tiling_enabled": CONV_TILING_DEFINES,
         "//conditions:default": [],
     }) + select({
         ":tiling_dma_enabled": ["CORALNPU_DMA_TILING=1"],
