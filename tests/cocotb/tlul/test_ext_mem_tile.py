@@ -189,12 +189,13 @@ async def run_tile(dut, elf_name):
     elif "_r4" in elf_name:
         phases = f" compute={await result('compute_cycles')}"
     if "_stats" in elf_name:
-        phases = "".join(
-            f" {n}={await result('stat_' + n)}" for n in (
+        # (An await inside a generator expression would make it an async generator.)
+        phases = ""
+        for name in (
                 "chunks", "tiles", "prologue", "prepare", "compute", "wait",
                 "blocking_copy"
-            )
-        )
+        ):
+            phases += f" {name}={await result('stat_' + name)}"
     if "_ref" in elf_name:
         ref_done = await result("tile_ref_done")
         assert ref_done == 0x600D, f"reference comparison did not run: 0x{ref_done:x}"
