@@ -30,6 +30,13 @@ void ConvPerChannel(const tflite::ConvParams &params, const OpDataConvCustom &da
 
 TFLMRegistration Register_CONV_2D();
 
+// Idea 5 (#12): with --//sw/opt/litert-micro:conv_engine_select, layers with at
+// least `depth` input channels run on the matrix engine (default 16). Applies
+// to ops prepared after the call (AllocateTensors). For tests and benchmarks:
+// 0 puts every layer on the matrix engine, INT_MAX none. No effect without the
+// flag.
+void SetMatrixEngineMinInputDepth(int depth);
+
 void RepackWeightsD48(const int8_t *__restrict src, int16_t *__restrict dst,
                       int32_t *__restrict weight_sums, int output_depth, int filter_height,
                       int filter_width, int input_depth);

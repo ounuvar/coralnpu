@@ -22,6 +22,9 @@
 
 #include "sw/opt/litert-micro/accumulator_util.h"
 #include "sw/opt/litert-micro/memory_util.h"
+#if CORALNPU_CONV_ENGINE_SELECT
+#include "sw/opt/litert-micro/conv_vme.h"
+#endif  // CORALNPU_CONV_ENGINE_SELECT
 #include "sw/opt/rvv_opt.h"
 #include "tensorflow/lite/kernels/internal/common.h"
 #include "tensorflow/lite/kernels/internal/reference/integer_ops/conv.h"
@@ -1492,6 +1495,58 @@ void ConvPerChannel(const ConvParams &params, const OpDataConvCustom &data,
   }
 }
 
+#if CORALNPU_CONV_ENGINE_SELECT
+// Idea 5 (#12), behind --//sw/opt/litert-micro:conv_engine_select: per-layer
+// choice between the vector unit and the matrix engine. On MobileNet's conv
+// layers (RTL cycles, #12) the matrix engine is slower only on the two layers
+// with 3 and 8 input channels, where K is too short to fill its tiles, and
+// faster from 16 input channels on (1.2x at 16, up to 11.5x at 256).
+static int matrix_engine_min_input_depth = 16;
+
+// Packs the weights for the matrix engine when the layer should run there.
+// Leaves data->vme_weights null otherwise, so ConvEval keeps the vector path.
+static TfLiteStatus PrepareMatrixEngine(TfLiteContext *context, TfLiteNode *node,
+                                        const TfLiteTensor *input, const TfLiteTensor *filter,
+                                        OpDataConvCustom *data) {
+  data->vme_weights = nullptr;
+  if (input->type != kTfLiteInt8 || filter->type != kTfLiteInt8 ||
+      input->dims->data[3] < matrix_engine_min_input_depth || filter->data.int8 == nullptr ||
+      data->filter_zero_point != 0) {
+    return kTfLiteOk;
+  }
+  const tflite::RuntimeShape filter_shape = tflite::GetTensorShape(filter);
+  // Persistent buffers are 16-byte aligned, as ConvVmePrepare requires.
+  auto *weights = static_cast<vme::ConvVmeWeights *>(
+      context->AllocatePersistentBuffer(context, sizeof(vme::ConvVmeWeights)));
+  void *packed =
+      context->AllocatePersistentBuffer(context, vme::ConvVmePersistentBytes(filter_shape));
+  TF_LITE_ENSURE(context, weights != nullptr && packed != nullptr);
+  TF_LITE_ENSURE_STATUS(context->RequestScratchBufferInArena(
+      context, vme::ConvVmeScratchBytes(filter_shape), &data->vme_scratch_index));
+
+  tflite::MicroContext *micro_context = tflite::GetMicroContext(context);
+  TfLiteTensor *bias = micro_context->AllocateTempInputTensor(node, kConvBiasTensor);
+  // ConvVmePrepare reads only input_offset, to fold it into the bias.
+  tflite::ConvParams params;
+  params.input_offset = -data->input_zero_point;
+  *weights            = vme::ConvVmePrepare(params, data->per_channel_output_shift, filter_shape,
+                                            filter->data.int8, bias ? bias->data.i32 : nullptr, packed);
+  if (bias != nullptr) {
+    micro_context->DeallocateTempTfLiteTensor(bias);
+  }
+  data->vme_weights = weights;
+  return kTfLiteOk;
+}
+#endif  // CORALNPU_CONV_ENGINE_SELECT
+
+void SetMatrixEngineMinInputDepth(int depth) {
+#if CORALNPU_CONV_ENGINE_SELECT
+  matrix_engine_min_input_depth = depth;
+#else
+  (void)depth;
+#endif  // CORALNPU_CONV_ENGINE_SELECT
+}
+
 TfLiteStatus ConvEval(TfLiteContext *context, TfLiteNode *node) {
   TFLITE_DCHECK(node->user_data != nullptr);
   TFLITE_DCHECK(node->builtin_data != nullptr);
@@ -1509,6 +1564,16 @@ TfLiteStatus ConvEval(TfLiteContext *context, TfLiteNode *node) {
     case kTfLiteInt8: {
       switch (filter->type) {
         case kTfLiteInt8: {
+#if CORALNPU_CONV_ENGINE_SELECT
+          if (data.vme_weights != nullptr) {
+            vme::ConvPerChannelVme(tflite::ConvParamsQuantized(params, data), *data.vme_weights,
+                                   data.per_channel_output_multiplier, GetTensorShape(input),
+                                   GetTensorData<int8_t>(input), GetTensorShape(output),
+                                   GetTensorData<int8_t>(output),
+                                   context->GetScratchBuffer(context, data.vme_scratch_index));
+            break;
+          }
+#endif  // CORALNPU_CONV_ENGINE_SELECT
           ConvPerChannel(tflite::ConvParamsQuantized(params, data), data,
                          data.per_channel_output_multiplier, data.per_channel_output_shift, context,
                          GetTensorShape(input), GetTensorData<int8_t>(input),
@@ -1540,6 +1605,7 @@ void *ConvInit(TfLiteContext *context, const char *buffer, size_t length) {
     data->accs_buffer_index          = -1;
     data->tiled_input_buffer_index   = -1;
     data->generic_tiled_buffer_index = -1;
+    data->vme_scratch_index          = -1;
   }
   return ptr;
 }
@@ -1623,6 +1689,10 @@ TfLiteStatus ConvPrepare(TfLiteContext *context, TfLiteNode *node) {
     data->repacked_weights = nullptr;
     data->weight_sums      = nullptr;
   }
+
+#if CORALNPU_CONV_ENGINE_SELECT
+  TF_LITE_ENSURE_STATUS(PrepareMatrixEngine(context, node, input, filter, data));
+#endif  // CORALNPU_CONV_ENGINE_SELECT
 
   micro_context->DeallocateTempTfLiteTensor(input);
   micro_context->DeallocateTempTfLiteTensor(filter);
