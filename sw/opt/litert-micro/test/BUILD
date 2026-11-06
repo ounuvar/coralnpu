@@ -417,3 +417,28 @@ cc_test(
         "@com_google_googletest//:gtest_main",
     ],
 )
+
+# Idea 2 (#9, step 7): the MobileNet benches on the core with the fused
+# requantization instructions. Build once without and once with
+# --//sw/opt/litert-micro:fused_requant (plus rvv_conv) to compare cycles on
+# the same hardware.
+[
+    coralflow_test(
+        name = name + "_requant",
+        srcs = [name + ".py"],
+        elf = ":" + name + ".elf",
+        hdl_toplevel = "VmeCoreMiniRequantHighmemAxi",
+        highmem = True,
+        main = name + ".py",
+        tags = ["manual"],
+        targets = ["verilator"],
+        deps = [
+            "@bazel_tools//tools/python/runfiles",
+        ],
+    )
+    for name in [
+        "mobilenet_kernel_bench",
+        "mobilenet_conv_bench",
+        "mobilenet_engine_select_test",
+    ]
+]
