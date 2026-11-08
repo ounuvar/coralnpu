@@ -16,7 +16,15 @@
 module clkgen_xilultrascaleplus #(
     parameter int ClockFrequencyMhz = 50,
     // Add BUFG if not done by downstream logic
-    parameter bit AddClkBuf = 1
+    parameter bit AddClkBuf = 1,
+    // Input clock. The defaults are the Nexus board: a 100 MHz differential oscillator. With
+    // DiffClkIn = 0, clk_i is an on-chip clock that is already buffered (for example the AWS F2
+    // shell's 250 MHz clk_main_a0) and clk_n_i is unused. ClkInDivide and ClkInMult must keep the
+    // VCO at 1200 MHz (input / ClkInDivide * ClkInMult), which the output dividers assume.
+    parameter bit DiffClkIn = 1,
+    parameter real ClkInPeriodNs = 10.0,
+    parameter int ClkInDivide = 1,
+    parameter real ClkInMult = 12.0
 ) (
     input  clk_i,
     input  clk_n_i,
@@ -41,12 +49,16 @@ module clkgen_xilultrascaleplus #(
   logic clk_isp_unbuf;
   logic clk_ibufds_o;
 
-  // Input IBUFDS conver diff-pair to single-end
-  IBUFDS clk_ibufds (
-      .I (clk_i),
-      .IB(clk_n_i),
-      .O (clk_ibufds_o)
-  );
+  if (DiffClkIn) begin : gen_diff_clk_in
+    // Input IBUFDS conver diff-pair to single-end
+    IBUFDS clk_ibufds (
+        .I (clk_i),
+        .IB(clk_n_i),
+        .O (clk_ibufds_o)
+    );
+  end else begin : gen_se_clk_in
+    assign clk_ibufds_o = clk_i;
+  end
 
   localparam real CLKOUT0_DIVIDE_F_RAW = 1200.0 / ClockFrequencyMhz;
   // MMCME2_ADV requires fractional dividers to be exact multiples of 0.125
@@ -56,8 +68,8 @@ module clkgen_xilultrascaleplus #(
       .BANDWIDTH("OPTIMIZED"),
       .COMPENSATION("ZHOLD"),
       .STARTUP_WAIT("FALSE"),
-      .DIVCLK_DIVIDE(1),
-      .CLKFBOUT_MULT_F(12.000),
+      .DIVCLK_DIVIDE(ClkInDivide),
+      .CLKFBOUT_MULT_F(ClkInMult),
       .CLKFBOUT_PHASE(0.000),
       .CLKOUT0_DIVIDE_F(CLKOUT0_DIVIDE_F_CALC),
       .CLKOUT0_PHASE(0.000),
@@ -75,7 +87,7 @@ module clkgen_xilultrascaleplus #(
       .CLKOUT4_DUTY_CYCLE(0.500),
       .CLKOUT4_CASCADE("FALSE"),
       .CLKOUT6_DIVIDE(120),
-      .CLKIN1_PERIOD(10.000)
+      .CLKIN1_PERIOD(ClkInPeriodNs)
   ) pll (
       .CLKFBOUT(clk_fb_unbuf),
       .CLKFBOUTB(),
