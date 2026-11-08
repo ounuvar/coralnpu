@@ -11,7 +11,7 @@ This checkout is the base for a UT Austin HW/SW co-design course project, "HW/SW
 A result counts only if it is reported on all three axes:
 
 - **Software:** cycles per kernel and per MobileNet layer, full-model cycles, instruction count, memory stall cycles.
-- **Hardware:** added LUTs, FFs, DSPs, BRAM/URAM, power, and WNS at the target clock on the VU47P. A speedup that breaks timing closure is not a result.
+- **Hardware:** added LUTs, FFs, DSPs, BRAM/URAM, power, and WNS at the target clock on the VU47P. The target clock is 50 MHz (decided on #6), measured with the out-of-context flow in `fpga/ooc/README.md`. A speedup that breaks timing closure is not a result.
 - **Deployment:** the configuration builds, meets timing, and runs MobileNet correctly on F2.
 
 ## Phases and the five ideas
@@ -44,18 +44,19 @@ Upstream has no dedicated dot-product or requantization instruction. Confirm thi
 - **Reported numbers come from the pinned Linux toolchain** (x86 or CI). Macs use a Homebrew RISC-V GCC that may compile kernels differently; Mac numbers are for debugging only.
 - **Results and decisions go on the issue.** Post each measurement as a comment on its issue: configuration, commit, and the numbers. Record decisions (encodings, target clock, whether to build a depthwise unit) the same way.
 - **One branch per issue, merged by pull request** into `main` with `Closes #N`, after CI passes. Keep pull requests small and rebase on `main` often.
+- **GitHub Actions runs only the pull-request checks.** Never start the full `bazel test //...` (5 to 6 hours) on GitHub, by `gh workflow run` or the Run workflow button: run it by hand on a team Linux machine (see Machines). No self-hosted runners, since the repo is public. Verify only the targets you changed and batch fixes into fewer pushes. Keep the `push` trigger on `main` and add no `paths-ignore` for Markdown or `doc/`: with `strict: false` branch protection the post-merge run is the only check of what landed, and a path-skipped required check (`lint`) blocks docs-only pull requests. If GitHub disables workflows on the fork, the repo owner re-enables them on the Actions tab; then close and reopen any pull request that has no runs.
 
 ## Working on an issue
 
 1. **Pick it up.** Assign yourself and move the card to In progress on the board.
 2. **Branch from fresh `main`:** `git switch main && git pull && git switch -c <issue>-<short-name>` (for example `8-dot-product`).
 3. **Work and test locally.** Run only the tests your change touches (see Common commands); the full suite is not part of the loop.
-4. **Lint before pushing:** `BASE_BRANCH=origin/main ./utils/run_linters.sh --fix`. If the linters are not installed on your Mac, CI runs them.
+4. **Lint before pushing, where you can:** `BASE_BRANCH=origin/main ./utils/run_linters.sh --fix`. The script stops at the first missing linter. On a Mac without them, `pip install "clang-format==19.*" yapf` in a virtual environment covers C++ (`git-clang-format`) and Python (`yapf`); CI runs the rest.
 5. **Open a pull request** with `Closes #<issue>` in the description and move the card to In review. CI takes a few minutes: lint, macro signatures, and the RTL Verilog build.
 6. **Merge it yourself once CI passes.** Ask a teammate to review first only if you touched shared ground: the RVV decode or multiply files, `MODULE.bazel*`, `.bazelrc`, or `toolchain/`. Delete the branch after merging.
 7. **Report on the issue.** Post measurements (configuration, commit, numbers) and decisions as comments on the issue before closing it.
 
-Never push directly to `main`. The full `bazel test //...` (5 to 6 hours) runs only by hand: Actions > CoralNPU CI > Run workflow, for example before measuring a configuration for the report.
+Never push directly to `main`. The full `bazel test //...` (5 to 6 hours) runs only by hand on a team Linux machine, never on GitHub (see Ground rules), for example before measuring a configuration for the report.
 
 ## Recipe for a new vector instruction (ideas 1, 2, and 3 if it becomes an instruction)
 
@@ -69,7 +70,7 @@ Do the steps in order; each check must pass before the next step. Steps 1 to 4 n
 | 4. Kernel | Kernel path using `.insn` inline assembly, behind a compile flag (pattern in `tests/cocotb/vme_test/*.cc`) | Kernel tests bit-exact on npusim |
 | 5. RTL | Chisel decode (`RvvDecode.scala`), SV decode and datapath, behind the new flag | Builds flag off and on, with and without `ZVT_ON` |
 | 6. RTL tests | cocotb test under `tests/cocotb/rvv/`, existing RVV regressions, UVM co-sim against both ISS models | All pass; flag-off build unchanged |
-| 7. Measure | Kernel and MobileNet cycles on Verilator; out-of-context synthesis on VU47P | Numbers posted on the issue |
+| 7. Measure | Kernel and MobileNet cycles on Verilator; out-of-context synthesis on VU47P at 50 MHz (`fpga/ooc/run_ooc.sh`) | Numbers posted on the issue |
 
 Working in parallel: ideas 1 and 2 touch the same files, so both encodings are settled in #7 first. Each idea keeps its ISS changes in its own patch file named after the idea (for example `0100-idea1-dot-product.patch`), not the next free number. All new `Parameters.scala` flags go in together in one early pull request.
 
@@ -95,8 +96,9 @@ Changes to the RVV backend must build and pass tests both with and without `ZVT_
 | ------- | --- | --- |
 | Apple Silicon | `ounuvar`, `AayushMerchant` | Day-to-day: Chisel, Verilator, cocotb, npusim. Setup: `doc/macos_apple_silicon.md` and `utils/check_macos_setup.sh`. No Vivado, VCS or AWS HDK; linters run in CI if not installed. |
 | x86 Linux | `Capheuss` | Upstream Linux setup as-is (prebuilt toolchain, or `utils/coralnpu.dockerfile`). Numbers for the report; long RTL runs. Under WSL2: clone in `~/` not `/mnt/c`, 16 GB+ memory in `.wslconfig`, `git config core.autocrlf false`. |
-| AWS instance | Everyone | Vivado synthesis, VU47P area and timing, F2 builds. |
-| GitHub Actions | Everyone | On every pull request and push to `main`: lint and macro signatures (`ci.yml`) and the RTL Verilog build (`main.yml`) on Ubuntu x86, a few minutes. The full `bazel test //...` runs only by hand. |
+| UT ECE LRC servers | Everyone | Vivado 2023.2.2 for out-of-context VU47P area and timing (`fpga/ooc/README.md`). Not new enough for the F2 HDK. |
+| AWS instance | Everyone | F2 builds (the HDK needs Vivado 2024.1 or newer) and F2 runs. |
+| GitHub Actions | Everyone | On every pull request and push to `main`: lint and macro signatures (`ci.yml`) and the RTL Verilog build (`main.yml`) on Ubuntu x86, a few minutes. The full `bazel test //...` never runs here; it runs by hand on a team Linux machine. |
 
 ## Repo map (project-relevant parts)
 
@@ -107,6 +109,7 @@ Changes to the RVV backend must build and pass tests both with and without `ZVT_
 - `tests/cocotb/`: RTL simulation tests. `rvv/arithmetics/` holds per-instruction templates; `tutorial/tfmicro/` runs MobileNet layers on RTL.
 - `tests/uvm/`: co-simulation against the MPACT and Spike ISS models. Both are required in presubmit.
 - `third_party/spike/` and `third_party/coralnpu_mpact/`: ISS models patched for Coral.
+- `fpga/ooc/`: our out-of-context synthesis and place-and-route flow for VU47P area, timing and power.
 - `fpga/`: the upstream FPGA flow for Google's internal "Nexus" board (`xcvu13p`, FuseSoC + Vivado). **AWS F2 is not supported upstream**; porting is project work. Lab-only details in `fpga/README.md` (zturn, `nexus_loader`, `*.corp.google.com`) do not apply to us.
 - `doc/`: architecture docs. `doc/tutorials/npusim_mobilenet_tutorial.md` covers the end-to-end MobileNet flow.
 

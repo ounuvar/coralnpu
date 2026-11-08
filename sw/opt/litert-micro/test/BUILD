@@ -760,6 +760,43 @@ coralflow_test(
     ],
 )
 
+coralnpu_v2_binary(
+    name = "mobilenet_engine_select_test",
+    srcs = ["mobilenet_engine_select_test.cc"],
+    dtcm_size_kbytes = 1024,
+    itcm_size_kbytes = 1024,
+    deps = [
+        "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:depthwise_conv",
+        "//sw/utils",
+        "//tests/cocotb/tutorial/tfmicro:mobilenet_v1_025_224_int8_dummy_lib",
+        "@tflite_micro//tensorflow/lite/micro:micro_framework",
+        "@tflite_micro//tensorflow/lite/micro:op_resolvers",
+    ],
+)
+
+# Full MobileNet with the per-layer vector/matrix choice (#12): all-vector,
+# per-layer and all-matrix runs must produce identical tensors. Meaningful only
+# with --//sw/opt/litert-micro:rvv_conv --//sw/opt/litert-micro:conv_engine_select.
+# npusim gives instruction counts; the verilator target gives cycles.
+coralflow_test(
+    name = "mobilenet_engine_select_test",
+    srcs = ["mobilenet_engine_select_test.py"],
+    elf = ":mobilenet_engine_select_test.elf",
+    hdl_toplevel = "VmeCoreMiniHighmemAxi",
+    highmem = True,
+    main = "mobilenet_engine_select_test.py",
+    tags = ["manual"],
+    targets = [
+        "npusim",
+        "verilator",
+    ],
+    deps = [
+        # The RTL rule adds numpy itself; npusim gets it from the fixture.
+        "@bazel_tools//tools/python/runfiles",
+    ],
+)
+
 # ISS check for the fused requantization instructions (#9, step 3): the same
 # ELF runs on npusim (MPACT) and on Spike.
 coralnpu_v2_binary(

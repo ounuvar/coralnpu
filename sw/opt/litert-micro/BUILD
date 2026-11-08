@@ -161,6 +161,21 @@ config_setting(
     flag_values = {":rvv_conv": "True"},
 )
 
+# Idea 5 (#12): the CONV_2D op runs layers with at least 16 input channels on
+# the matrix engine (conv_vme) and the rest on the vector unit. Off by default.
+# Needs a core with the matrix engine (VmeCoreMini*, ZVT_ON); combine with
+# rvv_conv for the configuration measured on #12.
+#   bazel test --//sw/opt/litert-micro:conv_engine_select ...
+bool_flag(
+    name = "conv_engine_select",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "conv_engine_select_enabled",
+    flag_values = {":conv_engine_select": "True"},
+)
+
 # Idea 4 (#11): the switch for DMA tiling. ConvPerChannel runs pointwise (1x1) and 3x3 convs, and
 # DepthwiseConvPerChannel depthwise convs, in DMA-planned tiles through a DTCM arena. For SoC and F2
 # builds use tiling_dma below, which includes this switch; conv_tiling alone copies with memcpy
@@ -232,6 +247,9 @@ cc_library(
     }) + select({
         ":tiling_dma_enabled": ["CORALNPU_DMA_TILING=1"],
         "//conditions:default": [],
+    }) + select({
+        ":conv_engine_select_enabled": ["CORALNPU_CONV_ENGINE_SELECT=1"],
+        "//conditions:default": [],
     }),
     target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
     deps = [
@@ -243,7 +261,10 @@ cc_library(
         "//sw/opt:rvv_opt",
         "@tflite_micro//tensorflow/lite/kernels/internal:common",
         "@tflite_micro//tensorflow/lite/micro:op_resolvers",
-    ],
+    ] + select({
+        ":conv_engine_select_enabled": [":conv_vme"],
+        "//conditions:default": [],
+    }),
 )
 
 # The conv library with fixed defines, for benchmarks that must not change the build configuration
