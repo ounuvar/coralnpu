@@ -761,6 +761,56 @@ template_rule(
     ]
 ]
 
+# AWS F2 (VU47P) targets for the pinless chip_f2 top (#13). Same two configurations as Nexus
+# (highmem, vector at 50 MHz and matrix at 30 MHz). synth_only runs out-of-context synthesis on
+# xcvu47p-fsvh2892-2-e; place and route the resulting checkpoint with fpga/ooc/ooc_impl.tcl. There is
+# no bitstream target: on F2 the AWS HDK flow builds the image from the CL wrapper (#14).
+F2_COMMON_SRCS = CORALNPU_SOC_SRCS_COMMON + [
+    "clocks_f2.xdc",
+    "vivado_setup_hooks_f2.tcl",
+]
+
+F2_COMMON_CORES = [
+    ":chip_f2.core",
+    "//fpga/ip/i2c_master:i2c_master.core",
+    "//fpga/ip/ispyocto:ispyocto_core",
+]
+
+# Every F2 configuration runs at the project's 50 MHz target clock (#6),
+# including matrix, which upstream runs at 30 MHz on Nexus.
+_F2_CLOCK_FREQUENCY_MHZ = "50"
+
+_F2_NAME_MAP = {
+    "build_chip_f2_" + build_type + c["suffix"]: {
+        "cores": CORALNPU_SOC_CORES_COMMON + F2_COMMON_CORES + [c["chisel_core"]],
+        "srcs": F2_COMMON_SRCS + [c["chisel_rtl"]],
+        "flags": [
+            "--ClockFrequencyMhz=" + _F2_CLOCK_FREQUENCY_MHZ,
+            "--IspClockFrequencyMhz=" + _ISP_CLOCK_FREQUENCY_MHZ,
+            "--SpimClockFrequencyMhz=" + _SPIM_CLOCK_FREQUENCY_MHZ,
+            "--ItcmSizeKBytes=" + c["itcm"],
+            "--DtcmSizeKBytes=" + c["dtcm"],
+            "--pnr=none",
+        ] + c["zvt_flags"],
+        "target": "elab" if build_type == "elab_only" else "synth",
+    }
+    for c in _NEXUS_CONFIGS
+    for build_type in [
+        "synth_only",
+        "elab_only",
+    ]
+}
+
+template_rule(
+    fusesoc_build,
+    _F2_NAME_MAP,
+    output_groups = {
+        "all": ["com.google.coralnpu_fpga_chip_f2_0.1/"],
+    },
+    systems = ["com.google.coralnpu:fpga:chip_f2:0.1"],
+    tags = ["manual"],
+)
+
 filegroup(
     name = "chip_verilator_binary",
     srcs = [":build_chip_verilator_vector_normal"],

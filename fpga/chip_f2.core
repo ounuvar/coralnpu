@@ -1,0 +1,146 @@
+CAPI=2:
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+name: "com.google.coralnpu:fpga:chip_f2:0.1"
+description: "Pinless CoralNPU top for the AWS F2 card (VU47P), synthesized out of context."
+
+filesets:
+  files_rtl:
+    depend:
+      - com.google.coralnpu:fpga:coralnpu_soc
+      - pulp-platform:riscv-dbg:0.1
+    files:
+      - rtl/chip_f2.sv
+      - rtl/clkgen_xilultrascaleplus.sv
+    file_type: systemVerilogSource
+
+  files_constraints:
+    files:
+      - clocks_f2.xdc
+    file_type: xdc
+
+  files_tcl:
+    files:
+      - vivado_setup_hooks_f2.tcl: { file_type: tclSource }
+
+parameters:
+  ClockFrequencyMhz:
+    datatype: int
+    description: "Core clock frequency in MHz."
+    default: 50
+    paramtype: vlogparam
+  IspClockFrequencyMhz:
+    datatype: int
+    description: "ISP clock frequency in MHz."
+    default: 10
+    paramtype: vlogparam
+  SpimClockFrequencyMhz:
+    datatype: int
+    description: "SPIM clock frequency in MHz."
+    default: 100
+    paramtype: vlogparam
+  MemInitFile:
+    datatype: str
+    description: Path to ROM
+    default: ""
+    paramtype: vlogparam
+  BootAddr:
+    datatype: int
+    description: "PC reset value. 0 for ITCM, 0x10000000 for ROM boot."
+    default: 0
+    paramtype: vlogparam
+  EnableAutoboot:
+    datatype: int
+    description: "Enable autonomous boot release"
+    default: 0
+    paramtype: vlogparam
+  ItcmSizeKBytes:
+    datatype: int
+    description: "ITCM size in KBytes"
+    default: 1024
+    paramtype: vlogparam
+  DtcmSizeKBytes:
+    datatype: int
+    description: "DTCM size in KBytes"
+    default: 1024
+    paramtype: vlogparam
+  AddrWidth:
+    datatype: int
+    description: "Address width in bits"
+    default: 32
+    paramtype: vlogparam
+  USE_GENERIC:
+    datatype: bool
+    description: "Use generic primitives"
+    default: false
+    paramtype: vlogdefine
+  FPGA_XILINX:
+    datatype: bool
+    description: "Use Xilinx FPGA primitives"
+    default: false
+    paramtype: vlogdefine
+  TB_SUPPORT:
+    datatype: bool
+    description: "Enable TB support in RVV"
+    default: true
+    paramtype: vlogdefine
+  VLEN_128:
+    datatype: bool
+    description: "Set RVV VLEN to 128"
+    default: true
+    paramtype: vlogdefine
+  ZVE32F_ON:
+    datatype: bool
+    description: "Enable ZVE32F RVV profile"
+    default: true
+    paramtype: vlogdefine
+  ZVT_ON:
+    datatype: bool
+    description: "Enable ZVT extension"
+    paramtype: vlogdefine
+  ZVTBF16FMM_ON:
+    datatype: bool
+    description: "Enable ZVT BF16 FMM extension"
+    paramtype: vlogdefine
+
+targets:
+  default: &default_target
+    filesets:
+      - files_rtl
+      - files_constraints
+      - files_tcl
+  synth:
+    <<: *default_target
+    toplevel: chip_f2
+    default_tool: vivado
+    parameters:
+      - ClockFrequencyMhz
+      - IspClockFrequencyMhz
+      - SpimClockFrequencyMhz
+      - MemInitFile
+      - BootAddr
+      - EnableAutoboot
+      - ItcmSizeKBytes
+      - DtcmSizeKBytes
+      - AddrWidth
+      - USE_GENERIC=true
+      - FPGA_XILINX=true
+      - TB_SUPPORT=true
+      - VLEN_128=true
+      - ZVE32F_ON=true
+      - ZVT_ON
+      - ZVTBF16FMM_ON
+    tools:
+      vivado:
+        part: "xcvu47p-fsvh2892-2-e"
