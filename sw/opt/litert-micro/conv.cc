@@ -1275,15 +1275,43 @@ __attribute__((noinline)) static bool Conv1x1PerChannel(
 // too small to vectorize over. Per filter tap, one strided load gathers the
 // input for kVl pixels of an output row, and one vwmacc.vx per output channel
 // (in blocks of 8) accumulates it. Pixels whose taps reach into the padding
-// skip those taps, as the reference does, in a scalar loop. Each output row
-// is requantized with PostprocessAcc. Returns false if scratch allocation
+// skip those taps, as the reference does, in a scalar loop. The accumulators
+// are requantized with PostprocessAcc. Returns false if scratch allocation
 // fails. noinline for the same reason as Conv1x1PerChannel.
-__attribute__((noinline)) bool Conv3x3PerChannel(
+//
+// Split into a prepare step (the int16 weight layout, once per layer) and a run step (the pixel
+// loop), like the pointwise conv, so that the row-tiled path (#11) prepares once per layer into
+// its arena and runs per tile with accumulators from the arena.
+constexpr int kConv3x3Block = 8;  // output channels per block
+
+int Conv3x3WeightCount(int out_d, int k_size) {
+  return (out_d + kConv3x3Block - 1) / kConv3x3Block * k_size * kConv3x3Block;
+}
+
+// Weights as int16 [block][k][kBlock], zero-padded past out_d, from an OHWI filter.
+__attribute__((noinline)) void Conv3x3Prepare(int out_d, int k_size, const int8_t *filter_data,
+                                              int16_t *weights) {
+  constexpr int kBlock = kConv3x3Block;
+  const int blocks     = (out_d + kBlock - 1) / kBlock;
+  for (int b = 0; b < blocks; ++b) {
+    for (int k = 0; k < k_size; ++k) {
+      for (int j = 0; j < kBlock; ++j) {
+        const int n                            = b * kBlock + j;
+        weights[(b * k_size + k) * kBlock + j] = n < out_d ? filter_data[n * k_size + k] : 0;
+      }
+    }
+  }
+}
+
+// Requantizes after every `acc_pixels` output pixels of a row (at most out_w), so `accs` holds
+// acc_pixels * out_d int32 values. The untiled call passes out_w (one requantization per row).
+__attribute__((noinline)) void Conv3x3Run(
     const ConvParams &params, const int32_t *output_multiplier, const uint8_t *shift_left,
     const uint8_t *shift_right, const RuntimeShape &input_shape, const int8_t *input_data,
-    const RuntimeShape &filter_shape, const int8_t *filter_data, const int32_t *bias_data,
-    const RuntimeShape &output_shape, int8_t *output_data) {
-  constexpr int kBlock  = 8;  // output channels per block
+    const RuntimeShape &filter_shape, const int8_t *filter_data, const int16_t *weights,
+    const int32_t *bias_data, const RuntimeShape &output_shape, int8_t *output_data, int32_t *accs,
+    int acc_pixels) {
+  constexpr int kBlock  = kConv3x3Block;
   const int batches     = MatchingDim(input_shape, 0, output_shape, 0);
   const int in_h        = input_shape.Dims(1);
   const int in_w        = input_shape.Dims(2);
@@ -1302,21 +1330,7 @@ __attribute__((noinline)) bool Conv3x3PerChannel(
   const int blocks      = (out_d + kBlock - 1) / kBlock;
   const ptrdiff_t lstep = sw * in_d;
   const ptrdiff_t sstep = out_d * sizeof(int32_t);
-
-  // Weights as int16 [block][k][kBlock], zero-padded past out_d.
-  auto weights = make_aligned_array<int16_t>(16, blocks * k_size * kBlock);
-  auto accs    = make_aligned_array<int32_t>(16, out_w * out_d);
-  if (!weights || !accs) {
-    return false;
-  }
-  for (int b = 0; b < blocks; ++b) {
-    for (int k = 0; k < k_size; ++k) {
-      for (int j = 0; j < kBlock; ++j) {
-        const int n                            = b * kBlock + j;
-        weights[(b * k_size + k) * kBlock + j] = n < out_d ? filter_data[n * k_size + k] : 0;
-      }
-    }
-  }
+  const int seg_pixels  = std::max(1, std::min(acc_pixels, out_w));
 
   // Output pixels whose taps are all inside the input. None exist when the
   // input is smaller than the filter; checked separately because C division
@@ -1332,87 +1346,110 @@ __attribute__((noinline)) bool Conv3x3PerChannel(
     const int8_t *in = &input_data[batch * in_h * in_w * in_d];
     for (int oy = 0; oy < out_h; ++oy) {
       const bool row_inside = oy >= oy_lo && oy < oy_hi;
-      for (int ox = 0; ox < out_w;) {
-        if (row_inside && ox >= ox_lo && ox < ox_hi) {
-          const size_t vl = __riscv_vsetvl_e32m2(ox_hi - ox);
-          for (int b = 0; b < blocks; ++b) {
-            const int16_t *w = &weights[b * k_size * kBlock];
-            vint32m2_t acc0  = __riscv_vmv_v_x_i32m2(0, vl);
-            vint32m2_t acc1  = __riscv_vmv_v_x_i32m2(0, vl);
-            vint32m2_t acc2  = __riscv_vmv_v_x_i32m2(0, vl);
-            vint32m2_t acc3  = __riscv_vmv_v_x_i32m2(0, vl);
-            vint32m2_t acc4  = __riscv_vmv_v_x_i32m2(0, vl);
-            vint32m2_t acc5  = __riscv_vmv_v_x_i32m2(0, vl);
-            vint32m2_t acc6  = __riscv_vmv_v_x_i32m2(0, vl);
-            vint32m2_t acc7  = __riscv_vmv_v_x_i32m2(0, vl);
-            for (int ky = 0; ky < fh; ++ky) {
-              const int iy       = oy * sh - pad_h + ky;
-              const int8_t *taps = &in[(iy * in_w + ox * sw - pad_w) * in_d];
-              const int row_taps = fw * in_d;
-              for (int t = 0; t < row_taps; ++t, w += kBlock) {
-                const vint16m1_t x = __riscv_vadd_vx_i16m1(
-                    __riscv_vsext_vf2_i16m1(__riscv_vlse8_v_i8mf2(&taps[t], lstep, vl), vl),
-                    static_cast<int16_t>(in_off), vl);
-                acc0 = __riscv_vwmacc_vx_i32m2(acc0, w[0], x, vl);
-                acc1 = __riscv_vwmacc_vx_i32m2(acc1, w[1], x, vl);
-                acc2 = __riscv_vwmacc_vx_i32m2(acc2, w[2], x, vl);
-                acc3 = __riscv_vwmacc_vx_i32m2(acc3, w[3], x, vl);
-                acc4 = __riscv_vwmacc_vx_i32m2(acc4, w[4], x, vl);
-                acc5 = __riscv_vwmacc_vx_i32m2(acc5, w[5], x, vl);
-                acc6 = __riscv_vwmacc_vx_i32m2(acc6, w[6], x, vl);
-                acc7 = __riscv_vwmacc_vx_i32m2(acc7, w[7], x, vl);
-              }
-            }
-            // Scatter channel-major accumulators to the [pixel][out_d] row.
-            const int nn = std::min(kBlock, out_d - b * kBlock);
-            int32_t *dst = &accs[ox * out_d + b * kBlock];
-            if (nn > 0)
-              __riscv_vsse32_v_i32m2(&dst[0], sstep, acc0, vl);
-            if (nn > 1)
-              __riscv_vsse32_v_i32m2(&dst[1], sstep, acc1, vl);
-            if (nn > 2)
-              __riscv_vsse32_v_i32m2(&dst[2], sstep, acc2, vl);
-            if (nn > 3)
-              __riscv_vsse32_v_i32m2(&dst[3], sstep, acc3, vl);
-            if (nn > 4)
-              __riscv_vsse32_v_i32m2(&dst[4], sstep, acc4, vl);
-            if (nn > 5)
-              __riscv_vsse32_v_i32m2(&dst[5], sstep, acc5, vl);
-            if (nn > 6)
-              __riscv_vsse32_v_i32m2(&dst[6], sstep, acc6, vl);
-            if (nn > 7)
-              __riscv_vsse32_v_i32m2(&dst[7], sstep, acc7, vl);
-          }
-          ox += vl;
-        } else {
-          for (int n = 0; n < out_d; ++n) {
-            const int8_t *f = &filter_data[n * k_size];
-            int32_t acc     = 0;
-            for (int ky = 0; ky < fh; ++ky) {
-              const int iy = oy * sh - pad_h + ky;
-              for (int kx = 0; kx < fw; ++kx) {
-                const int ix = ox * sw - pad_w + kx;
-                if (iy < 0 || iy >= in_h || ix < 0 || ix >= in_w) {
-                  continue;
-                }
-                const int8_t *x  = &in[(iy * in_w + ix) * in_d];
-                const int8_t *fk = &f[(ky * fw + kx) * in_d];
-                for (int c = 0; c < in_d; ++c) {
-                  acc += fk[c] * (x[c] + in_off);
+      for (int seg = 0; seg < out_w; seg += seg_pixels) {
+        const int seg_end = std::min(out_w, seg + seg_pixels);
+        const int vec_end = std::min(ox_hi, seg_end);
+        for (int ox = seg; ox < seg_end;) {
+          if (row_inside && ox >= ox_lo && ox < vec_end) {
+            const size_t vl = __riscv_vsetvl_e32m2(vec_end - ox);
+            for (int b = 0; b < blocks; ++b) {
+              const int16_t *w = &weights[b * k_size * kBlock];
+              vint32m2_t acc0  = __riscv_vmv_v_x_i32m2(0, vl);
+              vint32m2_t acc1  = __riscv_vmv_v_x_i32m2(0, vl);
+              vint32m2_t acc2  = __riscv_vmv_v_x_i32m2(0, vl);
+              vint32m2_t acc3  = __riscv_vmv_v_x_i32m2(0, vl);
+              vint32m2_t acc4  = __riscv_vmv_v_x_i32m2(0, vl);
+              vint32m2_t acc5  = __riscv_vmv_v_x_i32m2(0, vl);
+              vint32m2_t acc6  = __riscv_vmv_v_x_i32m2(0, vl);
+              vint32m2_t acc7  = __riscv_vmv_v_x_i32m2(0, vl);
+              for (int ky = 0; ky < fh; ++ky) {
+                const int iy       = oy * sh - pad_h + ky;
+                const int8_t *taps = &in[(iy * in_w + ox * sw - pad_w) * in_d];
+                const int row_taps = fw * in_d;
+                for (int t = 0; t < row_taps; ++t, w += kBlock) {
+                  const vint16m1_t x = __riscv_vadd_vx_i16m1(
+                      __riscv_vsext_vf2_i16m1(__riscv_vlse8_v_i8mf2(&taps[t], lstep, vl), vl),
+                      static_cast<int16_t>(in_off), vl);
+                  acc0 = __riscv_vwmacc_vx_i32m2(acc0, w[0], x, vl);
+                  acc1 = __riscv_vwmacc_vx_i32m2(acc1, w[1], x, vl);
+                  acc2 = __riscv_vwmacc_vx_i32m2(acc2, w[2], x, vl);
+                  acc3 = __riscv_vwmacc_vx_i32m2(acc3, w[3], x, vl);
+                  acc4 = __riscv_vwmacc_vx_i32m2(acc4, w[4], x, vl);
+                  acc5 = __riscv_vwmacc_vx_i32m2(acc5, w[5], x, vl);
+                  acc6 = __riscv_vwmacc_vx_i32m2(acc6, w[6], x, vl);
+                  acc7 = __riscv_vwmacc_vx_i32m2(acc7, w[7], x, vl);
                 }
               }
+              // Scatter channel-major accumulators to the [pixel][out_d] row.
+              const int nn = std::min(kBlock, out_d - b * kBlock);
+              int32_t *dst = &accs[(ox - seg) * out_d + b * kBlock];
+              if (nn > 0)
+                __riscv_vsse32_v_i32m2(&dst[0], sstep, acc0, vl);
+              if (nn > 1)
+                __riscv_vsse32_v_i32m2(&dst[1], sstep, acc1, vl);
+              if (nn > 2)
+                __riscv_vsse32_v_i32m2(&dst[2], sstep, acc2, vl);
+              if (nn > 3)
+                __riscv_vsse32_v_i32m2(&dst[3], sstep, acc3, vl);
+              if (nn > 4)
+                __riscv_vsse32_v_i32m2(&dst[4], sstep, acc4, vl);
+              if (nn > 5)
+                __riscv_vsse32_v_i32m2(&dst[5], sstep, acc5, vl);
+              if (nn > 6)
+                __riscv_vsse32_v_i32m2(&dst[6], sstep, acc6, vl);
+              if (nn > 7)
+                __riscv_vsse32_v_i32m2(&dst[7], sstep, acc7, vl);
             }
-            accs[ox * out_d + n] = acc;
+            ox += vl;
+          } else {
+            for (int n = 0; n < out_d; ++n) {
+              const int8_t *f = &filter_data[n * k_size];
+              int32_t acc     = 0;
+              for (int ky = 0; ky < fh; ++ky) {
+                const int iy = oy * sh - pad_h + ky;
+                for (int kx = 0; kx < fw; ++kx) {
+                  const int ix = ox * sw - pad_w + kx;
+                  if (iy < 0 || iy >= in_h || ix < 0 || ix >= in_w) {
+                    continue;
+                  }
+                  const int8_t *x  = &in[(iy * in_w + ix) * in_d];
+                  const int8_t *fk = &f[(ky * fw + kx) * in_d];
+                  for (int c = 0; c < in_d; ++c) {
+                    acc += fk[c] * (x[c] + in_off);
+                  }
+                }
+              }
+              accs[(ox - seg) * out_d + n] = acc;
+            }
+            ++ox;
           }
-          ++ox;
         }
+        PostprocessAcc(
+            accs, bias_data, shift_left, output_multiplier, shift_right, params.output_offset,
+            params.quantized_activation_min, params.quantized_activation_max,
+            &output_data[((batch * out_h + oy) * out_w + seg) * out_d], seg_end - seg, out_d);
       }
-      PostprocessAcc(accs.get(), bias_data, shift_left, output_multiplier, shift_right,
-                     params.output_offset, params.quantized_activation_min,
-                     params.quantized_activation_max,
-                     &output_data[((batch * out_h + oy) * out_w) * out_d], out_w, out_d);
     }
   }
+}
+
+__attribute__((noinline)) static bool Conv3x3PerChannel(
+    const ConvParams &params, const int32_t *output_multiplier, const uint8_t *shift_left,
+    const uint8_t *shift_right, const RuntimeShape &input_shape, const int8_t *input_data,
+    const RuntimeShape &filter_shape, const int8_t *filter_data, const int32_t *bias_data,
+    const RuntimeShape &output_shape, int8_t *output_data) {
+  const int k_size = filter_shape.Dims(1) * filter_shape.Dims(2) * input_shape.Dims(3);
+  const int out_w  = output_shape.Dims(2);
+  const int out_d  = output_shape.Dims(3);
+  auto weights     = make_aligned_array<int16_t>(16, Conv3x3WeightCount(out_d, k_size));
+  auto accs        = make_aligned_array<int32_t>(16, out_w * out_d);
+  if (!weights || !accs) {
+    return false;
+  }
+  Conv3x3Prepare(out_d, k_size, filter_data, weights.get());
+  Conv3x3Run(params, output_multiplier, shift_left, shift_right, input_shape, input_data,
+             filter_shape, filter_data, weights.get(), bias_data, output_shape, output_data,
+             accs.get(), out_w);
   return true;
 }
 #endif  // CORALNPU_RVV_CONV

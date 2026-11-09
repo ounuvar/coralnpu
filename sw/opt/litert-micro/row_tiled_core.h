@@ -86,7 +86,16 @@ struct RowTileArgs {
   const int32_t *shift_raw;
   const uint8_t *shift_left;
   const uint8_t *shift_right;
-  int32_t *scratch;  // RowGeom::scratch_row_bytes per output row, 16-byte aligned; null if none
+  // RowGeom::scratch_row_bytes per output row plus scratch_fixed_bytes, 16-byte aligned; null if
+  // none.
+  int32_t *scratch;
+  const void *prepared;  // what the prepare step wrote (RowGeom::prepared_bytes); null if none
+};
+
+// What the prepare step gets: the layer's filter in DTCM and where to write the prepared copy.
+struct RowPrepareArgs {
+  const int8_t *filter;
+  void *prepared;  // RowGeom::prepared_bytes, 16-byte aligned
 };
 
 // The layer's data in external memory (or wherever the caller has it).
@@ -106,9 +115,13 @@ struct RowData {
 // output may have been partly written if the kernel or a copy fails. Either way no copy is still
 // running when it returns, so the caller can recompute the layer untiled. `plan_out`, if not
 // null, receives the plan.
-template <typename Kernel>
+//
+// `prepare(const RowPrepareArgs&)` runs once per layer, after the filter is in DTCM and before the
+// first tile, to fill RowGeom::prepared_bytes of prepared filter data; the overload without it is
+// for kernels that need none.
+template <typename Prepare, typename Kernel>
 bool RunRowTiled(const RowGeom &g, const RowData &d, uint32_t budget, RowPlan *plan_out,
-                 Kernel &&kernel) {
+                 Prepare &&prepare, Kernel &&kernel) {
   if (budget > kTileArenaBytes)
     return false;
   const RowPlan plan = PlanRows(g, budget);
@@ -137,8 +150,10 @@ bool RunRowTiled(const RowGeom &g, const RowData &d, uint32_t budget, RowPlan *p
   int32_t *const shift_raw   = reinterpret_cast<int32_t *>(base + l.shift_raw);
   uint8_t *const shift_left  = base + l.shift_left;
   uint8_t *const shift_right = base + l.shift_right;
-  int32_t *const scratch =
-      g.scratch_row_bytes > 0 ? reinterpret_cast<int32_t *>(base + l.scratch) : nullptr;
+  int32_t *const scratch     = g.scratch_row_bytes > 0 || g.scratch_fixed_bytes > 0
+                                   ? reinterpret_cast<int32_t *>(base + l.scratch)
+                                   : nullptr;
+  void *const prepared       = g.prepared_bytes > 0 ? base + l.prepared : nullptr;
   int8_t *const in_buf[2]  = {reinterpret_cast<int8_t *>(base + l.in[0]),
                               reinterpret_cast<int8_t *>(base + l.in[1])};
   int8_t *const out_buf[2] = {reinterpret_cast<int8_t *>(base + l.out[0]),
@@ -189,6 +204,8 @@ bool RunRowTiled(const RowGeom &g, const RowData &d, uint32_t budget, RowPlan *p
   {
     RT_STAT_START(tp);
     PrepareShiftParams(shift_left, shift_right, shift_raw, g.out_d);
+    if (prepared)
+      prepare(RowPrepareArgs{filter, prepared});
     RT_STAT_ADD(prepare, tp);
   }
 
@@ -206,6 +223,7 @@ bool RunRowTiled(const RowGeom &g, const RowData &d, uint32_t budget, RowPlan *p
     a.shift_left  = shift_left;
     a.shift_right = shift_right;
     a.scratch     = scratch;
+    a.prepared    = prepared;
     RT_STAT_COUNT(tiles);
     RT_STAT_START(tc);
     const bool ok = kernel(a);
@@ -267,6 +285,12 @@ bool RunRowTiled(const RowGeom &g, const RowData &d, uint32_t budget, RowPlan *p
     }
   }
   return true;
+}
+
+template <typename Kernel>
+bool RunRowTiled(const RowGeom &g, const RowData &d, uint32_t budget, RowPlan *plan_out,
+                 Kernel &&kernel) {
+  return RunRowTiled(g, d, budget, plan_out, [](const RowPrepareArgs &) {}, kernel);
 }
 
 }  // namespace coralnpu_v2::opt::litert_micro

@@ -41,15 +41,27 @@ void Conv1x1Run(const tflite::ConvParams &params, const int32_t *output_multipli
                 int pixels, const int8_t *input_data, const int16_t *weights, const int32_t *bias,
                 int32_t *accs, int8_t *output_data);
 
-// The 3x3 conv kernel (MobileNet's first layer), exposed for the row-tiled path (#11). It
-// allocates its own scratch and returns false if that fails. `shift_left` and `shift_right` are
-// indexed by output channel.
-bool Conv3x3PerChannel(const tflite::ConvParams &params, const int32_t *output_multiplier,
-                       const uint8_t *shift_left, const uint8_t *shift_right,
-                       const tflite::RuntimeShape &input_shape, const int8_t *input_data,
-                       const tflite::RuntimeShape &filter_shape, const int8_t *filter_data,
-                       const int32_t *bias_data, const tflite::RuntimeShape &output_shape,
-                       int8_t *output_data);
+// The 3x3 conv kernel (MobileNet's first layer) in two steps, for the row-tiled path (#11), which
+// prepares once per layer and runs once per tile with its own buffers.
+//
+// Number of int16 values Conv3x3Prepare writes for `out_d` output channels and k_size =
+// fh * fw * in_d filter values per channel.
+int Conv3x3WeightCount(int out_d, int k_size);
+
+// Lays out an OHWI filter as the int16 weights Conv3x3Run reads (Conv3x3WeightCount values).
+void Conv3x3Prepare(int out_d, int k_size, const int8_t *filter_data, int16_t *weights);
+
+// Runs the kernel on prepared weights. `filter_data` is still read for the pixels whose taps reach
+// into the padding. The output is requantized every `acc_pixels` pixels of a row (at most out_w),
+// so `accs` holds acc_pixels * out_d int32 values. `shift_left` and `shift_right` are indexed by
+// output channel.
+void Conv3x3Run(const tflite::ConvParams &params, const int32_t *output_multiplier,
+                const uint8_t *shift_left, const uint8_t *shift_right,
+                const tflite::RuntimeShape &input_shape, const int8_t *input_data,
+                const tflite::RuntimeShape &filter_shape, const int8_t *filter_data,
+                const int16_t *weights, const int32_t *bias_data,
+                const tflite::RuntimeShape &output_shape, int8_t *output_data, int32_t *accs,
+                int acc_pixels);
 
 }  // namespace coralnpu_v2::opt::litert_micro
 

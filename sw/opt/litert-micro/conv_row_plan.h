@@ -20,7 +20,8 @@
 // rows, which are fetched again rather than kept. The whole filter must fit next to the buffers;
 // there is no output-channel chunking here (layer 0 has 216 bytes of filter).
 // Depthwise convs (one filter plane per channel) use the same planner; their kernel also needs
-// per-row accumulator scratch (RowGeom::scratch_row_bytes).
+// per-row accumulator scratch (RowGeom::scratch_row_bytes). A kernel can also have fixed scratch
+// and a prepared copy of the filter (RowGeom::scratch_fixed_bytes, prepared_bytes).
 //
 // RowLayout is the one description of the DTCM buffers: the planner sizes a plan with it and the
 // wrapper carves its arena with the same offsets.
@@ -49,6 +50,12 @@ struct RowGeom {
   // Scratch the kernel needs per output row of a tile, in bytes (depthwise: the int32 accumulators,
   // out_w * out_d * 4); 0 if none.
   int scratch_row_bytes;
+  // Scratch the kernel needs per tile whatever its size (the RVV 3x3 conv: accumulators for a few
+  // pixels), in bytes; 0 if none.
+  int scratch_fixed_bytes;
+  // Bytes of filter data prepared once per layer from the local filter (the RVV 3x3 conv: its int16
+  // weight layout); 0 if none.
+  int prepared_bytes;
 };
 
 // Copies in one chain: filter, bias, multipliers, shifts, and the first input tile.
@@ -72,8 +79,8 @@ constexpr RowTile RowTileFor(const RowGeom &g, int o0, int rows) {
 }
 
 struct RowLayout {
-  uint32_t chain, filter, bias, multiplier, shift_raw, shift_left, shift_right, in[2], out[2],
-      scratch, total;
+  uint32_t chain, filter, prepared, bias, multiplier, shift_raw, shift_left, shift_right, in[2],
+      out[2], scratch, total;
 };
 
 constexpr RowLayout RowLayoutFor(const RowGeom &g, int rows, int buffers) {
@@ -83,6 +90,8 @@ constexpr RowLayout RowLayoutFor(const RowGeom &g, int rows, int buffers) {
   at += RoundUp16(kDescriptorBytes * kRowChainCopies);
   l.filter = at;
   at += RoundUp16(static_cast<uint32_t>(g.filter_bytes));
+  l.prepared = at;
+  at += RoundUp16(static_cast<uint32_t>(g.prepared_bytes));
   l.bias = at;
   at += RoundUp16(static_cast<uint32_t>(g.out_d) * 4);
   l.multiplier = at;
@@ -104,7 +113,8 @@ constexpr RowLayout RowLayoutFor(const RowGeom &g, int rows, int buffers) {
     at += used ? out_bytes : 0;
   }
   l.scratch = at;
-  at += RoundUp16(static_cast<uint32_t>(rows) * static_cast<uint32_t>(g.scratch_row_bytes));
+  at += RoundUp16(static_cast<uint32_t>(rows) * static_cast<uint32_t>(g.scratch_row_bytes) +
+                  static_cast<uint32_t>(g.scratch_fixed_bytes));
   l.total = at;
   return l;
 }

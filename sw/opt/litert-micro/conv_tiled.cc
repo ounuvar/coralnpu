@@ -369,27 +369,19 @@ bool ConvPointwiseTiled(const tflite::ConvParams &params, const int32_t *output_
 
 namespace {
 
-// One tile of the row-tiled conv on the local buffers: the RVV 3x3 kernel with CORALNPU_RVV_CONV,
-// the TFLite reference kernel otherwise. Returns false if the kernel could not run.
-bool RowKernel(
-    [[maybe_unused]] const tflite::ConvParams &params, [[maybe_unused]] const int32_t *multiplier,
-    [[maybe_unused]] const int32_t *shift_raw, [[maybe_unused]] const uint8_t *shift_left,
-    [[maybe_unused]] const uint8_t *shift_right,
-    [[maybe_unused]] const tflite::RuntimeShape &in_shape, [[maybe_unused]] const int8_t *in,
-    [[maybe_unused]] const tflite::RuntimeShape &filter_shape,
-    [[maybe_unused]] const int8_t *filter, [[maybe_unused]] const int32_t *bias,
-    [[maybe_unused]] const tflite::RuntimeShape &out_shape, [[maybe_unused]] int8_t *out) {
+// The RVV 3x3 kernel requantizes every kTileAccPixels pixels, so its accumulators take
+// kTileAccPixels * out_d * 4 bytes of the arena (2 KB for MobileNet's layer 0) instead of a whole
+// output row (14 KB).
+constexpr int kTileAccPixels = 16;
+
+// Whether tiles run the RVV 3x3 kernel (on weights prepared once per layer), or the TFLite
+// reference kernel.
+bool RowUsesConv3x3([[maybe_unused]] const tflite::RuntimeShape &filter_shape) {
 #if CORALNPU_RVV_CONV
-  if (filter_shape.Dims(1) == 3 && filter_shape.Dims(2) == 3) {
-    return Conv3x3PerChannel(params, multiplier, shift_left, shift_right, in_shape, in,
-                             filter_shape, filter, bias, out_shape, out);
-  }
+  return filter_shape.Dims(1) == 3 && filter_shape.Dims(2) == 3;
+#else
+  return false;
 #endif
-  const int32_t bias_dims[1] = {out_shape.Dims(3)};
-  tflite::reference_integer_ops::ConvPerChannel(
-      params, multiplier, shift_raw, in_shape, in, filter_shape, filter,
-      tflite::RuntimeShape(1, bias_dims), bias, out_shape, out);
-  return true;
 }
 
 }  // namespace
@@ -418,11 +410,19 @@ bool ConvRowTiledWithBudget(const tflite::ConvParams &params, const int32_t *out
   g.stride_h     = params.stride_height;
   g.pad_h        = params.padding_values.height;
   g.filter_bytes = g.out_d * g.fh * g.fw * g.in_d;
+  [[maybe_unused]] const bool conv3x3 = RowUsesConv3x3(filter_shape);
+  [[maybe_unused]] const int k_size   = g.fh * g.fw * g.in_d;
   // One group only: the filter's depth is the input depth.
   if (input_shape.Dims(0) != output_shape.Dims(0) || filter_shape.Dims(0) != g.out_d ||
       filter_shape.Dims(3) != g.in_d || g.stride_h < 1 || g.pad_h < 0 || g.in_h < 1) {
     return false;
   }
+#if CORALNPU_RVV_CONV
+  if (conv3x3) {
+    g.prepared_bytes      = Conv3x3WeightCount(g.out_d, k_size) * 2;
+    g.scratch_fixed_bytes = kTileAccPixels * g.out_d * 4;
+  }
+#endif
   RowData d{};
   d.input      = input_data;
   d.output     = output_data;
@@ -431,14 +431,30 @@ bool ConvRowTiledWithBudget(const tflite::ConvParams &params, const int32_t *out
   d.bias       = bias_data;
   d.multiplier = output_multiplier;
   d.shift      = output_shift;
-  return RunRowTiled(g, d, budget, plan_out, [&](const RowTileArgs &a) {
+  const auto prepare = [&]([[maybe_unused]] const RowPrepareArgs &p) {
+#if CORALNPU_RVV_CONV
+    Conv3x3Prepare(g.out_d, k_size, p.filter, static_cast<int16_t *>(p.prepared));
+#endif
+  };
+  return RunRowTiled(g, d, budget, plan_out, prepare, [&](const RowTileArgs &a) {
     tflite::ConvParams sub    = params;
     sub.padding_values.height = a.pad_top;
     const int32_t in_dims[4]  = {1, a.in_rows, g.in_w, g.in_d};
     const int32_t out_dims[4] = {1, a.out_rows, g.out_w, g.out_d};
-    return RowKernel(sub, a.multiplier, a.shift_raw, a.shift_left, a.shift_right,
-                     tflite::RuntimeShape(4, in_dims), a.in, filter_shape, a.filter, a.bias,
-                     tflite::RuntimeShape(4, out_dims), a.out);
+    const tflite::RuntimeShape in_shape(4, in_dims), out_shape(4, out_dims);
+#if CORALNPU_RVV_CONV
+    if (conv3x3) {
+      Conv3x3Run(sub, a.multiplier, a.shift_left, a.shift_right, in_shape, a.in, filter_shape,
+                 a.filter, static_cast<const int16_t *>(a.prepared), a.bias, out_shape, a.out,
+                 a.scratch, kTileAccPixels);
+      return true;
+    }
+#endif
+    const int32_t bias_dims[1] = {g.out_d};
+    tflite::reference_integer_ops::ConvPerChannel(
+        sub, a.multiplier, a.shift_raw, in_shape, a.in, filter_shape, a.filter,
+        tflite::RuntimeShape(1, bias_dims), a.bias, out_shape, a.out);
+    return true;
   });
 }
 
