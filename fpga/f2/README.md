@@ -78,6 +78,24 @@ sudo f2_loader --slot=0 --read_data_addr=0x80000000 --read_data_size=4096 > out.
   - `--spi_half` sets the SPI clock.
 - **No stalled OCL access:** the loader reads `SPI_CMDFREE` before writing queued registers, so it never writes into a full command queue. A full queue would stall the OCL write until the shell times it out.
 
+## MobileNet on F2
+
+`//fpga:f2_mobilenet` (`sw/f2_mobilenet.cc`) runs the full MobileNet v1 0.25 (224, INT8) twice in one run:
+
+1. **Timed:** the optimized conv and depthwise kernels, with `mcycle` and `minstret` around `Invoke` and the cycles of each conv and depthwise layer.
+2. **Checked:** the same input again; each conv and depthwise layer is compared byte by byte with TFLite's reference kernel. The only difference allowed is TFLite's value plus one (rounding ties, #23), and both passes must give the same output checksum.
+
+The tensor arena is in the 4 MB SRAM at `0x2000_0000`, in a section that is not loaded, so the image is about 510 KB. The results are in the `f2_mnet` block (layout in `f2_mobilenet.py`). A short summary goes on the console, and `f2_result` is `0x600DF00D` on a pass.
+
+On F2, with the AFI loaded:
+
+```bash
+bazel build //fpga:run_f2_mobilenet
+sudo bazel-bin/fpga/run_f2_mobilenet --slot=0 --out_dir=results/$(git rev-parse --short HEAD)-vector
+```
+
+It runs `f2_loader` twice: once to load the ELF with read-back, run it and print the console and `f2_result`, then once to read `f2_mnet`. It saves `run.log`, `f2_mnet.bin` and `report.txt` to `--out_dir`, and exits non-zero on any failure. `bazel run //fpga:f2_mobilenet_report -- f2_mnet.bin` prints a saved report again. On npusim, `bazel test //fpga:f2_mobilenet_test_npusim` runs the same ELF (instruction counts only, about 2 minutes).
+
 ## Local testbench
 
 `tb/cl_coralnpu_core_tb.sv` runs `cl_coralnpu_core` in Verilator with a behavioral clock generator (Verilator cannot simulate the MMCM) and a 512-bit DDR model. It plays the host over OCL only. It loads `fpga/sw/f2_smoke_test.c` over SPI, runs it, and checks the console, the result word, and DDR in both 256-bit halves of a beat, through the SoC and directly in the model. Then it checks the soft reset.
@@ -154,3 +172,4 @@ The HDK needs Vivado 2024.1 or newer, so this part runs on the AWS instance, not
 - These HDK steps have not been run: they need the AWS instance (#16, #17).
 - JTAG debug is held in reset. The F2 shell's virtual JTAG could drive it later.
 - `f2_loader` has run only against the local testbench; its F2 backend runs on the AWS instance (#16, #17).
+- `f2_mobilenet` has run only on npusim. It has not run on the RTL: about 1.5 billion instructions is too long for Verilator.
