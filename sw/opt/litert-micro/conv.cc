@@ -309,22 +309,23 @@ void Conv2D_4x4(const tflite::ConvParams &params,
 
 // Quantize and Store Macro
 // Need to handle LMUL=4 types
-#define QUANTIZE_AND_STORE_4(ACC_V, OFFSET)                                                         \
-  {                                                                                                 \
-    vint32m4_t a = ACC_V;                                                                           \
-    a            = __riscv_vsll_vv_i32m4(a, __riscv_vreinterpret_v_i32m4_u32m4(left_shift_v), vl);  \
-    a            = __riscv_vsmul_vv_i32m4(a, mult_v, 0, vl);                                        \
-    a            = __riscv_vadd_vv_i32m4(a, nudge_v, vl);                                           \
-    a            = __riscv_vsra_vv_i32m4(a, __riscv_vreinterpret_v_i32m4_u32m4(right_shift_v), vl); \
-    a            = __riscv_vadd_vx_i32m4(a, output_offset, vl);                                     \
-    a            = __riscv_vmax_vx_i32m4(a, data.output_activation_min, vl);                        \
-    a            = __riscv_vmin_vx_i32m4(a, data.output_activation_max, vl);                        \
-    vint16m2_t a16  = __riscv_vnclip_wx_i16m2(a, 0, 0, vl);                                         \
-    vint8m1_t a8    = __riscv_vnclip_wx_i8m1(a16, 0, 0, vl);                                        \
-    int8_t *out_ptr = output_data + (batch * output_height * output_width * output_depth) +         \
-                      (out_y * output_width * output_depth) + ((out_x + OFFSET) * output_depth) +   \
-                      out_channel_start;                                                            \
-    __riscv_vse8_v_i8m1(out_ptr, a8, vl);                                                           \
+#define QUANTIZE_AND_STORE_4(ACC_V, OFFSET)                                                        \
+  {                                                                                                \
+    vint32m4_t a = ACC_V;                                                                          \
+    a            = __riscv_vsll_vv_i32m4(a, __riscv_vreinterpret_v_i32m4_u32m4(left_shift_v), vl); \
+    a            = __riscv_vsmul_vv_i32m4(a, mult_v, 0, vl);                                       \
+    CORALNPU_TIES_BEFORE_NUDGE(a, nudge_v, vl);                                                    \
+    a = __riscv_vadd_vv_i32m4(a, nudge_v, vl);                                                     \
+    a = __riscv_vsra_vv_i32m4(a, __riscv_vreinterpret_v_i32m4_u32m4(right_shift_v), vl);           \
+    a = __riscv_vadd_vx_i32m4(a, output_offset, vl);                                               \
+    a = __riscv_vmax_vx_i32m4(a, data.output_activation_min, vl);                                  \
+    a = __riscv_vmin_vx_i32m4(a, data.output_activation_max, vl);                                  \
+    vint16m2_t a16  = __riscv_vnclip_wx_i16m2(a, 0, 0, vl);                                        \
+    vint8m1_t a8    = __riscv_vnclip_wx_i8m1(a16, 0, 0, vl);                                       \
+    int8_t *out_ptr = output_data + (batch * output_height * output_width * output_depth) +        \
+                      (out_y * output_width * output_depth) + ((out_x + OFFSET) * output_depth) +  \
+                      out_channel_start;                                                           \
+    __riscv_vse8_v_i8m1(out_ptr, a8, vl);                                                          \
   }
 
           QUANTIZE_AND_STORE_4(acc0, 0);
@@ -361,22 +362,23 @@ void Conv2D_4x4(const tflite::ConvParams &params,
             }
           }
 // Quantize
-#define QUANTIZE_AND_STORE_1(ACC_V, OFFSET)                                                         \
-  {                                                                                                 \
-    vint32m4_t a = ACC_V;                                                                           \
-    a            = __riscv_vsll_vv_i32m4(a, __riscv_vreinterpret_v_i32m4_u32m4(left_shift_v), vl);  \
-    a            = __riscv_vsmul_vv_i32m4(a, mult_v, 0, vl);                                        \
-    a            = __riscv_vadd_vv_i32m4(a, nudge_v, vl);                                           \
-    a            = __riscv_vsra_vv_i32m4(a, __riscv_vreinterpret_v_i32m4_u32m4(right_shift_v), vl); \
-    a            = __riscv_vadd_vx_i32m4(a, output_offset, vl);                                     \
-    a            = __riscv_vmax_vx_i32m4(a, data.output_activation_min, vl);                        \
-    a            = __riscv_vmin_vx_i32m4(a, data.output_activation_max, vl);                        \
-    vint16m2_t a16  = __riscv_vnclip_wx_i16m2(a, 0, 0, vl);                                         \
-    vint8m1_t a8    = __riscv_vnclip_wx_i8m1(a16, 0, 0, vl);                                        \
-    int8_t *out_ptr = output_data + (batch * output_height * output_width * output_depth) +         \
-                      (out_y * output_width * output_depth) + ((out_x + OFFSET) * output_depth) +   \
-                      out_channel_start;                                                            \
-    __riscv_vse8_v_i8m1(out_ptr, a8, vl);                                                           \
+#define QUANTIZE_AND_STORE_1(ACC_V, OFFSET)                                                        \
+  {                                                                                                \
+    vint32m4_t a = ACC_V;                                                                          \
+    a            = __riscv_vsll_vv_i32m4(a, __riscv_vreinterpret_v_i32m4_u32m4(left_shift_v), vl); \
+    a            = __riscv_vsmul_vv_i32m4(a, mult_v, 0, vl);                                       \
+    CORALNPU_TIES_BEFORE_NUDGE(a, nudge_v, vl);                                                    \
+    a = __riscv_vadd_vv_i32m4(a, nudge_v, vl);                                                     \
+    a = __riscv_vsra_vv_i32m4(a, __riscv_vreinterpret_v_i32m4_u32m4(right_shift_v), vl);           \
+    a = __riscv_vadd_vx_i32m4(a, output_offset, vl);                                               \
+    a = __riscv_vmax_vx_i32m4(a, data.output_activation_min, vl);                                  \
+    a = __riscv_vmin_vx_i32m4(a, data.output_activation_max, vl);                                  \
+    vint16m2_t a16  = __riscv_vnclip_wx_i16m2(a, 0, 0, vl);                                        \
+    vint8m1_t a8    = __riscv_vnclip_wx_i8m1(a16, 0, 0, vl);                                       \
+    int8_t *out_ptr = output_data + (batch * output_height * output_width * output_depth) +        \
+                      (out_y * output_width * output_depth) + ((out_x + OFFSET) * output_depth) +  \
+                      out_channel_start;                                                           \
+    __riscv_vse8_v_i8m1(out_ptr, a8, vl);                                                          \
   }
           QUANTIZE_AND_STORE_1(acc, 0);
 #undef QUANTIZE_AND_STORE_1
@@ -1088,6 +1090,7 @@ void Conv_4x4_OCVectorized(
   {                                                                                          \
     acc = __riscv_vsll_vv_i32m4(acc, __riscv_vreinterpret_v_i32m4_u32m4(left_shift_v), vl);  \
     acc = __riscv_vsmul_vv_i32m4(acc, mult_v, 0, vl);                                        \
+    CORALNPU_TIES_BEFORE_NUDGE(acc, nudge_v, vl);                                            \
     acc = __riscv_vadd_vv_i32m4(acc, nudge_v, vl);                                           \
     acc = __riscv_vsra_vv_i32m4(acc, __riscv_vreinterpret_v_i32m4_u32m4(right_shift_v), vl); \
     acc = __riscv_vadd_vx_i32m4(acc, output_offset, vl);                                     \
@@ -1141,6 +1144,7 @@ void Conv_4x4_OCVectorized(
   {                                                                                          \
     acc = __riscv_vsll_vv_i32m4(acc, __riscv_vreinterpret_v_i32m4_u32m4(left_shift_v), vl);  \
     acc = __riscv_vsmul_vv_i32m4(acc, mult_v, 0, vl);                                        \
+    CORALNPU_TIES_BEFORE_NUDGE(acc, nudge_v, vl);                                            \
     acc = __riscv_vadd_vv_i32m4(acc, nudge_v, vl);                                           \
     acc = __riscv_vsra_vv_i32m4(acc, __riscv_vreinterpret_v_i32m4_u32m4(right_shift_v), vl); \
     acc = __riscv_vadd_vx_i32m4(acc, output_offset, vl);                                     \

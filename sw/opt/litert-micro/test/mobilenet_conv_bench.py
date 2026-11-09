@@ -34,6 +34,7 @@ from bazel_tools.tools.python.runfiles import runfiles
 from coralnpu_test_utils.coralflow.runner import coralflow_main, coralflow_test
 
 _SYMBOLS = [
+    "tflite_ties_enabled",
     "input_data",
     "filter_data",
     "bias_data",
@@ -98,8 +99,14 @@ async def _run_layer(fixture, op_index, in_hwc, filt, stride):
     out_w, pad_w = _same_padding(w, fw, stride)
     k = fh * fw * c
     # Random int8 data, as in conv_test.py. The shift scales with K so outputs
-    # don't all saturate; output_offset stays -128 for the reason in
-    # conv_vme_test.py.
+    # don't all saturate. With tflite_ties output_offset is random, so negative
+    # rounding ties show (#23). It has its own generator so that the input and
+    # filter data are the same with the flag on and off.
+    ties = await fixture.read_word("tflite_ties_enabled")
+    output_offset = (
+        int(np.random.default_rng(156 + op_index).integers(-128, 128))
+        if ties else -128
+    )
     shift = -int(np.ceil(np.log2(k))) - 6
     await fixture.write("input_dims", np.array([1, h, w, c], dtype=np.int32))
     await fixture.write("filter_dims", np.array(filt, dtype=np.int32))
@@ -129,7 +136,7 @@ async def _run_layer(fixture, op_index, in_hwc, filt, stride):
         ("params_padding_height", pad_h),
         ("params_padding_width", pad_w),
         ("params_input_offset", int(rng.integers(-127, 129))),
-        ("params_output_offset", -128),
+        ("params_output_offset", output_offset),
         ("params_activation_min", -128),
         ("params_activation_max", 127),
     ]:

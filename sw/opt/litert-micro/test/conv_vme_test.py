@@ -21,6 +21,7 @@ from bazel_tools.tools.python.runfiles import runfiles
 from coralnpu_test_utils.coralflow.runner import coralflow_main, coralflow_test
 
 _SYMBOLS = [
+    "tflite_ties_enabled",
     "input_dims",
     "input_data",
     "filter_dims",
@@ -105,10 +106,12 @@ async def _run_case(
     )
     output_depth = filter[0]
     # input_offset = -zero_point; the kernel folds it into the bias, so
-    # randomize it. output_offset stays -128 like conv_test: the shared RVV
-    # requantization differs from TFLite on negative rounding ties (#7, #9),
-    # and -128 clamps those away.
+    # randomize it. With tflite_ties output_offset is random too, so negative
+    # rounding ties reach the output; without it the kernels differ from TFLite
+    # on those ties (#23) and -128 clamps them away.
     input_offset = int(rng.integers(-127, 129))
+    ties = await fixture.read_word("tflite_ties_enabled")
+    output_offset = int(rng.integers(-128, 128)) if ties else -128
     print(
         f"Testing: input {input} filter {filter} stride {stride} "
         f"dilation {dilation} {padding} input_offset {input_offset} "
@@ -138,7 +141,7 @@ async def _run_case(
         ("params_padding_height", pad_h),
         ("params_padding_width", pad_w),
         ("params_input_offset", input_offset),
-        ("params_output_offset", -128),
+        ("params_output_offset", output_offset),
         ("params_activation_min", -128),
         ("params_activation_max", 127),
     ]:
