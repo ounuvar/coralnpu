@@ -1488,18 +1488,13 @@ void ConvPerChannel(const ConvParams &params, const OpDataConvCustom &data,
   TFLITE_DCHECK_NE(filters_per_group, 0);
 
 #ifdef CORALNPU_CONV_TILING
-  // DMA-tiled path (#11), behind --//sw/opt/litert-micro:conv_tiling. Handles pointwise convs
-  // whose tile plan fits; anything else, or a DMA error, continues on the untiled path below.
-  if (filter_height == 1 && filter_width == 1 && groups == 1 && params.stride_width == 1 &&
-      params.stride_height == 1 && params.padding_values.width == 0 &&
-      params.padding_values.height == 0 &&
-      ConvPointwiseTiled(params, output_multiplier, output_shift, input_shape, input_data,
-                         filter_shape, filter_data, bias_data, output_shape, output_data)) {
-    return;
-  }
-  if (filter_height == 3 && filter_width == 3 && groups == 1 &&
-      ConvRowTiled(params, output_multiplier, output_shift, input_shape, input_data, filter_shape,
-                   filter_data, bias_data, output_shape, output_data)) {
+  // DMA-tiled path (#11), behind --//sw/opt/litert-micro:conv_tiling. The tilers decide what they
+  // handle (PlanConvTiled); the plan comes from ConvPrepare, or is made here for a direct call.
+  // Anything not tiled, or a DMA error, continues on the untiled path below.
+  if (ConvTiled(data.tile_plan ? *data.tile_plan
+                               : PlanConvTiled(params, input_shape, filter_shape, output_shape),
+                params, output_multiplier, output_shift, input_shape, input_data, filter_shape,
+                filter_data, bias_data, output_shape, output_data)) {
     return;
   }
 #endif  // CORALNPU_CONV_TILING
@@ -1688,6 +1683,16 @@ void *ConvInit(TfLiteContext *context, const char *buffer, size_t length) {
   return ptr;
 }
 
+#ifdef CORALNPU_CONV_TILING
+// A tensor's shape at Prepare time, for the tile planner.
+static RuntimeShape PrepareShape(const TfLiteTensor *t) {
+  RuntimeShape s(t->dims->size);
+  for (int i = 0; i < t->dims->size; ++i)
+    s.SetDim(i, t->dims->data[i]);
+  return s;
+}
+#endif  // CORALNPU_CONV_TILING
+
 TfLiteStatus ConvPrepare(TfLiteContext *context, TfLiteNode *node) {
   TF_LITE_ENSURE_OK(context, tflite::ConvPrepare(context, node));
 
@@ -1771,6 +1776,21 @@ TfLiteStatus ConvPrepare(TfLiteContext *context, TfLiteNode *node) {
 #if CORALNPU_CONV_ENGINE_SELECT
   TF_LITE_ENSURE_STATUS(PrepareMatrixEngine(context, node, input, filter, data));
 #endif  // CORALNPU_CONV_ENGINE_SELECT
+
+  data->tile_plan = nullptr;
+#ifdef CORALNPU_CONV_TILING
+  // The DMA tile plan (#11) depends only on the shapes and parameters: plan once here, not on
+  // every inference.
+  {
+    auto *plan = static_cast<LayerTilePlan *>(
+        context->AllocatePersistentBuffer(context, sizeof(LayerTilePlan)));
+    TF_LITE_ENSURE(context, plan != nullptr);
+    const auto &builtin = *reinterpret_cast<TfLiteConvParams *>(node->builtin_data);
+    *plan = PlanConvTiled(tflite::ConvParamsQuantized(builtin, *data), PrepareShape(input),
+                          PrepareShape(filter), PrepareShape(output));
+    data->tile_plan = plan;
+  }
+#endif  // CORALNPU_CONV_TILING
 
   micro_context->DeallocateTempTfLiteTensor(input);
   micro_context->DeallocateTempTfLiteTensor(filter);

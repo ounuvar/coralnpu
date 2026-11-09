@@ -273,6 +273,30 @@ TEST(SplitPixels, MergeIsNeverCostlierThanTheDefaultByTheModel) {
   }
 }
 
+// The closed form of SplitCost equals the sum over tiles it replaced (#45 review).
+TEST(SplitPixels, SplitCostEqualsTheSumOverTiles) {
+  const auto loop_cost = [](TileSplit s, int chunk, int in_d) {
+    uint64_t cost = 0;
+    for (int t = 0; t < s.tiles; ++t) {
+      const int np   = t == s.tiles - 1 ? s.last : s.tile;
+      const int next = t + 1 < s.tiles ? (t + 1 == s.tiles - 1 ? s.last : s.tile) : s.tile;
+      cost += TileCost(np, next, chunk, in_d);
+    }
+    return cost;
+  };
+  for (int tiles = 1; tiles <= 40; ++tiles) {
+    for (int tile : {1, 4, 8, 13, 32}) {
+      for (int last : {1, 3, tile, tile + 5}) {
+        for (int in_d : {3, 64, 512}) {
+          const TileSplit s{tile, tiles, last};
+          ASSERT_EQ(SplitCost(s, 32, in_d), loop_cost(s, 32, in_d))
+              << tiles << " " << tile << " " << last << " " << in_d;
+        }
+      }
+    }
+  }
+}
+
 TEST(SplitPixels, ATinyLastTileCostsMoreThanAMergedOne) {
   // 49 pixels as 12 x 4 + 1 against 12 x 3 + 13 (chunk 32, in_d 128).
   EXPECT_GT(SplitCost({12, 5, 1}, 32, 128), SplitCost({12, 4, 13}, 32, 128));

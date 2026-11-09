@@ -213,17 +213,26 @@ constexpr uint64_t TileInputCopyCycles(int pixels, int in_d) {
   return (static_cast<uint64_t>(pixels) * static_cast<uint64_t>(in_d) + 15) / 16 * kBeatCycles;
 }
 
-// Estimated cycles for one chunk with the given split.
+// Estimated cycles for one tile of `np` pixels while the DMA brings in the next tile of `next`
+// pixels: the compute, the part of the copy it does not hide, and a fixed overhead.
+constexpr uint64_t TileCost(int np, int next, int chunk, int in_d) {
+  const uint64_t compute = TileComputeCycles(np, chunk, in_d);
+  const uint64_t copy    = TileInputCopyCycles(next, in_d);
+  return compute + (copy > compute ? copy - compute : 0) + kTileOverhead;
+}
+
+// Estimated cycles for one chunk with the given split: the sum of TileCost over its tiles, where
+// tile t is followed by tile t + 1 (the last tile by a full tile, the next chunk's first). All
+// tiles but the last are equal, so there are only three kinds of term; computed in O(1) instead of
+// once per tile, because the planner evaluates many splits (#45 review).
 constexpr uint64_t SplitCost(TileSplit s, int chunk, int in_d) {
-  uint64_t cost = 0;
-  for (int t = 0; t < s.tiles; ++t) {
-    const int np           = t == s.tiles - 1 ? s.last : s.tile;
-    const int next         = t + 1 < s.tiles ? (t + 1 == s.tiles - 1 ? s.last : s.tile) : s.tile;
-    const uint64_t compute = TileComputeCycles(np, chunk, in_d);
-    const uint64_t copy    = TileInputCopyCycles(next, in_d);
-    cost += compute + (copy > compute ? copy - compute : 0) + kTileOverhead;
-  }
-  return cost;
+  if (s.tiles <= 0)
+    return 0;
+  const uint64_t last = TileCost(s.last, s.tile, chunk, in_d);
+  if (s.tiles == 1)
+    return last;
+  return static_cast<uint64_t>(s.tiles - 2) * TileCost(s.tile, s.tile, chunk, in_d) +
+         TileCost(s.tile, s.last, chunk, in_d) + last;
 }
 
 // The split into tiles whose buffers hold at most `max_tile` pixels. Without `merge`: tiles of

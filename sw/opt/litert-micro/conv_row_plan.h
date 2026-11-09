@@ -164,6 +164,21 @@ constexpr RowPlan PlanRows(const RowGeom &g, uint32_t budget) {
   return p;
 }
 
+// PlanRows, or no plan if `budget` is more than the arena holds (`arena_bytes`).
+constexpr RowPlan PlanRowsInArena(const RowGeom &g, uint32_t budget, uint32_t arena_bytes) {
+  return budget > arena_bytes ? RowPlan{} : PlanRows(g, budget);
+}
+
+// A layer's tile plan: which tiled path runs it, if any, and that path's plan. It depends only on
+// the layer's shapes and parameters and on build-time settings, so ConvPrepare and
+// DepthwiseConvPrepare compute it once and every inference reuses it (#11).
+struct LayerTilePlan {
+  enum Kind : uint8_t { kNone = 0, kPointwise, kRow };
+  Kind kind;
+  ConvTilePlan pointwise;  // kind == kPointwise
+  RowPlan row;             // kind == kRow
+};
+
 }  // namespace coralnpu_v2::opt::litert_micro
 
 #endif  // SW_OPT_LITERT_MICRO_CONV_ROW_PLAN_H_

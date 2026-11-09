@@ -50,13 +50,6 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
                                   const tflite::RuntimeShape &output_shape, int8_t *output_data,
                                   uint32_t budget, ConvTilePlan *plan_out);
 
-// Same with the default budget.
-bool ConvPointwiseTiled(const tflite::ConvParams &params, const int32_t *output_multiplier,
-                        const int32_t *output_shift, const tflite::RuntimeShape &input_shape,
-                        const int8_t *input_data, const tflite::RuntimeShape &filter_shape,
-                        const int8_t *filter_data, const int32_t *bias_data,
-                        const tflite::RuntimeShape &output_shape, int8_t *output_data);
-
 // Runs a spatial conv (filter larger than 1x1, one group, dilation 1; MobileNet's 3x3 stride-2
 // first layer) in tiles of output rows, with the row plan of conv_row_plan.h, and returns true.
 // Returns false without writing the output if the shape is not handled or no plan fits `budget`; on
@@ -69,12 +62,25 @@ bool ConvRowTiledWithBudget(const tflite::ConvParams &params, const int32_t *out
                             const tflite::RuntimeShape &output_shape, int8_t *output_data,
                             uint32_t budget, RowPlan *plan_out);
 
-// Same with the default budget.
-bool ConvRowTiled(const tflite::ConvParams &params, const int32_t *output_multiplier,
-                  const int32_t *output_shift, const tflite::RuntimeShape &input_shape,
-                  const int8_t *input_data, const tflite::RuntimeShape &filter_shape,
-                  const int8_t *filter_data, const int32_t *bias_data,
-                  const tflite::RuntimeShape &output_shape, int8_t *output_data);
+// The tile plan the dispatcher (ConvPerChannel) uses for a layer, with the default budget: the
+// pointwise path if the layer is a pointwise conv whose plan fits, else the row path for a 3x3
+// conv whose plan fits, else none. Depends only on the shapes, the parameters and build settings,
+// so ConvPrepare computes it once per layer.
+LayerTilePlan PlanConvTiled(const tflite::ConvParams &params,
+                            const tflite::RuntimeShape &input_shape,
+                            const tflite::RuntimeShape &filter_shape,
+                            const tflite::RuntimeShape &output_shape);
+
+// Runs the layer with `plan` (from PlanConvTiled for the same shapes and parameters) and returns
+// true, or returns false if the plan is none. On a kernel or DMA error it returns false after the
+// output may have been partly written, with no copy still running; the caller then recomputes
+// the whole layer untiled.
+bool ConvTiled(const LayerTilePlan &plan, const tflite::ConvParams &params,
+               const int32_t *output_multiplier, const int32_t *output_shift,
+               const tflite::RuntimeShape &input_shape, const int8_t *input_data,
+               const tflite::RuntimeShape &filter_shape, const int8_t *filter_data,
+               const int32_t *bias_data, const tflite::RuntimeShape &output_shape,
+               int8_t *output_data);
 
 }  // namespace coralnpu_v2::opt::litert_micro
 

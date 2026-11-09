@@ -25,7 +25,16 @@ void DepthwiseConvPerChannel(const tflite::DepthwiseParams &params,
                              const tflite::RuntimeShape &f_shape, const int8_t *f_data,
                              const tflite::RuntimeShape &bias_shape, const int32_t *bias_data,
                              const tflite::RuntimeShape &out_shape, int8_t *out_data,
-                             int32_t *accs_buf);
+                             int32_t *accs_buf, const LayerTilePlan *tile_plan = nullptr);
+
+// The tile plan DepthwiseConvPerChannel uses with --//sw/opt/litert-micro:conv_tiling (#11), with
+// the default budget: the row path if the layer's plan fits, else none. Depends only on the
+// shapes, the parameters and build settings, so DepthwiseConvPrepare computes it once per layer
+// and passes it as `tile_plan`; without one, DepthwiseConvPerChannel plans on every call.
+LayerTilePlan PlanDepthwiseTiled(const tflite::DepthwiseParams &params,
+                                 const tflite::RuntimeShape &in_shape,
+                                 const tflite::RuntimeShape &f_shape,
+                                 const tflite::RuntimeShape &out_shape);
 
 // Runs the layer in tiles of output rows through the DTCM arena (DMA tiling, #11) and returns true,
 // or returns false without writing the output if the shape is not handled or no plan fits `budget`

@@ -109,24 +109,19 @@ struct RowData {
   const int32_t *shift;
 };
 
-// Plans the layer for `budget` and runs it in tiles of output rows; `kernel(const RowTileArgs&)`
-// computes one tile on the local buffers and returns false on failure. Returns false without
-// writing the output if no plan fits or a tile would have no input rows; returns false after the
-// output may have been partly written if the kernel or a copy fails. Either way no copy is still
-// running when it returns, so the caller can recompute the layer untiled. `plan_out`, if not
-// null, receives the plan.
+// Runs the layer in tiles of output rows with `plan` (from PlanRowsInArena for the same RowGeom);
+// `kernel(const RowTileArgs&)` computes one tile on the local buffers and returns false on
+// failure. Returns false without writing the output if the plan is not tiled or a tile would have
+// no input rows; returns false after the output may have been partly written if the kernel or a
+// copy fails. Either way no copy is still running when it returns, so the caller can recompute the
+// layer untiled.
 //
 // `prepare(const RowPrepareArgs&)` runs once per layer, after the filter is in DTCM and before the
 // first tile, to fill RowGeom::prepared_bytes of prepared filter data; the overload without it is
 // for kernels that need none.
 template <typename Prepare, typename Kernel>
-bool RunRowTiled(const RowGeom &g, const RowData &d, uint32_t budget, RowPlan *plan_out,
-                 Prepare &&prepare, Kernel &&kernel) {
-  if (budget > kTileArenaBytes)
-    return false;
-  const RowPlan plan = PlanRows(g, budget);
-  if (plan_out)
-    *plan_out = plan;
+bool RunRowTiled(const RowGeom &g, const RowData &d, const RowPlan &plan, Prepare &&prepare,
+                 Kernel &&kernel) {
   if (!plan.tiled)
     return false;
   const int rows = plan.rows_per_tile;
@@ -288,9 +283,8 @@ bool RunRowTiled(const RowGeom &g, const RowData &d, uint32_t budget, RowPlan *p
 }
 
 template <typename Kernel>
-bool RunRowTiled(const RowGeom &g, const RowData &d, uint32_t budget, RowPlan *plan_out,
-                 Kernel &&kernel) {
-  return RunRowTiled(g, d, budget, plan_out, [](const RowPrepareArgs &) {}, kernel);
+bool RunRowTiled(const RowGeom &g, const RowData &d, const RowPlan &plan, Kernel &&kernel) {
+  return RunRowTiled(g, d, plan, [](const RowPrepareArgs &) {}, kernel);
 }
 
 }  // namespace coralnpu_v2::opt::litert_micro
