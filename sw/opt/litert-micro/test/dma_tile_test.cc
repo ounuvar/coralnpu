@@ -207,6 +207,32 @@ TEST(CopyChain, CopyAtWaitMovesDataOnlyAtWait) {
   EXPECT_EQ(dst[5], 0x11);
   EXPECT_EQ(dst[63], 0x5C);
 }
+
+// An early return from a tiled kernel must not leave a started chain behind (#45 review):
+// DrainOnExit finishes every started chain when it goes out of scope, and a chain that was never
+// started, or was already waited for, is left alone.
+TEST(CopyChain, DrainOnExitFinishesStartedChainsOnly) {
+  std::vector<uint8_t> src(64, 0x5C), dst(64, 0);
+  Storage sa(1), sb(1), sc(1);
+  CopyChain started, idle, waited;
+  started.Init(sa.get(), 1);
+  idle.Init(sb.get(), 1);
+  waited.Init(sc.get(), 1);
+  EXPECT_TRUE(started.Add(src.data(), dst.data(), 16));
+  EXPECT_TRUE(idle.Add(src.data() + 16, dst.data() + 16, 16));  // never started
+  EXPECT_TRUE(waited.Add(src.data() + 32, dst.data() + 32, 16));
+  waited.Start();
+  EXPECT_TRUE(waited.Wait());
+  dst[32] = 0;  // a second copy would bring 0x5C back
+  {
+    DrainOnExit drain(started, idle, waited);
+    started.Start();
+    EXPECT_EQ(dst[0], 0);  // still pending
+  }
+  EXPECT_EQ(dst[0], 0x5C);  // drained
+  EXPECT_EQ(dst[16], 0);    // not started, not copied
+  EXPECT_EQ(dst[32], 0);    // already waited for, not copied again
+}
 #else
 TEST(CopyChain, CopyAtStartMovesDataAtStart) {
   std::vector<uint8_t> src(64, 0x5C), dst(64, 0);

@@ -112,6 +112,9 @@ bool ConvPointwiseTiledWithBudget(const tflite::ConvParams &params,
   g_prologue.Init(TileArena() + lay.prologue_chain, kPrologueCopies);
   for (int b = 0; b < 2; ++b)
     g_chains[b].Init(TileArena() + lay.chain[b], lay.chain_capacity);
+  // Every return below, including the failures, waits for any started chain first (the
+  // overlapped flush or prefetch may still be running when a later step fails).
+  DrainOnExit drain(g_prologue, g_chains[0], g_chains[1]);
 
   uint8_t *const base                         = TileArena();
   const Raw raws[2]                           = {{reinterpret_cast<int8_t *>(base + lay.filter),

@@ -103,8 +103,9 @@ struct RowData {
 // Plans the layer for `budget` and runs it in tiles of output rows; `kernel(const RowTileArgs&)`
 // computes one tile on the local buffers and returns false on failure. Returns false without
 // writing the output if no plan fits or a tile would have no input rows; returns false after the
-// output may have been partly written if the kernel or a copy fails (the caller then recomputes the
-// layer untiled). `plan_out`, if not null, receives the plan.
+// output may have been partly written if the kernel or a copy fails. Either way no copy is still
+// running when it returns, so the caller can recompute the layer untiled. `plan_out`, if not
+// null, receives the plan.
 template <typename Kernel>
 bool RunRowTiled(const RowGeom &g, const RowData &d, uint32_t budget, RowPlan *plan_out,
                  Kernel &&kernel) {
@@ -128,6 +129,8 @@ bool RunRowTiled(const RowGeom &g, const RowData &d, uint32_t budget, RowPlan *p
   uint8_t *const base = TileArena();
   CopyChain c;
   c.Init(base + l.chain, kRowChainCopies);
+  // Every return below, including the failures, waits for a started chain first.
+  DrainOnExit drain(c);
   int8_t *const filter       = reinterpret_cast<int8_t *>(base + l.filter);
   int32_t *const bias        = reinterpret_cast<int32_t *>(base + l.bias);
   int32_t *const multiplier  = reinterpret_cast<int32_t *>(base + l.multiplier);
