@@ -39,21 +39,6 @@ constexpr uint32_t kArenaBytes = kTileArenaBytes;
 CopyChain g_prologue;
 CopyChain g_chains[2];
 
-#ifdef CORALNPU_TILING_STATS
-inline uint32_t Cycles() {
-  uint32_t v;
-  asm volatile("csrr %0, mcycle" : "=r"(v));
-  return v;
-}
-#define STAT_START(t)      const uint32_t t = Cycles()
-#define STAT_ADD(field, t) TileStats().field += Cycles() - (t)
-#define STAT_COUNT(field)  ++TileStats().field
-#else
-#define STAT_START(t)
-#define STAT_ADD(field, t)
-#define STAT_COUNT(field)
-#endif
-
 // The per-chunk raw buffers: filter rows, bias, multipliers and shifts of one chunk.
 struct Raw {
   int8_t *filter;
@@ -176,7 +161,7 @@ bool RunPointwise(const ConvTilePlan &plan, const tflite::ConvParams &params,
   bool prefetched = false;  // raw set rs (and, double buffered, the first input tile) are in place
   bool flush_pending = false;  // the last tile's output copy of the previous chunk is still running
   for (int n0 = 0; n0 < out_d; n0 += chunk) {
-    STAT_COUNT(chunks);
+    RT_STAT_COUNT(chunks);
     const int cn             = std::min(chunk, out_d - n0);
     const Raw &r             = raws[rs];
     const bool more_chunks   = n0 + chunk < out_d;
@@ -186,46 +171,46 @@ bool RunPointwise(const ConvTilePlan &plan, const tflite::ConvParams &params,
     // The chunk's filter rows are contiguous in the OHWI filter, so one copy brings them in. The
     // first input tile comes with them, unless the previous chunk already prefetched it.
     if (!prefetched) {
-      STAT_START(t0);
+      RT_STAT_START(t0);
       g_prologue.Clear();
       ok &= add_raw(g_prologue, n0, r);
       ok &= g_prologue.Add(input_data, in_tile[buf0], static_cast<uint32_t>(np0) * in_d);
       if (!ok || !g_prologue.Run())
         return false;
-      STAT_ADD(prologue, t0);
+      RT_STAT_ADD(prologue, t0);
     } else if (buffers == 1) {
       // The raw buffers were prefetched; the first input tile was not (no spare buffer).
-      STAT_START(t0);
+      RT_STAT_START(t0);
       g_prologue.Clear();
       ok &= g_prologue.Add(input_data, in_tile[buf0], static_cast<uint32_t>(np0) * in_d);
       if (!ok || !g_prologue.Run())
         return false;
-      STAT_ADD(prologue, t0);
+      RT_STAT_ADD(prologue, t0);
     }
     prefetched = false;
 
     {
-      STAT_START(t0);
+      RT_STAT_START(t0);
       PrepareShiftParams(shift_left, shift_right, r.shift, cn);
 #if CORALNPU_RVV_CONV
       Conv1x1Prepare(params, in_d, cn, r.filter, bias_data ? r.bias : nullptr, weights16,
                      bias_folded);
 #endif
-      STAT_ADD(prepare, t0);
+      RT_STAT_ADD(prepare, t0);
     }
 
     // The previous chunk's output flush, started without waiting, must be done before this chunk
     // builds or starts any copy chain (chain 0 is shared, and the DMA runs one transfer at a time).
     if (flush_pending) {
-      STAT_START(tw);
+      RT_STAT_START(tw);
       if (!g_chains[0].Wait())
         return false;
-      STAT_ADD(blocking_copy, tw);
+      RT_STAT_ADD(blocking_copy, tw);
       flush_pending = false;
     }
 
     const auto compute = [&](int buf, int np) {
-      STAT_START(t0);
+      RT_STAT_START(t0);
 #if CORALNPU_RVV_CONV
       Conv1x1Run(params, r.mult, shift_left, shift_right, in_d, cn, np, in_tile[buf], weights16,
                  bias_folded, accs, out_tile[buf]);
@@ -239,8 +224,8 @@ bool RunPointwise(const ConvTilePlan &plan, const tflite::ConvParams &params,
           tflite::RuntimeShape(4, flt_dims), r.filter, tflite::RuntimeShape(1, bias_dims),
           bias_data ? r.bias : nullptr, tflite::RuntimeShape(4, out_dims), out_tile[buf]);
 #endif
-      STAT_ADD(compute, t0);
-      STAT_COUNT(tiles);
+      RT_STAT_ADD(compute, t0);
+      RT_STAT_COUNT(tiles);
     };
 
     // Writes tile t's output (in out_tile[buf]) back: one copy if the tile holds every channel,
@@ -264,7 +249,7 @@ bool RunPointwise(const ConvTilePlan &plan, const tflite::ConvParams &params,
         const int buf = buf0 ^ (t & 1);
         last_buf      = buf;
         CopyChain &c  = g_chains[t & 1];
-        STAT_START(tb);
+        RT_STAT_START(tb);
         c.Clear();
         if (t > 0)
           ok &= add_output(c, t - 1, buf ^ 1);
@@ -280,23 +265,23 @@ bool RunPointwise(const ConvTilePlan &plan, const tflite::ConvParams &params,
           if (t + 1 == tiles)
             ok &= c.Add(input_data, in_tile[buf ^ 1], static_cast<uint32_t>(np0) * in_d);
         }
-        STAT_ADD(build, tb);
+        RT_STAT_ADD(build, tb);
         if (!ok)
           return false;
         c.Start();
         compute(buf, pixels_in_tile(t));
-        STAT_START(t1);
+        RT_STAT_START(t1);
         if (!c.Wait())
           return false;
-        STAT_ADD(wait, t1);
+        RT_STAT_ADD(wait, t1);
       }
-      STAT_START(t2);
+      RT_STAT_START(t2);
       CopyChain &last = g_chains[0];
       {
-        STAT_START(tb);
+        RT_STAT_START(tb);
         last.Clear();
         ok &= add_output(last, tiles - 1, last_buf);
-        STAT_ADD(build, tb);
+        RT_STAT_ADD(build, tb);
       }
       if (!ok)
         return false;
@@ -307,19 +292,19 @@ bool RunPointwise(const ConvTilePlan &plan, const tflite::ConvParams &params,
       } else if (!last.Run()) {
         return false;
       }
-      STAT_ADD(blocking_copy, t2);
+      RT_STAT_ADD(blocking_copy, t2);
       buf0 = last_buf ^ 1;  // the next chunk's first tile uses the spare buffer
     } else {
       CopyChain &c = g_chains[0];
       for (int t = 0; t < tiles; ++t) {
         c.Clear();
         if (t > 0) {
-          STAT_START(t1);
+          RT_STAT_START(t1);
           ok &= c.Add(input_data + static_cast<size_t>(tile_start(t)) * in_d, in_tile[0],
                       static_cast<uint32_t>(pixels_in_tile(t)) * in_d);
           if (!ok || !c.Run())
             return false;
-          STAT_ADD(blocking_copy, t1);
+          RT_STAT_ADD(blocking_copy, t1);
           c.Clear();
         }
         // The DMA prefetches the next chunk's raw buffers: during the last tile, or spread over
@@ -327,33 +312,33 @@ bool RunPointwise(const ConvTilePlan &plan, const tflite::ConvParams &params,
         const bool prefetch_now = prefetch_next && (kSpreadDefault || t == tiles - 1);
         CopyChain &pf           = g_chains[1];
         if (prefetch_now) {
-          STAT_START(tb);
+          RT_STAT_START(tb);
           pf.Clear();
           if (kSpreadDefault)
             ok &= add_raw_part(pf, n0 + chunk, raws[rs ^ 1], t, tiles);
           else
             ok &= add_raw(pf, n0 + chunk, raws[rs ^ 1]);
-          STAT_ADD(build, tb);
+          RT_STAT_ADD(build, tb);
           if (!ok)
             return false;
           pf.Start();
         }
         compute(0, pixels_in_tile(t));
         if (prefetch_now) {
-          STAT_START(t3);
+          RT_STAT_START(t3);
           if (!pf.Wait())
             return false;
-          STAT_ADD(wait, t3);
+          RT_STAT_ADD(wait, t3);
         }
         {
-          STAT_START(tb);
+          RT_STAT_START(tb);
           ok &= add_output(c, t, 0);
-          STAT_ADD(build, tb);
+          RT_STAT_ADD(build, tb);
         }
-        STAT_START(t2);
+        RT_STAT_START(t2);
         if (!ok || !c.Run())
           return false;
-        STAT_ADD(blocking_copy, t2);
+        RT_STAT_ADD(blocking_copy, t2);
       }
     }
     if (prefetch_next) {
