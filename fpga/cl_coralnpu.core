@@ -53,6 +53,12 @@ filesets:
       - f2/tb/cl_coralnpu_core_tb.sv
     file_type: systemVerilogSource
 
+  # Host socket for f2_loader --sim_socket (#15), called from the testbench through DPI.
+  files_tb_cpp:
+    files:
+      - f2/tb/f2_host_socket.cc
+    file_type: cppSource
+
   files_constraints:
     files:
       - clocks_f2.xdc
@@ -154,6 +160,7 @@ targets:
       - files_rtl
       - files_clkgen_sim
       - files_tb
+      - files_tb_cpp
     toplevel: cl_coralnpu_core_tb
     default_tool: verilator
     parameters:

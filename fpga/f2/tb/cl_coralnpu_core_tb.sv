@@ -24,6 +24,8 @@
 //   +timeout_us=<n>     simulated time limit for the program to halt (default 20000)
 //   +expect=<string>    text the console must contain (default PASS)
 //   +ddr_check=1        also check the DDR pattern written by fpga/sw/f2_smoke_test.c
+//   +host_socket=<path> instead of the test above, serve OCL accesses from f2_loader
+//                       --sim_socket=<path> until it ends the session (#15)
 module cl_coralnpu_core_tb #(
     parameter int ClockFrequencyMhz = 50,
     parameter int ItcmSizeKBytes = 1024,
@@ -200,6 +202,66 @@ module cl_coralnpu_core_tb #(
   `define F2_ERROR(msg) fail(msg)
   `include "f2_host_tasks.svh"
 
+  // -------------------------------------------------------------------------------------------
+  // Host socket (#15): with +host_socket=<path>, the testbench serves OCL requests from
+  // f2_loader --sim_socket=<path> (sw/utils/f2_loader) instead of running its own test, so
+  // the host software runs against this RTL. Ops as in sw/utils/f2_loader/ocl_socket.h.
+  // -------------------------------------------------------------------------------------------
+  import "DPI-C" function int f2_host_socket_open(input string path);
+  import "DPI-C" function int f2_host_socket_next(
+    output int unsigned op,
+    output int unsigned offset,
+    output int unsigned data
+  );
+  import "DPI-C" function void f2_host_socket_reply(input int unsigned data);
+  import "DPI-C" function void f2_host_socket_close();
+
+  localparam int unsigned HostOpRead = 1;
+  localparam int unsigned HostOpWrite = 2;
+  localparam int unsigned HostOpWait = 3;  // data = clk_main_a0 cycles
+  localparam int unsigned HostOpDone = 4;
+
+  task automatic serve_host(input string path);
+    int unsigned op, offset, data, requests;
+    logic [31:0] v;
+    if (f2_host_socket_open(path) != 0) begin
+      fail($sformatf("cannot open host socket %s", path));
+      return;
+    end
+    $display("[tb] host connected on %s", path);
+    requests = 0;
+    while (f2_host_socket_next(
+        op, offset, data
+    ) == 0) begin
+      requests++;
+      case (op)
+        HostOpRead: begin
+          ocl_read(offset, v);
+          f2_host_socket_reply(v);
+        end
+        HostOpWrite: begin
+          ocl_write(offset, data);
+          f2_host_socket_reply(0);
+        end
+        HostOpWait: begin
+          repeat (data) @(posedge clk);
+          f2_host_socket_reply(0);
+        end
+        HostOpDone: begin
+          f2_host_socket_reply(0);
+          break;
+        end
+        default: begin
+          fail($sformatf("host socket: unknown op %0d", op));
+          f2_host_socket_reply(32'hDEAD_BEEF);
+        end
+      endcase
+    end
+    if (op != HostOpDone) fail("host disconnected without finishing the session");
+    f2_host_socket_close();
+    $display("[tb] host session ended after %0d requests at %0t", requests, $time);
+  endtask
+
   // Expected DDR contents written by fpga/sw/f2_smoke_test.c.
   function automatic logic [31:0] pattern(int i);
     return 32'hA500_0000 ^ (32'(i) * 32'h0101_0101);
@@ -209,7 +271,7 @@ module cl_coralnpu_core_tb #(
   // Test.
   // -------------------------------------------------------------------------------------------
   initial begin
-    string image, expect_text, console;
+    string image, expect_text, console, host_socket;
     int timeout_us, ddr_check;
     logic [31:0] v, status, result, entry, result_addr;
     logic [127:0] line;
@@ -229,6 +291,13 @@ module cl_coralnpu_core_tb #(
     if (v != F2IdValue) fail($sformatf("ID 0x%08h", v));
     ocl_read(F2RegSpiCmdFree, v);
     $display("[tb] OCL up, ID ok, %0d free SPI command entries", v);
+
+    if ($value$plusargs("host_socket=%s", host_socket)) begin
+      serve_host(host_socket);
+      if (errors == 0) $display("[tb] HOST SESSION PASSED");
+      else $display("[tb] HOST SESSION FAILED: %0d error(s)", errors);
+      $finish;
+    end
 
     ocl_write(F2RegSpiHalf, 3);  // 41.7 MHz SCLK keeps the simulation short
     ocl_write(F2RegSpiCsb, 1);

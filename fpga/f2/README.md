@@ -1,6 +1,6 @@
 # CoralNPU on AWS F2
 
-This directory holds the custom logic (CL) that puts the CoralNPU SoC on an AWS F2 card (VU47P). It wraps `chip_f2` (`fpga/rtl/chip_f2.sv`, #13) with what the AWS shell needs: the host interface, external memory, clocks and reset (#14). The host software that loads programs and reads results is #15.
+This directory holds the custom logic (CL) that puts the CoralNPU SoC on an AWS F2 card (VU47P). It wraps `chip_f2` (`fpga/rtl/chip_f2.sv`, #13) with what the AWS shell needs: the host interface, external memory, clocks and reset (#14). The host software that loads programs and reads results is `f2_loader` (`sw/utils/f2_loader`, #15).
 
 ## Structure
 
@@ -58,12 +58,36 @@ The steps match the upstream cocotb SPI test (`tests/cocotb/tlul/test_subsystem.
 4. Start the core through its CSRs, which are at `0x0020_0000` in the highmem configuration: write the entry point to `0x0020_0004`, then 1 and then 0 to `0x0020_0000`. SPI writes are whole 16-byte lines, so read, modify and write the line.
 5. Poll `STATUS[0]` (halted) and `STATUS[1]` (fault). Read the console from `UART_RXDATA`, and read results from memory over SPI.
 
+## Host software: `f2_loader`
+
+`//sw/utils/f2_loader` implements the steps above. It has the same flags and order of operations as the upstream `//sw/utils/nexus_loader`, so scripts written for one can drive the other:
+
+```bash
+sudo f2_loader --slot=0 --load_elf=prog.elf --verify --start_core --poll_halt=10 --console
+sudo f2_loader --slot=0 --read_data_addr=0x80000000 --read_data_size=4096 > out.bin
+```
+
+- **Where the CL is:** `--slot=N` (the Nth F2 FPGA), `--pci_bdf=0000:34:00.0`, or `--sim_socket=<path>` for the local testbench. On F2 it maps BAR0 of the application PF through sysfs (`/sys/bus/pci/devices/<BDF>/resource0`), the mapping the aws-fpga SDK's `fpga_pci_attach` makes, so it needs no SDK. It needs root and a loaded AFI (`fpga-load-local-image`).
+- **Differences from `nexus_loader`:**
+  - The CSR base defaults to highmem (`0x200000`), which every F2 build is.
+  - `--start_core` without `--set_entry_point` uses the ELF's entry point.
+  - Halt and fault come from `STATUS` rather than over SPI, and a fault ends `--poll_halt` with an error.
+  - `--soft_reset` holds the SoC in reset through `CTRL[0]`.
+  - There is no `--reset`: reloading the AFI is `fpga-load-local-image`.
+  - `--console` prints the UART console as `CONSOLE:` lines once it stops growing.
+  - `--spi_half` sets the SPI clock.
+- **No stalled OCL access:** the loader reads `SPI_CMDFREE` before writing queued registers, so it never writes into a full command queue. A full queue would stall the OCL write until the shell times it out.
+
 ## Local testbench
 
 `tb/cl_coralnpu_core_tb.sv` runs `cl_coralnpu_core` in Verilator with a behavioral clock generator (Verilator cannot simulate the MMCM) and a 512-bit DDR model. It plays the host over OCL only. It loads `fpga/sw/f2_smoke_test.c` over SPI, runs it, and checks the console, the result word, and DDR in both 256-bit halves of a beat, through the SoC and directly in the model. Then it checks the soft reset.
 
+With `+host_socket=<path>`, the testbench instead serves OCL accesses from `f2_loader --sim_socket=<path>` over a Unix socket (`tb/f2_host_socket.cc`). Simulated time stops between requests, and the loader's sleeps become waits of simulated `clk_main_a0` cycles. `cl_coralnpu_tb_{vector,matrix}_loader_test` uses this to run the loader on the RTL: it loads the smoke test with read-back, runs it, and checks the console, the result word and the first DDR line.
+
 ```bash
-bazel test //fpga:cl_coralnpu_tb_vector_test   # or _matrix; builds the simulator first
+bazel test //fpga:cl_coralnpu_tb_vector_test          # or _matrix; builds the simulator first
+bazel test //fpga:cl_coralnpu_tb_vector_loader_test   # f2_loader against the testbench
+bazel test //sw/utils/f2_loader:all                   # f2_loader unit tests
 ```
 
 The test is tagged manual. Building the simulator takes several minutes.
@@ -111,4 +135,4 @@ The HDK needs Vivado 2024.1 or newer, so this part runs on the AWS instance, not
 
 - These HDK steps have not been run: they need the AWS instance (#16, #17).
 - JTAG debug is held in reset. The F2 shell's virtual JTAG could drive it later.
-- The host software (#15) is not written yet; the register map and the steps above are its interface.
+- `f2_loader` has run only against the local testbench; its F2 backend runs on the AWS instance (#16, #17).

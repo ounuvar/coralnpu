@@ -1,0 +1,81 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Host loader for the CoralNPU custom logic on AWS F2 (#15): the F2
+# counterpart of //sw/utils/nexus_loader.
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "f2_host",
+    srcs = ["f2_host.cc"],
+    hdrs = [
+        "f2_host.h",
+        "f2_regs.h",
+        "ocl.h",
+    ],
+)
+
+cc_library(
+    name = "elf_image",
+    srcs = ["elf_image.cc"],
+    hdrs = ["elf_image.h"],
+)
+
+cc_library(
+    name = "ocl_backends",
+    srcs = [
+        "ocl_pci.cc",
+        "ocl_socket.cc",
+    ],
+    hdrs = [
+        "ocl_pci.h",
+        "ocl_socket.h",
+    ],
+    deps = [":f2_host"],
+)
+
+# f2_loader --slot=0 (F2, as root) or --sim_socket=<path> (the local testbench,
+# fpga/f2/tb with +host_socket=<path>). Flags as in //sw/utils/nexus_loader.
+cc_binary(
+    name = "f2_loader",
+    srcs = ["main.cc"],
+    deps = [
+        ":elf_image",
+        ":f2_host",
+        ":ocl_backends",
+        "@com_google_absl//absl/flags:flag",
+        "@com_google_absl//absl/flags:parse",
+        "@com_google_absl//absl/flags:usage",
+    ],
+)
+
+cc_test(
+    name = "f2_host_test",
+    srcs = ["f2_host_test.cc"],
+    deps = [
+        ":f2_host",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "loader_parts_test",
+    srcs = ["loader_parts_test.cc"],
+    deps = [
+        ":elf_image",
+        ":ocl_backends",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
