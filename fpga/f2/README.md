@@ -112,7 +112,9 @@ The test is tagged manual. Building the simulator takes several minutes.
 
 ## Connecting to the AWS instance
 
-The F2 instance runs on EC2 and is reached over SSH with the team's key pair (`mlxlo-team-5.pem`). Each person keeps the key in their own location. Never commit it.
+The team's EC2 instance is reached over SSH with the team's key pair (`mlxlo-team-5.pem`). Each person keeps the key in their own location. Never commit it.
+
+The instance is a build machine, not an F2 instance: an m7a.2xlarge with the AWS FPGA Developer AMI (Ubuntu 24.04, Vivado 2025.2), and no FPGA attached. It can package, simulate and build the CL and create an AFI, but loading and running an AFI needs an F2 instance. The AWS user on it is `mlxlo-team-5`, which may create AFIs in `us-east-1`.
 
 1. Restrict the key's permissions once, or SSH refuses to use it:
 
@@ -122,10 +124,10 @@ The F2 instance runs on EC2 and is reached over SSH with the team's key pair (`m
 
 2. Look up the instance's current public DNS name before every session. It changes each time the instance is stopped and started, so an old name will not work. In the EC2 console, open Instances, select the instance and copy "Public IPv4 DNS", for example `ec2-34-201-23-195.compute-1.amazonaws.com`. Use the host name only, without `https://`.
 
-3. Connect. The login user is `mlxlo-team-5` for everyone:
+3. Connect. The login user is `ubuntu`, as on every FPGA Developer AMI (`mlxlo-team-5` is the AWS user and key pair, not a login):
 
    ```bash
-   ssh -i /path/to/mlxlo-team-5.pem mlxlo-team-5@<public-dns>
+   ssh -i /path/to/mlxlo-team-5.pem ubuntu@<public-dns>
    ```
 
 ## Building and simulating on AWS
