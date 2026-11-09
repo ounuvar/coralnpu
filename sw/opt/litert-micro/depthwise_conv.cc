@@ -429,10 +429,10 @@ static void DepthwiseConvPerChannelUntiled(
   // output rows than the filter is tall. Clamped so that no section starts before the previous
   // one ends. The untiled call keeps the upstream bounds, so the default build is unchanged.
   if (pre_left != nullptr) {
-    out_y_bottom = std::clamp(CenterEnd(in_shape.Dims(1), pad_h, f_h, dilation_h, stride_h),
-                              out_y_top, out_h);
-    out_x_right  = std::clamp(CenterEnd(in_shape.Dims(2), pad_w, f_w, dilation_w, stride_w),
-                              out_x_left, out_w);
+    out_y_bottom =
+        std::clamp(CenterEnd(in_shape.Dims(1), pad_h, f_h, dilation_h, stride_h), out_y_top, out_h);
+    out_x_right = std::clamp(CenterEnd(in_shape.Dims(2), pad_w, f_w, dilation_w, stride_w),
+                             out_x_left, out_w);
   }
 
   // Top

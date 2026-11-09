@@ -149,10 +149,10 @@ bool RunRowTiled(const RowGeom &g, const RowData &d, const RowPlan &plan, Prepar
                                    ? reinterpret_cast<int32_t *>(base + l.scratch)
                                    : nullptr;
   void *const prepared       = g.prepared_bytes > 0 ? base + l.prepared : nullptr;
-  int8_t *const in_buf[2]  = {reinterpret_cast<int8_t *>(base + l.in[0]),
-                              reinterpret_cast<int8_t *>(base + l.in[1])};
-  int8_t *const out_buf[2] = {reinterpret_cast<int8_t *>(base + l.out[0]),
-                              reinterpret_cast<int8_t *>(base + l.out[1])};
+  int8_t *const in_buf[2]    = {reinterpret_cast<int8_t *>(base + l.in[0]),
+                                reinterpret_cast<int8_t *>(base + l.in[1])};
+  int8_t *const out_buf[2]   = {reinterpret_cast<int8_t *>(base + l.out[0]),
+                                reinterpret_cast<int8_t *>(base + l.out[1])};
 
   const int64_t in_row_bytes  = static_cast<int64_t>(g.in_w) * g.in_d;
   const int64_t out_row_bytes = static_cast<int64_t>(g.out_w) * g.out_d;
