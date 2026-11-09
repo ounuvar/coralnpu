@@ -44,13 +44,12 @@ async def run_tiled_vs_tflite_test(fixture):
     await fixture.run_to_halt(timeout_cycles=4_000_000_000)
 
     v = {s: await fixture.read_word(s) for s in _SCALARS}
-    a = {
-        s: [
+    a = {}
+    for s in _ARRAYS:
+        a[s] = [
             await fixture.read_word(s, offset=4 * k)
             for k in range(len(_KINDS))
         ]
-        for s in _ARRAYS
-    }
     rvv = v["rvv_kernel"] == 1
     print(
         f"tiled_vs_tflite_test: conv kernel={'rvv' if rvv else 'reference'} "
