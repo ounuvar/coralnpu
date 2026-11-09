@@ -130,7 +130,9 @@ def main():
     sources, include_dirs, defines, generics = parse_project(args.project_tcl)
     top = "cl_coralnpu"
 
-    with tarfile.open(args.out, "w:gz") as tar:
+    # Bazel and FuseSoC stage sources as symlinks into the local cache; store the
+    # files themselves so the package unpacks on another machine.
+    with tarfile.open(args.out, "w:gz", dereference=True) as tar:
         # SoC sources and the include directories, as staged by FuseSoC.
         staged = set(sources)
         for d in include_dirs:
