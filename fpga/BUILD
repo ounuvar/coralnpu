@@ -18,6 +18,7 @@ load("@coralnpu_hw//third_party/python:requirements.bzl", "requirement")
 load("@internal_check//:status.bzl", internal_exists = "FOLDER_EXISTS")
 load("@lowrisc_opentitan_gh//rules:fusesoc.bzl", "fusesoc_build")
 load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
+load("//rules:coralflow_test.bzl", "coralflow_test")
 load("//rules:coralnpu_v2.bzl", "coralnpu_v2_binary")
 load("//rules:coralnpu_v2_sim_test.bzl", "coralnpu_v2_sim_test")
 load("//rules:utils.bzl", "cc_embed_data", "template_rule")
@@ -955,6 +956,67 @@ genrule(
     outs = ["f2_smoke_test.f2img"],
     cmd = "$(location :elf_to_f2_image) $< $@ --symbol f2_result",
     tools = [":elf_to_f2_image"],
+)
+
+# Full MobileNet on F2 (#16): timed with the optimized kernels, then every conv and depthwise layer
+# checked against TFLite's reference kernel, in one run. Results in f2_mnet (f2/f2_mobilenet.py).
+coralnpu_v2_binary(
+    name = "f2_mobilenet",
+    srcs = ["sw/f2_mobilenet.cc"],
+    dtcm_size_kbytes = 1024,
+    itcm_size_kbytes = 1024,
+    deps = [
+        ":uart",
+        "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:depthwise_conv",
+        "//sw/utils",
+        "//tests/cocotb/tutorial/tfmicro:mobilenet_v1_025_224_int8_dummy_lib",
+        "@tflite_micro//tensorflow/lite/micro:micro_framework",
+        "@tflite_micro//tensorflow/lite/micro:op_resolvers",
+    ],
+)
+
+py_library(
+    name = "f2_mobilenet_results",
+    srcs = ["f2/f2_mobilenet.py"],
+    imports = ["f2"],
+)
+
+py_binary(
+    name = "f2_mobilenet_report",
+    srcs = ["f2/f2_mobilenet.py"],
+    main = "f2/f2_mobilenet.py",
+)
+
+# On F2: sudo bazel-bin/fpga/run_f2_mobilenet --slot=0 --out_dir=<dir> (f2/README.md).
+py_binary(
+    name = "run_f2_mobilenet",
+    srcs = ["f2/run_f2_mobilenet.py"],
+    data = [
+        ":f2_mobilenet.elf",
+        "//sw/utils/f2_loader",
+    ],
+    main = "f2/run_f2_mobilenet.py",
+    deps = [
+        ":f2_mobilenet_results",
+        "@bazel_tools//tools/python/runfiles",
+        requirement("pyelftools"),
+    ],
+)
+
+coralflow_test(
+    name = "f2_mobilenet_test",
+    srcs = ["f2/f2_mobilenet_test.py"],
+    elf = ":f2_mobilenet.elf",
+    highmem = True,
+    main = "f2/f2_mobilenet_test.py",
+    tags = ["manual"],
+    targets = ["npusim"],
+    deps = [
+        ":f2_mobilenet_results",
+        "@bazel_tools//tools/python/runfiles",
+        requirement("numpy"),
+    ],
 )
 
 [
