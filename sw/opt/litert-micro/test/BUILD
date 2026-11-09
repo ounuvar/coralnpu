@@ -195,6 +195,65 @@ coralflow_test(
 
 # Row-tiled versus untiled depthwise conv (#11), on npusim with the memcpy copy path: copies at
 # Start (default) or at Wait (the depthwise_conv_wait library).
+# Full MobileNet against TFLite (#11): every conv and depthwise layer of the interpreter run is
+# compared with TFLite's reference kernel on the same input. With --//sw/opt/litert-micro:conv_tiling
+# the optimized layers are DMA-tiled; the output checksum then matches the build without it.
+coralnpu_v2_binary(
+    name = "mobilenet_vs_tflite_test",
+    srcs = ["mobilenet_vs_tflite_test.cc"],
+    dtcm_size_kbytes = 1024,
+    itcm_size_kbytes = 1024,
+    deps = [
+        "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:depthwise_conv",
+        "//sw/utils",
+        "//tests/cocotb/tutorial/tfmicro:mobilenet_v1_025_224_int8_dummy_lib",
+        "@tflite_micro//tensorflow/lite/micro:micro_framework",
+        "@tflite_micro//tensorflow/lite/micro:op_resolvers",
+    ],
+)
+
+coralflow_test(
+    name = "mobilenet_vs_tflite_test",
+    srcs = ["mobilenet_vs_tflite_test.py"],
+    elf = ":mobilenet_vs_tflite_test.elf",
+    highmem = True,
+    main = "mobilenet_vs_tflite_test.py",
+    tags = ["manual"],
+    targets = ["npusim"],
+    deps = [
+        "@bazel_tools//tools/python/runfiles",
+    ],
+)
+
+# The tiled paths against TFLite (#11): pointwise, 3x3 row and depthwise tiles at several budgets,
+# every byte equal to TFLite's value except #23 rounding ties. Run with and without
+# --//sw/opt/litert-micro:rvv_conv; without it the conv tiles must match TFLite exactly.
+coralnpu_v2_binary(
+    name = "tiled_vs_tflite_test",
+    srcs = ["tiled_vs_tflite_test.cc"],
+    dtcm_size_kbytes = 1024,
+    itcm_size_kbytes = 1024,
+    deps = [
+        "//sw/opt/litert-micro:conv",
+        "//sw/opt/litert-micro:depthwise_conv",
+        "//sw/opt/litert-micro:requant_ref",
+        "@tflite_micro//tensorflow/lite/kernels/internal:reference_base",
+    ],
+)
+
+coralflow_test(
+    name = "tiled_vs_tflite_sim_test",
+    srcs = ["tiled_vs_tflite_test.py"],
+    elf = ":tiled_vs_tflite_test.elf",
+    highmem = True,
+    main = "tiled_vs_tflite_test.py",
+    targets = ["npusim"],
+    deps = [
+        "@bazel_tools//tools/python/runfiles",
+    ],
+)
+
 [
     coralnpu_v2_binary(
         name = "depthwise_row_tiled_test" + variant,
