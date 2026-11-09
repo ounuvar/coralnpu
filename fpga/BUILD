@@ -848,7 +848,10 @@ _CL_CORALNPU_NAME_MAP = {
             ["//hdl/verilog:sram_backdoor.core"] if build_type == "tb" else []
         ),
         "srcs": CL_CORALNPU_SRCS + [c["chisel_rtl"]] + (
-            ["//hdl/verilog:dpi_files"] if build_type == "tb" else []
+            [
+                "//hdl/verilog:dpi_files",
+                "f2/tb/f2_host_socket.cc",
+            ] if build_type == "tb" else []
         ),
         "flags": [
             "--ClockFrequencyMhz=" + _F2_CLOCK_FREQUENCY_MHZ,
@@ -969,6 +972,30 @@ genrule(
         ],
         main = "f2/tb/run_cl_coralnpu_tb.py",
         tags = ["manual"],
+    )
+    for c in _NEXUS_CONFIGS
+]
+
+# The F2 host loader (#15) against the same testbench: the testbench serves
+# f2_loader's OCL accesses over a socket (+host_socket).
+[
+    py_test(
+        name = "cl_coralnpu_tb" + c["suffix"] + "_loader_test",
+        size = "large",
+        srcs = ["f2/tb/run_f2_loader_tb.py"],
+        args = [
+            "$(location :build_cl_coralnpu_tb" + c["suffix"] + ")",
+            "$(location //sw/utils/f2_loader)",
+            "$(location :f2_smoke_test.elf)",
+        ],
+        data = [
+            ":build_cl_coralnpu_tb" + c["suffix"],
+            ":f2_smoke_test.elf",
+            "//sw/utils/f2_loader",
+        ],
+        main = "f2/tb/run_f2_loader_tb.py",
+        tags = ["manual"],
+        deps = [requirement("pyelftools")],
     )
     for c in _NEXUS_CONFIGS
 ]
