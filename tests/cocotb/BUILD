@@ -158,6 +158,37 @@ verilator_cocotb_model(
     ],
 )
 
+# Idea 2 (#9): RVV core with the fused requantization instructions.
+verilator_cocotb_model(
+    name = "rvv_core_mini_requant_axi_model",
+    cflags = VERILATOR_BUILD_ARGS + [
+        "-DREQUANT_ON",
+    ],
+    hdl_toplevel = "RvvCoreMiniRequantAxi",
+    trace = False,
+    verilog_source = "//hdl/chisel/src/coralnpu:RvvCoreMiniRequantAxi.sv",
+    vlt_tpl = "//coralnpu_test_utils:dispatch.vlt.tpl",
+    deps = [
+        "//hdl/verilog:sram_backdoor",
+    ],
+)
+
+# Idea 2 with the matrix engine and 1 MB memories (#9, #12).
+verilator_cocotb_model(
+    name = "vme_core_mini_requant_highmem_axi_model",
+    cflags = VERILATOR_BUILD_ARGS + [
+        "-DZVT_ON",
+        "-DZVTBF16FMM_ON",
+        "-DREQUANT_ON",
+    ],
+    hdl_toplevel = "VmeCoreMiniRequantHighmemAxi",
+    trace = False,
+    verilog_source = "//hdl/chisel/src/coralnpu:VmeCoreMiniRequantHighmemAxi.sv",
+    deps = [
+        "//hdl/verilog:sram_backdoor",
+    ],
+)
+
 vcs_cocotb_model(
     name = "core_mini_axi_vcs_model",
     build_args = VCS_BUILD_ARGS,
@@ -857,6 +888,26 @@ coralflow_test(
         "verilator",
     ],
     verilator_model = ":rvv_core_mini_axi_openroad_arithmetic_model",
+    deps = [
+        "@bazel_tools//tools/python/runfiles",
+        requirement("tqdm"),
+    ],
+)
+
+# Idea 2 (#9): the whole arithmetic suite on the REQUANT_ON core, whose MAC
+# unit also carries vrequant/vrqclamp.
+coralflow_test(
+    name = "rvv_arithmetic_requant_test",
+    size = "enormous",
+    srcs = ["rvv_arithmetic_cocotb_test.py"],
+    data = [
+        "//tests/cocotb/rvv/arithmetics:rvv_arith_tests",
+    ],
+    hdl_toplevel = "RvvCoreMiniRequantAxi",
+    tags = ["manual"],
+    targets = [
+        "verilator",
+    ],
     deps = [
         "@bazel_tools//tools/python/runfiles",
         requirement("tqdm"),

@@ -142,6 +142,28 @@ logic [2*`VLEN-1:0]                   vmac_rslt_eew32_widen_d1;
 
 logic [`VLENB-1:0]                    update_vxsat;
 
+`ifdef REQUANT_ON
+// Idea 2 (#9): fused requantization, SEW=32 only. See requant_ref.h.
+//   vrequant.vv: vd = RoundingDivideByPOT(SRDHM(vd << ls, vs2), rs), with
+//                sh = clamp(vs1, -31, 31), ls = max(sh, 0), rs = max(-sh, 0).
+//                EX1 shifts vd left and multiplies as vsmul (RNU); EX2 does
+//                the rounding right shift (ties away from zero).
+//   vrqclamp.vx: vd = clamp(vs2 + sext(rs1[15:0]), sext(rs1[23:16]),
+//                sext(rs1[31:24])), computed in EX2.
+logic                                 is_requant;
+logic                                 is_rqclamp;
+RVVXRM                                mac_uop_xrm_sel;
+logic [`VLENW-1:0][`WORD_WIDTH-1:0]   rq_shifted_acc;
+logic [`VLENW-1:0][4:0]               rq_rshift;
+logic                                 is_requant_d1;
+logic                                 is_rqclamp_d1;
+logic [`VLENW-1:0][4:0]               rq_rshift_d1;
+logic [`XLEN-1:0]                     rq_rs1_d1;
+logic [`VLEN-1:0]                     requant_rslt_d1;
+logic [`VLEN-1:0]                     rqclamp_rslt_d1;
+logic [`VLEN-1:0]                     mac_rslt_eew32_final_d1;
+`endif
+
 `ifdef TB_SUPPORT
 logic [`PC_WIDTH-1:0]                 mac_uop_pc;
 logic [`PC_WIDTH-1:0]                 mac_uop_pc_d1;
@@ -172,6 +194,20 @@ always@(*) begin
     {1'b1,OPMVV} : begin
       is_vv = 1'b1;
       case (mac_uop_funct6) 
+`ifdef REQUANT_ON
+        VREQUANT : begin
+          mac_src2           = rq_shifted_acc;
+          mac_src1           = mac_uop_vs2_data;
+          mac_addsrc         = `VLEN'b0;
+          mac_src2_is_signed = 1'b1;
+          mac_src1_is_signed = 1'b1;
+          mac_is_widen       = 1'b0;
+          mac_keep_low_bits  = 1'b0;
+          mac_mul_reverse    = 1'b0;
+          is_vsmul           = 1'b1;
+          is_vmac            = 1'b0;
+        end
+`endif
         VMACC : begin
           mac_src2           = mac_uop_vs2_data;
           mac_src1           = mac_uop_vs1_data;
@@ -357,6 +393,20 @@ always@(*) begin
     {1'b1,OPMVX} : begin
       is_vv = 1'b0;
       case (mac_uop_funct6) 
+`ifdef REQUANT_ON
+        VRQCLAMP : begin
+          mac_src2           = `VLEN'b0;
+          mac_src1           = `VLEN'b0;
+          mac_addsrc         = mac_uop_vs2_data;
+          mac_src2_is_signed = 1'b0;
+          mac_src1_is_signed = 1'b0;
+          mac_is_widen       = 1'b0;
+          mac_keep_low_bits  = 1'b0;
+          mac_mul_reverse    = 1'b0;
+          is_vsmul           = 1'b0;
+          is_vmac            = 1'b0;
+        end
+`endif
         VMACC : begin
           mac_src2           = mac_uop_vs2_data;
           mac_src1           = {(`VLEN-`XLEN)'('b0),mac_uop_rs1_data}; //use rs1
@@ -625,6 +675,33 @@ always@(*) begin
   endcase//end funct3
 end
 
+`ifdef REQUANT_ON
+assign is_requant      = rs2mac_uop_valid && (mac_uop_funct3==OPMVV) && (mac_uop_funct6==VREQUANT);
+assign is_rqclamp      = rs2mac_uop_valid && (mac_uop_funct3==OPMVX) && (mac_uop_funct6==VRQCLAMP);
+// SRDHM is vsmul with round-to-nearest-up, whatever vxrm says.
+assign mac_uop_xrm_sel = is_requant ? RNU : mac_uop_xrm;
+
+always_comb begin
+  for (int k=0; k<`VLENW; k++) begin
+    logic signed [`WORD_WIDTH-1:0] sh;
+    sh = mac_uop_vs1_data[`WORD_WIDTH*k +: `WORD_WIDTH];
+    if (sh > 31) begin
+      rq_shifted_acc[k] = mac_uop_vs3_data[`WORD_WIDTH*k +: `WORD_WIDTH] << 31;
+      rq_rshift[k]      = 5'd0;
+    end else if (sh > 0) begin
+      rq_shifted_acc[k] = mac_uop_vs3_data[`WORD_WIDTH*k +: `WORD_WIDTH] << sh[4:0];
+      rq_rshift[k]      = 5'd0;
+    end else if (sh < -31) begin
+      rq_shifted_acc[k] = mac_uop_vs3_data[`WORD_WIDTH*k +: `WORD_WIDTH];
+      rq_rshift[k]      = 5'd31;
+    end else begin
+      rq_shifted_acc[k] = mac_uop_vs3_data[`WORD_WIDTH*k +: `WORD_WIDTH];
+      rq_rshift[k]      = 5'(-sh);
+    end
+  end
+end
+`endif
+
 // Before using mac alu, 
 //  1.group sub-elements' sign bit
 always@(*) begin
@@ -737,11 +814,26 @@ edff #(.T(logic))               u_mul_reverse_delay (
 edff #(.T(logic))               u_is_vmac_delay (
   .clk(clk), .rst_n(rst_n), .e(!trap_flush_rvv&mac_pipe_data_en), .d(is_vmac), .q(is_vmac_d1));
 edff #(.T(RVVXRM))              u_xrm_delay (
-  .clk(clk), .rst_n(rst_n), .e(!trap_flush_rvv&mac_pipe_data_en), .d(mac_uop_xrm), .q(mac_uop_xrm_d1));
+  .clk(clk), .rst_n(rst_n), .e(!trap_flush_rvv&mac_pipe_data_en), `ifdef REQUANT_ON
+  .d(mac_uop_xrm_sel),
+`else
+  .d(mac_uop_xrm),
+`endif
+  .q(mac_uop_xrm_d1));
 edff #(.T(EEW_e))               u_eew_delay (
   .clk(clk), .rst_n(rst_n), .e(!trap_flush_rvv&mac_pipe_data_en), .d(mac_top_vs_eew), .q(mac_top_vs_eew_d1));
 edff #(.T(logic [`ROB_DEPTH_WIDTH-1:0]))  u_rob_entry_delay (
   .clk(clk), .rst_n(rst_n), .e(!trap_flush_rvv&mac_pipe_data_en), .d(mac_uop_rob_entry), .q(mac_uop_rob_entry_d1));
+`ifdef REQUANT_ON
+edff #(.T(logic))               u_is_requant_delay (
+  .clk(clk), .rst_n(rst_n), .e(!trap_flush_rvv&mac_pipe_data_en), .d(is_requant), .q(is_requant_d1));
+edff #(.T(logic))               u_is_rqclamp_delay (
+  .clk(clk), .rst_n(rst_n), .e(!trap_flush_rvv&mac_pipe_data_en), .d(is_rqclamp), .q(is_rqclamp_d1));
+edff #(.T(logic [`VLENW-1:0][4:0])) u_rq_rshift_delay (
+  .clk(clk), .rst_n(rst_n), .e(!trap_flush_rvv&mac_pipe_data_en), .d(rq_rshift), .q(rq_rshift_d1));
+edff #(.T(logic [`XLEN-1:0]))   u_rq_rs1_delay (
+  .clk(clk), .rst_n(rst_n), .e(!trap_flush_rvv&mac_pipe_data_en), .d(mac_uop_rs1_data), .q(rq_rs1_d1));
+`endif
 `ifdef TB_SUPPORT
 edff #(.T(logic [`PC_WIDTH-1:0]))         u_PC_delay (
   .clk(clk), .rst_n(rst_n), .e(!trap_flush_rvv&mac_pipe_data_en), .d(mac_uop_pc), .q(mac_uop_pc_d1));
@@ -991,6 +1083,40 @@ always_comb begin
   end
 end
 
+`ifdef REQUANT_ON
+// gemmlowp RoundingDivideByPOT on the vsmul (SRDHM) result, and the offset
+// add + clamp of vrqclamp.
+always_comb begin
+  for (int k=0; k<`VLENW; k++) begin
+    logic signed [`WORD_WIDTH-1:0] y;
+    logic        [`WORD_WIDTH-1:0] mask;
+    logic        [`WORD_WIDTH-1:0] remainder;
+    logic        [`WORD_WIDTH-1:0] threshold;
+    logic signed [`WORD_WIDTH-1:0] shifted;
+    logic signed [`WORD_WIDTH-1:0] sum;
+    logic signed [`WORD_WIDTH-1:0] lo;
+    logic signed [`WORD_WIDTH-1:0] hi;
+    y         = mac_rslt_eew32_d1[`WORD_WIDTH*k +: `WORD_WIDTH];
+    mask      = (`WORD_WIDTH'(1) << rq_rshift_d1[k]) - `WORD_WIDTH'(1);
+    remainder = y & mask;
+    threshold = (mask >> 1) + {31'b0, y[`WORD_WIDTH-1]};
+    // Shift on its own: mixed with an unsigned operand, >>> would turn logical.
+    shifted   = y >>> rq_rshift_d1[k];
+    requant_rslt_d1[`WORD_WIDTH*k +: `WORD_WIDTH] = shifted + {31'b0, remainder > threshold};
+
+    sum = mac_addsrc_d1[`WORD_WIDTH*k +: `WORD_WIDTH] + {{16{rq_rs1_d1[15]}}, rq_rs1_d1[15:0]};
+    lo  = {{24{rq_rs1_d1[23]}}, rq_rs1_d1[23:16]};
+    hi  = {{24{rq_rs1_d1[31]}}, rq_rs1_d1[31:24]};
+    // Same order as the reference: max with lo first, then min with hi.
+    sum = (sum < lo) ? lo : sum;
+    rqclamp_rslt_d1[`WORD_WIDTH*k +: `WORD_WIDTH] = (sum > hi) ? hi : sum;
+  end
+end
+assign mac_rslt_eew32_final_d1 = is_requant_d1 ? requant_rslt_d1 :
+                                 is_rqclamp_d1 ? rqclamp_rslt_d1 :
+                                                 mac_rslt_eew32_d1;
+`endif
+
 //Output pack
 `ifdef TB_SUPPORT
   assign mac2rob_uop_data.uop_pc    = mac_uop_pc_d1;
@@ -998,7 +1124,12 @@ end
   assign mac2rob_uop_valid          = rs2mac_uop_valid_d1;
   assign mac2rob_uop_data.rob_entry = mac_uop_rob_entry_d1;
   assign mac2rob_uop_data.w_valid   = rs2mac_uop_valid_d1;
+`ifdef REQUANT_ON
+  // vrequant uses the vsmul datapath but never writes vxsat.
+  assign mac2rob_uop_data.vsaturate = (is_vsmul_d1 && !is_requant_d1) ? update_vxsat : 'b0;
+`else
   assign mac2rob_uop_data.vsaturate = is_vsmul_d1 ? update_vxsat : 'b0;
+`endif
 `ifdef ZVE32F_ON
   assign mac2rob_uop_data.fpexp     = 'b0;
 `endif
@@ -1006,7 +1137,11 @@ end
 always_comb begin
   case(mac_top_vs_eew_d1)
     EEW32: begin
+`ifdef REQUANT_ON
+      mac2rob_uop_data.w_data = mac_rslt_eew32_final_d1;
+`else
       mac2rob_uop_data.w_data = mac_rslt_eew32_d1; 
+`endif
       update_vxsat            = update_vxsat_eew32_d1;
     end
     EEW16: begin

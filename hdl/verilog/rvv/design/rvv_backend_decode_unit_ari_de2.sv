@@ -330,6 +330,9 @@ module rvv_backend_decode_unit_ari_de2
             uop_exe_unit = VEU_ALU;
           end
 
+`ifdef REQUANT_ON
+          VRQCLAMP,
+`endif
           VMUL,
           VMULH,
           VMULHU,
@@ -347,6 +350,9 @@ module rvv_backend_decode_unit_ari_de2
             uop_exe_unit = VEU_DIV;
           end
           
+`ifdef REQUANT_ON
+          VREQUANT,
+`endif
           VMACC,
           VNMSAC,
           VMADD,
@@ -615,6 +621,9 @@ module rvv_backend_decode_unit_ari_de2
             VWSUBU_W,
             VWADD_W,
             VWSUB_W,
+`ifdef REQUANT_ON
+            VRQCLAMP,
+`endif
             VMUL,
             VMULH,
             VMULHU,
@@ -660,6 +669,9 @@ module rvv_backend_decode_unit_ari_de2
               uop_class[i]  = XVX;
             end
 
+`ifdef REQUANT_ON
+            VREQUANT,
+`endif
             VMACC,
             VNMSAC,
             VMADD,
@@ -1205,6 +1217,9 @@ module rvv_backend_decode_unit_ari_de2
             VWADD_W,
             VWSUB_W,
             VXUNARY0,
+`ifdef REQUANT_ON
+            VRQCLAMP,
+`endif
             VMUL,
             VMULH,
             VMULHU,
@@ -1217,6 +1232,9 @@ module rvv_backend_decode_unit_ari_de2
             VWMULU,
             VWMULSU,
             VWMACCUS,
+`ifdef REQUANT_ON
+            VREQUANT,
+`endif
             VMACC,
             VNMSAC,
             VMADD,
@@ -1440,6 +1458,9 @@ module rvv_backend_decode_unit_ari_de2
             VMXNOR : begin
               vs3_valid[i] = (csr_vstart!='b0);
             end
+`ifdef REQUANT_ON
+            VREQUANT,
+`endif
             VMACC,
             VNMSAC,
             VMADD,
@@ -1619,6 +1640,9 @@ module rvv_backend_decode_unit_ari_de2
             VDIV,
             VREMU,
             VREM,
+`ifdef REQUANT_ON
+            VREQUANT,
+`endif
             VMACC,
             VNMSAC,
             VMADD,
@@ -1838,6 +1862,9 @@ module rvv_backend_decode_unit_ari_de2
             VWSUBU_W,
             VWADD_W,
             VWSUB_W,
+`ifdef REQUANT_ON
+            VRQCLAMP,
+`endif
             VMUL,
             VMULH,
             VMULHU,
@@ -1846,6 +1873,9 @@ module rvv_backend_decode_unit_ari_de2
             VDIV,
             VREMU,
             VREM,
+`ifdef REQUANT_ON
+            VREQUANT,
+`endif
             VMACC,
             VNMSAC,
             VMADD,
@@ -2226,6 +2256,9 @@ module rvv_backend_decode_unit_ari_de2
           VWSUBU_W,
           VWADD_W,
           VWSUB_W,
+`ifdef REQUANT_ON
+          VRQCLAMP,
+`endif
           VMUL,
           VMULH,
           VMULHU,
