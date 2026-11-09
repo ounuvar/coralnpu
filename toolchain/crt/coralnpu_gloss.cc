@@ -123,7 +123,14 @@ extern "C" int _getpid(void) {
 
 extern "C" void* _sbrk(int bytes) {
   extern char __heap_start__, __heap_end__;
-  static char* _heap_ptr = &__heap_start__;
+  // Zero-initialized (.bss) and set on first use, so it resets together with
+  // newlib's malloc state (also .bss) whenever the program is restarted
+  // without reloading .data. With an initializer it would live in .data, keep
+  // growing across restarts and eventually run the heap out.
+  static char *_heap_ptr = nullptr;
+  if (_heap_ptr == nullptr) {
+    _heap_ptr = &__heap_start__;
+  }
   char* prev_heap_end;
   if ((bytes < 0) || (_heap_ptr + bytes > &__heap_end__)) {
     errno = ENOMEM;
