@@ -343,6 +343,15 @@ void DepthwiseConvPerChannelPatchCenter3x3Reuse6(
     }
   }
 }
+
+// One past the last output index whose filter taps all fall inside an input of size `in`:
+// o * stride - pad + (f - 1) * dilation <= in - 1. Can be negative or past the output; the
+// caller clamps it.
+int CenterEnd(int in, int pad, int f, int dilation, int stride) {
+  const int n = in - 1 + pad - (f - 1) * dilation;
+  const int q = n >= 0 ? n / stride : -((-n + stride - 1) / stride);  // floor(n / stride)
+  return q + 1;
+}
 }  // namespace
 
 // The untiled kernel. With `pre_left` and `pre_right` (the shifts already split for vectorization)
@@ -409,15 +418,22 @@ static void DepthwiseConvPerChannelUntiled(
   }
 
   // Cut down into sections
-  const int out_y_top    = idiv_ceil(pad_h, stride_h);
-  int out_y_bottom       = idiv_ceil(out_h + pad_h - f_h * dilation_h, stride_h);
-  // A tile of a row-tiled layer (#11) can have fewer output rows than the filter is tall, which
-  // makes the section boundary negative and would start the bottom section above the tile. Never
-  // above the top section's end. The untiled call (whole image) is left as it was.
-  if (pre_left != nullptr)
-    out_y_bottom = std::max(out_y_bottom, out_y_top);
-  const int out_x_left   = idiv_ceil(pad_w, stride_w);
-  const int out_x_right  = idiv_ceil(out_w + pad_w - f_w * dilation_w, stride_w);
+  const int out_y_top  = idiv_ceil(pad_h, stride_h);
+  const int out_x_left = idiv_ceil(pad_w, stride_w);
+  int out_y_bottom     = idiv_ceil(out_h + pad_h - f_h * dilation_h, stride_h);
+  int out_x_right      = idiv_ceil(out_w + pad_w - f_w * dilation_w, stride_w);
+  // The row-tiled path (#11): end the center section at the last output row (column) whose
+  // filter taps all fall inside the input. The formula above works from the output size, which on
+  // a tile is unrelated to the input rows it holds: it sent 3 rows of every stride-1 tile and
+  // about half of every stride-2 tile to the generic patch, and went negative on tiles with fewer
+  // output rows than the filter is tall. Clamped so that no section starts before the previous
+  // one ends. The untiled call keeps the upstream bounds, so the default build is unchanged.
+  if (pre_left != nullptr) {
+    out_y_bottom = std::clamp(CenterEnd(in_shape.Dims(1), pad_h, f_h, dilation_h, stride_h),
+                              out_y_top, out_h);
+    out_x_right  = std::clamp(CenterEnd(in_shape.Dims(2), pad_w, f_w, dilation_w, stride_w),
+                              out_x_left, out_w);
+  }
 
   // Top
   DepthwiseConvPerChannelPatch(params, output_multiplier, shift_left_p, shift_right_p, in_shape,
