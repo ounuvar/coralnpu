@@ -811,6 +811,168 @@ template_rule(
     tags = ["manual"],
 )
 
+# AWS F2 custom logic (#14): cl_coralnpu_core is chip_f2 plus the host registers on OCL (SPI
+# loader, UART console, reset, status), the 256-to-512-bit DDR converter and the DDR control
+# stub. The HDK top that adds the shell ports and sh_ddr is fpga/f2/design/cl_coralnpu.sv and is
+# built with the AWS HDK (fpga/f2/README.md).
+#   //fpga:build_cl_coralnpu_synth_only_{vector,matrix}: out-of-context synthesis on VU47P.
+#   //fpga:build_cl_coralnpu_elab_only_{vector,matrix}: FuseSoC project and Vivado elaboration.
+#   //fpga:cl_coralnpu_hdk_{vector,matrix}: the CL packaged for the AWS HDK (a tarball).
+#   //fpga:build_cl_coralnpu_tb_{vector,matrix}: local Verilator testbench (fpga/f2/tb).
+#   //fpga:cl_coralnpu_tb_{vector,matrix}_test: runs the testbench on f2_smoke_test.
+CL_CORALNPU_SRCS = F2_COMMON_SRCS + [
+    "f2/build/constraints/cl_coralnpu_timing.xdc",
+    "f2/verif/tests/f2_host_tasks.svh",
+]
+
+CL_CORALNPU_CORES = [
+    ":cl_coralnpu.core",
+    "//fpga/ip/i2c_master:i2c_master.core",
+    "//fpga/ip/ispyocto:ispyocto_core",
+]
+
+# The upstream Verilator options without --no-timing (the testbench uses delays) and without
+# USE_DPI_MEMORY (the testbench has no C++ memory backdoor).
+string_list_flag(
+    name = "verilator_options_cl_coralnpu_tb",
+    build_setting_default = [
+        o
+        for o in VERILATOR_OPTIONS_COMMON
+        if o not in ("--no-timing", "-DUSE_DPI_MEMORY")
+    ],
+)
+
+_CL_CORALNPU_NAME_MAP = {
+    "build_cl_coralnpu_" + build_type + c["suffix"]: {
+        "cores": CORALNPU_SOC_CORES_COMMON + CL_CORALNPU_CORES + [c["chisel_core"]] + (
+            ["//hdl/verilog:sram_backdoor.core"] if build_type == "tb" else []
+        ),
+        "srcs": CL_CORALNPU_SRCS + [c["chisel_rtl"]] + (
+            ["//hdl/verilog:dpi_files"] if build_type == "tb" else []
+        ),
+        "flags": [
+            "--ClockFrequencyMhz=" + _F2_CLOCK_FREQUENCY_MHZ,
+            "--ItcmSizeKBytes=" + c["itcm"],
+            "--DtcmSizeKBytes=" + c["dtcm"],
+        ] + ([] if build_type == "tb" else ["--pnr=none"]) + c["zvt_flags"],
+        "target": {
+            "synth_only": "synth",
+            "elab_only": "elab",
+            "tb": "sim",
+        }[build_type],
+        "output_groups": {
+            "all": ["com.google.coralnpu_fpga_cl_coralnpu_0.1/"],
+        } if build_type != "tb" else {
+            "binary": ["com.google.coralnpu_fpga_cl_coralnpu_0.1/sim-verilator/Vcl_coralnpu_core_tb"],
+        },
+        "verilator_options": ":verilator_options_cl_coralnpu_tb" if build_type == "tb" else None,
+        "make_options": ":make_options" if build_type == "tb" else None,
+    }
+    for c in _NEXUS_CONFIGS
+    for build_type in [
+        "synth_only",
+        "elab_only",
+        "tb",
+    ]
+}
+
+template_rule(
+    fusesoc_build,
+    _CL_CORALNPU_NAME_MAP,
+    systems = ["com.google.coralnpu:fpga:cl_coralnpu:0.1"],
+    tags = ["manual"],
+)
+
+py_binary(
+    name = "export_cl_coralnpu",
+    srcs = ["f2/build/scripts/export_cl_coralnpu.py"],
+    main = "f2/build/scripts/export_cl_coralnpu.py",
+)
+
+_CL_HDK_DESIGN = [
+    "f2/design/cl_coralnpu.sv",
+    "f2/design/cl_id_defines.vh",
+]
+
+_CL_HDK_TESTS = [
+    "f2/verif/tests/f2_host_tasks.svh",
+    "f2/verif/tests/test_coralnpu_regs.sv",
+    "f2/verif/tests/test_coralnpu_smoke.sv",
+]
+
+_CL_HDK_VERIF_SCRIPTS = [
+    "f2/verif/scripts/Makefile",
+    "f2/verif/scripts/Makefile.tests",
+]
+
+[
+    genrule(
+        name = "cl_coralnpu_hdk" + c["suffix"],
+        srcs = [
+            ":build_cl_coralnpu_elab_only" + c["suffix"],
+            "f2/build/constraints/cl_coralnpu_timing.xdc",
+            "f2/build/scripts/synth_cl_coralnpu.tcl",
+        ] + _CL_HDK_DESIGN + _CL_HDK_TESTS + _CL_HDK_VERIF_SCRIPTS,
+        outs = ["cl_coralnpu" + c["suffix"] + ".tar.gz"],
+        cmd = " ".join([
+            "$(location :export_cl_coralnpu)",
+            "--project_tcl $(location :build_cl_coralnpu_elab_only" + c["suffix"] + ")" +
+            "/synth-vivado/com.google.coralnpu_fpga_cl_coralnpu_0.1.tcl",
+            "--out $@",
+            "--design " + " ".join(["$(location %s)" % f for f in _CL_HDK_DESIGN]),
+            "--scripts $(location f2/build/scripts/synth_cl_coralnpu.tcl)",
+            "--timing_xdc $(location f2/build/constraints/cl_coralnpu_timing.xdc)",
+            "--tests " + " ".join(["$(location %s)" % f for f in _CL_HDK_TESTS]),
+            "--verif_scripts " + " ".join(["$(location %s)" % f for f in _CL_HDK_VERIF_SCRIPTS]),
+        ]),
+        tags = ["manual"],
+        tools = [":export_cl_coralnpu"],
+    )
+    for c in _NEXUS_CONFIGS
+]
+
+coralnpu_v2_binary(
+    name = "f2_smoke_test",
+    srcs = ["sw/f2_smoke_test.c"],
+    dtcm_size_kbytes = 1024,
+    itcm_size_kbytes = 1024,
+    deps = [":uart"],
+)
+
+py_binary(
+    name = "elf_to_f2_image",
+    srcs = ["f2/tb/elf_to_f2_image.py"],
+    main = "f2/tb/elf_to_f2_image.py",
+    deps = [requirement("pyelftools")],
+)
+
+genrule(
+    name = "f2_smoke_test_image",
+    srcs = [":f2_smoke_test.elf"],
+    outs = ["f2_smoke_test.f2img"],
+    cmd = "$(location :elf_to_f2_image) $< $@ --symbol f2_result",
+    tools = [":elf_to_f2_image"],
+)
+
+[
+    py_test(
+        name = "cl_coralnpu_tb" + c["suffix"] + "_test",
+        size = "large",
+        srcs = ["f2/tb/run_cl_coralnpu_tb.py"],
+        args = [
+            "$(location :build_cl_coralnpu_tb" + c["suffix"] + ")",
+            "$(location :f2_smoke_test_image)",
+        ],
+        data = [
+            ":build_cl_coralnpu_tb" + c["suffix"],
+            ":f2_smoke_test_image",
+        ],
+        main = "f2/tb/run_cl_coralnpu_tb.py",
+        tags = ["manual"],
+    )
+    for c in _NEXUS_CONFIGS
+]
+
 filegroup(
     name = "chip_verilator_binary",
     srcs = [":build_chip_verilator_vector_normal"],

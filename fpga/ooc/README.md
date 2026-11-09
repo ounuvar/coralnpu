@@ -53,6 +53,8 @@ The target clock is **50 MHz (20 ns)**. Upstream builds its vector bitstreams at
      -tclargs <run_dir>/synth.dcp 4.000 <run_dir>/out AltSpreadLogic_high AlternateCLBRouting 1 clk_main_a0
    ```
 
+   For the F2 custom logic (`cl_coralnpu_core`, #14), add `fpga/f2/build/constraints/cl_coralnpu_timing.xdc` after `clk_main_a0`. The checkpoint from the FuseSoC flow carries none of the design's constraints, so without it the SPI clock and its multicycle paths and clock groups are missing from the timing.
+
    Vivado derives the core, SPI master and ISP clocks from the MMCM, so `impl_timing.rpt` lists them under `clk_main_a0`. The core clock is `clk_10_unbuf` at 20 ns. Check it the same way as step 3 above. The `//fpga:build_chip_f2_elab_only_*` targets only elaborate, which takes a few minutes and catches connection errors.
 
 ## What the flow does, and why

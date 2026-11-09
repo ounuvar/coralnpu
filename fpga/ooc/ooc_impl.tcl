@@ -3,11 +3,14 @@
 # Usage:
 #   vivado -mode batch -nojournal -log impl.log -source fpga/ooc/ooc_impl.tcl \
 #     -tclargs <dir with synth.dcp, or a .dcp> [clock_ns] [result_dir] [place_directive] [route_directive] \
-#       [insert_bufg 0|1] [clock_port]
+#       [insert_bufg 0|1] [clock_port] [xdc ...]
 # clock_ns replaces the synthesis clock constraint on clock_port (empty: keep the checkpoint's).
 # clock_port defaults to io_clk_i (CoralNPUChiselSubsystem); chip_f2 uses clk_main_a0, whose
 # derived clocks come from its MMCM.
 # Reports and checkpoints go to result_dir (default: the synth dir).
+# Each xdc is read after the clock is created, for constraints that refer to it (generated clocks,
+# multicycle paths, clock groups): checkpoints from the FuseSoC flow carry none of the design's
+# constraints.
 # The default directives are the ones that route the full subsystem legally: with
 # Default/Default the router leaves 10k-100k nets unrouted in score/lsu.
 set synthdir [lindex $argv 0]
@@ -21,6 +24,7 @@ set pdir     [expr {[llength $argv] > 3 ? [lindex $argv 3] : "AltSpreadLogic_hig
 set rdir     [expr {[llength $argv] > 4 ? [lindex $argv 4] : "AlternateCLBRouting"}]
 set ibufg    [expr {[llength $argv] > 5 ? [lindex $argv 5] : 1}]
 set clkport  [expr {[llength $argv] > 6 ? [lindex $argv 6] : "io_clk_i"}]
+set xdcs     [lrange $argv 7 end]
 file mkdir $outdir
 
 if {[file extension $synthdir] eq ".dcp"} {
@@ -34,6 +38,9 @@ if {$period ne {}} {
   # Checkpoints from the FuseSoC flow carry no clock; name it after the port.
   if {$cname eq {}} { set cname $clkport }
   create_clock -name $cname -period $period [get_ports $clkport]
+}
+foreach x $xdcs {
+  read_xdc $x
 }
 
 # Out of context the clock port has no buffer, so the clock is routed on general

@@ -110,7 +110,7 @@ Changes to the RVV backend must build and pass tests both with and without `ZVT_
 - `tests/uvm/`: co-simulation against the MPACT and Spike ISS models. Both are required in presubmit.
 - `third_party/spike/` and `third_party/coralnpu_mpact/`: ISS models patched for Coral.
 - `fpga/ooc/`: our out-of-context synthesis and place-and-route flow for VU47P area, timing and power.
-- `fpga/`: the upstream FPGA flow for Google's internal "Nexus" board (`xcvu13p`, FuseSoC + Vivado). **AWS F2 is not supported upstream**; the project port is `chip_f2` (`fpga/rtl/chip_f2.sv`, targets `//fpga:build_chip_f2_*`, #13), a pinless top level for the F2 shell clocked from `clk_main_a0`. Lab-only details in `fpga/README.md` (zturn, `nexus_loader`, `*.corp.google.com`) do not apply to us.
+- `fpga/`: the upstream FPGA flow for Google's internal "Nexus" board (`xcvu13p`, FuseSoC + Vivado). **AWS F2 is not supported upstream**; the project port is `chip_f2` (`fpga/rtl/chip_f2.sv`, targets `//fpga:build_chip_f2_*`, #13), a pinless top level for the F2 shell clocked from `clk_main_a0`. `fpga/f2/` wraps it as the AWS custom logic (#14): host registers on OCL that drive the SPI loader, DDR through `sh_ddr`, a local Verilator testbench and the HDK build and simulation files (`fpga/f2/README.md`). Lab-only details in `fpga/README.md` (zturn, `nexus_loader`, `*.corp.google.com`) do not apply to us.
 - `doc/`: architecture docs. `doc/tutorials/npusim_mobilenet_tutorial.md` covers the end-to-end MobileNet flow.
 
 ## Common commands

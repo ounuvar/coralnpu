@@ -1,0 +1,171 @@
+CAPI=2:
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+name: "com.google.coralnpu:fpga:cl_coralnpu:0.1"
+description: "CoralNPU AWS F2 custom logic without the shell (cl_coralnpu_core), plus its local testbench."
+
+filesets:
+  files_rtl:
+    depend:
+      - com.google.coralnpu:fpga:coralnpu_soc
+      - pulp-platform:riscv-dbg:0.1
+
+    files:
+      - rtl/chip_f2.sv
+      - rtl/f2_fifo.sv
+      - rtl/f2_ddr_upsizer.sv
+      - rtl/f2_ddr_ctrl_stub.sv
+      - rtl/f2_spi_host.sv
+      - rtl/f2_uart_rx.sv
+      - rtl/f2_ocl_regs.sv
+      - rtl/cl_coralnpu_core.sv
+    file_type: systemVerilogSource
+
+  # The real clock generator (an MMCM) for the FPGA; the testbench uses a behavioral model.
+  files_clkgen:
+    files:
+      - rtl/clkgen_xilultrascaleplus.sv
+    file_type: systemVerilogSource
+
+  files_clkgen_sim:
+    files:
+      - f2/tb/clkgen_xilultrascaleplus_sim.sv
+    file_type: systemVerilogSource
+
+  files_tb:
+    depend:
+      # The Chisel subsystem's SRAM model calls these DPI functions in simulation.
+      - com.google.coralnpu:hdl:sram_backdoor:0.1
+    files:
+      - f2/verif/tests/f2_host_tasks.svh: { is_include_file: true }
+      - f2/tb/f2_ddr_model.sv
+      - f2/tb/cl_coralnpu_core_tb.sv
+    file_type: systemVerilogSource
+
+  files_constraints:
+    files:
+      - clocks_f2.xdc
+      - f2/build/constraints/cl_coralnpu_timing.xdc
+    file_type: xdc
+
+  files_tcl:
+    files:
+      - vivado_setup_hooks_f2.tcl: { file_type: tclSource }
+
+parameters:
+  ClockFrequencyMhz:
+    datatype: int
+    description: "Core clock frequency in MHz."
+    default: 50
+    paramtype: vlogparam
+  MemInitFile:
+    datatype: str
+    description: Path to ROM
+    default: ""
+    paramtype: vlogparam
+  ItcmSizeKBytes:
+    datatype: int
+    description: "ITCM size in KBytes"
+    default: 1024
+    paramtype: vlogparam
+  DtcmSizeKBytes:
+    datatype: int
+    description: "DTCM size in KBytes"
+    default: 1024
+    paramtype: vlogparam
+  USE_GENERIC:
+    datatype: bool
+    description: "Use generic primitives"
+    default: false
+    paramtype: vlogdefine
+  FPGA_XILINX:
+    datatype: bool
+    description: "Use Xilinx FPGA primitives"
+    default: false
+    paramtype: vlogdefine
+  TB_SUPPORT:
+    datatype: bool
+    description: "Enable TB support in RVV"
+    default: true
+    paramtype: vlogdefine
+  VLEN_128:
+    datatype: bool
+    description: "Set RVV VLEN to 128"
+    default: true
+    paramtype: vlogdefine
+  ZVE32F_ON:
+    datatype: bool
+    description: "Enable ZVE32F RVV profile"
+    default: true
+    paramtype: vlogdefine
+  ZVT_ON:
+    datatype: bool
+    description: "Enable ZVT extension"
+    paramtype: vlogdefine
+  ZVTBF16FMM_ON:
+    datatype: bool
+    description: "Enable ZVT BF16 FMM extension"
+    paramtype: vlogdefine
+
+targets:
+  default: &default_target
+    filesets:
+      - files_rtl
+      - files_clkgen
+      - files_constraints
+      - files_tcl
+
+  # Out-of-context synthesis of cl_coralnpu_core on the VU47P (the AWS build synthesizes the CL
+  # out of context too). Place and route the checkpoint with fpga/ooc/ooc_impl.tcl.
+  synth:
+    <<: *default_target
+    toplevel: cl_coralnpu_core
+    default_tool: vivado
+    parameters:
+      - ClockFrequencyMhz
+      - MemInitFile
+      - ItcmSizeKBytes
+      - DtcmSizeKBytes
+      - USE_GENERIC=true
+      - FPGA_XILINX=true
+      - TB_SUPPORT=true
+      - VLEN_128=true
+      - ZVE32F_ON=true
+      - ZVT_ON
+      - ZVTBF16FMM_ON
+    tools:
+      vivado:
+        part: "xcvu47p-fsvh2892-2-e"
+
+  # Local Verilator testbench (fpga/f2/tb).
+  sim:
+    filesets:
+      - files_rtl
+      - files_clkgen_sim
+      - files_tb
+    toplevel: cl_coralnpu_core_tb
+    default_tool: verilator
+    parameters:
+      - ClockFrequencyMhz
+      - ItcmSizeKBytes
+      - DtcmSizeKBytes
+      - ZVT_ON
+      - ZVTBF16FMM_ON
+    tools:
+      verilator:
+        mode: binary
+        verilator_options:
+          - '--timing'
+          - '-Wall'
+          - '-Wno-fatal'
