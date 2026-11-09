@@ -92,6 +92,24 @@ bazel test //sw/utils/f2_loader:all                   # f2_loader unit tests
 
 The test is tagged manual. Building the simulator takes several minutes.
 
+## Connecting to the AWS instance
+
+The F2 instance runs on EC2 and is reached over SSH with the team's key pair (`mlxlo-team-5.pem`). Each person keeps the key in their own location. Never commit it.
+
+1. Restrict the key's permissions once, or SSH refuses to use it:
+
+   ```bash
+   chmod 400 /path/to/mlxlo-team-5.pem
+   ```
+
+2. Look up the instance's current public DNS name before every session. It changes each time the instance is stopped and started, so an old name will not work. In the EC2 console, open Instances, select the instance and copy "Public IPv4 DNS", for example `ec2-34-201-23-195.compute-1.amazonaws.com`. Use the host name only, without `https://`.
+
+3. Connect. The login user is `mlxlo-team-5` for everyone:
+
+   ```bash
+   ssh -i /path/to/mlxlo-team-5.pem mlxlo-team-5@<public-dns>
+   ```
+
 ## Building and simulating on AWS
 
 The HDK needs Vivado 2024.1 or newer, so this part runs on the AWS instance, not on the LRC servers.
