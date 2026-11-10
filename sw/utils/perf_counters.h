@@ -17,7 +17,7 @@
 
 // #59: memory stall counters at mhpmcounter3 + i (PerfCounters in
 // hdl/chisel/src/coralnpu/scalar/Csr.scala). Build with
-// --//sw/utils:perf_counters to read them; only cores built with
+// --//sw/utils:read_perf_counters to read them; only cores built with
 // enablePerfCounters have them (they trap elsewhere, including npusim).
 // Without the flag every function here compiles to nothing, so binaries are
 // unchanged.

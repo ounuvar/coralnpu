@@ -52,7 +52,7 @@ _SYMBOLS = [
     "run_mask",
 ]
 
-# #59: stall counters, present when built with --//sw/utils:perf_counters
+# #59: stall counters, present when built with --//sw/utils:read_perf_counters
 # (order as PerfCounters.names in hdl/chisel/src/coralnpu/scalar/Csr.scala).
 _PERF_NAMES = (
     "memStall", "lsuFull", "tcmWait", "extWait", "fetchWait", "vecDataWait",

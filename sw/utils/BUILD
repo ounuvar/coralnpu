@@ -23,16 +23,17 @@ cc_library(
     target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
 )
 
-# #59: read the memory stall counters (sw/utils/perf_counters.h). Only for
-# cores built with enablePerfCounters; off by default.
+# #59: --//sw/utils:read_perf_counters makes sw/utils/perf_counters.h read the
+# memory stall counters. Only for cores built with enablePerfCounters; off by
+# default.
 bool_flag(
-    name = "perf_counters",
+    name = "read_perf_counters",
     build_setting_default = False,
 )
 
 config_setting(
     name = "perf_counters_enabled",
-    flag_values = {":perf_counters": "True"},
+    flag_values = {":read_perf_counters": "True"},
 )
 
 cc_library(

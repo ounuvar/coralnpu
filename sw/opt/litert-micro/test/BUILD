@@ -860,7 +860,7 @@ coralflow_test(
 )
 
 # #59: the same benches on cores with the memory stall counters. Without
-# --//sw/utils:perf_counters the ELFs are unchanged and the cycle counts must
+# --//sw/utils:read_perf_counters the ELFs are unchanged and the cycle counts must
 # equal the targets above; with it each run also prints PERF lines.
 [
     coralflow_test(
