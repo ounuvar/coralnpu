@@ -113,7 +113,9 @@ class CoralNPUChiselSubsystem(
   val enableVme: Boolean = false,
   // Extra response cycles on the external SRAM, to model a slow memory in simulation (0 = none).
   val extMemReadLatency: Int = 0,
-  val extMemWriteLatency: Int = 0
+  val extMemWriteLatency: Int = 0,
+  // #59: memory stall counters in the core (Parameters.enablePerfCounters).
+  val enablePerfCounters: Boolean = false
 ) extends RawModule {
   val testHarnessSuffix    = if (enableTestHarness) "TestHarness" else ""
   override val desiredName = {
@@ -208,6 +210,7 @@ class CoralNPUChiselSubsystem(
             core_p.enableZfbfmin = p.enableZfbfmin
             core_p.enableVectorBf16 = p.enableVectorBf16
             core_p.enableVme = p.enableVme
+            core_p.enablePerfCounters = enablePerfCounters
             core_p.enableAxiInstructionFetch = p.enableAxiInstructionFetch
             core_p.itcmSizeKBytes = itcmSize.kBytes
             core_p.dtcmSizeKBytes = dtcmSize.kBytes
@@ -532,7 +535,8 @@ abstract class BaseCoralNPUChiselSubsystemEmitter {
   def defaultModuleName(itcmSize: MemorySize, dtcmSize: MemorySize, xlen: Int): String
 
   def main(args: Array[String]): Unit = {
-    val enableTestHarness = args.contains("--enableTestHarness")
+    val enableTestHarness  = args.contains("--enableTestHarness")
+    val enablePerfCounters = args.contains("--enablePerfCounters")
 
     // --- Parse command-line arguments for TCM sizes ---
     var itcmSizeKBytes     = Parameters.itcmSizeKBytesDefault // Default ITCM size in KBytes
@@ -577,6 +581,7 @@ abstract class BaseCoralNPUChiselSubsystemEmitter {
       case (arg, idx)
           if !indicesToSkip.contains(idx) &&
             !arg.startsWith("--enableTestHarness") &&
+            !arg.startsWith("--enablePerfCounters") &&
             !arg.startsWith("--enableVme") =>
         arg
     }
@@ -600,7 +605,8 @@ abstract class BaseCoralNPUChiselSubsystemEmitter {
         moduleName,
         socConfig.enableVme,
         extMemReadLatency,
-        extMemWriteLatency
+        extMemWriteLatency,
+        enablePerfCounters
       ),
       chiselArgs.toArray
     )
