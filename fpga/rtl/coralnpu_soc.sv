@@ -543,7 +543,11 @@ module coralnpu_soc #(
       .io_external_devices_rom_d_bits_opcode(tl_rom_i_32.d_opcode),
       .io_external_devices_rom_d_bits_param(tl_rom_i_32.d_param),
       .io_external_devices_rom_d_bits_size(tl_rom_i_32.d_size),
-      .io_external_devices_rom_d_bits_source(tl_rom_i_32.d_source),
+      // The Chisel crossbar's 32-bit device ports carry a 10-bit source ({host source, beat}) and
+      // TL-UL here has 8 (top_pkg::TL_AIW): the request drops bits [9:8], and the response must
+      // drive them as 0, not leave them undriven (Verilator reads 0; xsim reads z and the xbar
+      // loses the response). Correct while host source IDs stay below 64.
+      .io_external_devices_rom_d_bits_source({2'b00, tl_rom_i_32.d_source}),
       .io_external_devices_rom_d_bits_sink(tl_rom_i_32.d_sink),
       .io_external_devices_rom_d_bits_data(tl_rom_i_32.d_data),
       .io_external_devices_rom_d_bits_error(tl_rom_i_32.d_error),
@@ -569,7 +573,7 @@ module coralnpu_soc #(
       .io_external_devices_uart0_d_bits_opcode(tl_uart0_i.d_opcode),
       .io_external_devices_uart0_d_bits_param(tl_uart0_i.d_param),
       .io_external_devices_uart0_d_bits_size(tl_uart0_i.d_size),
-      .io_external_devices_uart0_d_bits_source(tl_uart0_i.d_source),
+      .io_external_devices_uart0_d_bits_source({2'b00, tl_uart0_i.d_source}),
       .io_external_devices_uart0_d_bits_sink(tl_uart0_i.d_sink),
       .io_external_devices_uart0_d_bits_data(tl_uart0_i.d_data),
       .io_external_devices_uart0_d_bits_error(tl_uart0_i.d_error),
@@ -595,7 +599,7 @@ module coralnpu_soc #(
       .io_external_devices_uart1_d_bits_opcode(tl_uart1_i.d_opcode),
       .io_external_devices_uart1_d_bits_param(tl_uart1_i.d_param),
       .io_external_devices_uart1_d_bits_size(tl_uart1_i.d_size),
-      .io_external_devices_uart1_d_bits_source(tl_uart1_i.d_source),
+      .io_external_devices_uart1_d_bits_source({2'b00, tl_uart1_i.d_source}),
       .io_external_devices_uart1_d_bits_sink(tl_uart1_i.d_sink),
       .io_external_devices_uart1_d_bits_data(tl_uart1_i.d_data),
       .io_external_devices_uart1_d_bits_error(tl_uart1_i.d_error),
@@ -621,7 +625,7 @@ module coralnpu_soc #(
       .io_external_devices_i2c_master_d_bits_opcode(tl_i2c_d2h.d_opcode),
       .io_external_devices_i2c_master_d_bits_param(tl_i2c_d2h.d_param),
       .io_external_devices_i2c_master_d_bits_size(tl_i2c_d2h.d_size),
-      .io_external_devices_i2c_master_d_bits_source(tl_i2c_d2h.d_source),
+      .io_external_devices_i2c_master_d_bits_source({2'b00, tl_i2c_d2h.d_source}),
       .io_external_devices_i2c_master_d_bits_sink(tl_i2c_d2h.d_sink),
       .io_external_devices_i2c_master_d_bits_data(tl_i2c_d2h.d_data),
       .io_external_devices_i2c_master_d_bits_error(tl_i2c_d2h.d_error),
@@ -647,7 +651,7 @@ module coralnpu_soc #(
       .io_external_devices_clk_table_d_bits_opcode(tl_clk_table_d2h.d_opcode),
       .io_external_devices_clk_table_d_bits_param(tl_clk_table_d2h.d_param),
       .io_external_devices_clk_table_d_bits_size(tl_clk_table_d2h.d_size),
-      .io_external_devices_clk_table_d_bits_source(tl_clk_table_d2h.d_source),
+      .io_external_devices_clk_table_d_bits_source({2'b00, tl_clk_table_d2h.d_source}),
       .io_external_devices_clk_table_d_bits_sink(tl_clk_table_d2h.d_sink),
       .io_external_devices_clk_table_d_bits_data(tl_clk_table_d2h.d_data),
       .io_external_devices_clk_table_d_bits_error(tl_clk_table_d2h.d_error),

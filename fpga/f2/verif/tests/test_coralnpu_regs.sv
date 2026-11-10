@@ -19,13 +19,15 @@ module test_coralnpu_regs ();
   import tb_type_defines_pkg::*;
   `include "common_base_test.svh"
 
-  `define F2_OCL_WRITE(addr, data) tb.poke_ocl(.addr(addr), .data(data))
-  `define F2_OCL_READ(addr, data) tb.peek_ocl(.addr(addr), .data(data))
-  `define F2_ERROR(msg) \
-    begin \
-      $error("[%t] %s", $realtime, msg); \
-      error_count++; \
-    end
+  // Macro arguments are substituted everywhere in the body, port names included, so they must
+  // not be called addr or data. F2_ERROR is a task call, so `if (...) `F2_ERROR(...); else` works.
+  task automatic f2_error(input string msg);
+    $error("[%t] %s", $realtime, msg);
+    error_count++;
+  endtask
+  `define F2_OCL_WRITE(a, d) tb.poke_ocl(.addr(a), .data(d))
+  `define F2_OCL_READ(a, d) tb.peek_ocl(.addr(a), .data(d))
+  `define F2_ERROR(msg) f2_error(msg)
   `include "f2_host_tasks.svh"
 
   initial begin
@@ -33,6 +35,12 @@ module test_coralnpu_regs ();
     logic [127:0] line;
 
     tb.power_up(.clk_recipe_a(ClockRecipe::A0));
+
+    // Take sh_ddr out of reset through its stats interface, as initialize_ddr() in the HDK's
+    // cl_dram_hbm_dma example does. Without it DDR never calibrates in simulation.
+    tb.poke_stat(.addr(8'h0c), .intf("ddr"), .data(32'h0000_0000));
+    tb.poke_stat(.addr(8'h0c), .intf("ddr"), .data(32'h0000_0001));
+    tb.poke_stat(.addr(8'h0c), .intf("ddr"), .data(32'h0000_0000));
 
     `F2_OCL_READ(F2RegId, v);
     if (v != F2IdValue) `F2_ERROR($sformatf("ID 0x%08h", v));
