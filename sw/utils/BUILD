@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:defs.bzl", "py_library")
 
 package(default_visibility = ["//visibility:public"])
@@ -19,6 +20,28 @@ package(default_visibility = ["//visibility:public"])
 cc_library(
     name = "utils",
     hdrs = ["utils.h"],
+    target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
+)
+
+# #59: read the memory stall counters (sw/utils/perf_counters.h). Only for
+# cores built with enablePerfCounters; off by default.
+bool_flag(
+    name = "perf_counters",
+    build_setting_default = False,
+)
+
+config_setting(
+    name = "perf_counters_enabled",
+    flag_values = {":perf_counters": "True"},
+)
+
+cc_library(
+    name = "perf_counters",
+    hdrs = ["perf_counters.h"],
+    defines = select({
+        ":perf_counters_enabled": ["CORALNPU_PERF_COUNTERS=1"],
+        "//conditions:default": [],
+    }),
     target_compatible_with = ["//platforms/cpu:coralnpu_v2"],
 )
 

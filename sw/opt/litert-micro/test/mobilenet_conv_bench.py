@@ -79,6 +79,18 @@ _LAYERS = [
     (32, (1, 1, 256), (5, 1, 1, 256), 1),
 ]
 
+# #59: stall counters, present when built with --//sw/utils:perf_counters
+# (order as PerfCounters.names in hdl/chisel/src/coralnpu/scalar/Csr.scala).
+_PERF_NAMES = (
+    "memStall", "lsuFull", "tcmWait", "extWait", "fetchWait", "vecDataWait",
+    "noDispatch", "rvvFull"
+)
+_perf = False
+
+
+def _has_perf(symbols):
+    return bool(symbols) and symbols.get("perf_counters_enabled") is not None
+
 
 def _same_padding(in_size, filter_size, stride):
     out_size = (in_size + stride - 1) // stride
@@ -165,6 +177,16 @@ async def _run_layer(fixture, op_index, in_hwc, filt, stride):
         out_h * out_w * n * k
     ] + counters + [mismatches, unsaturated, size]
     print("CSV," + ",".join(str(v) for v in row), flush=True)
+    if _perf:
+        for engine in ("baseline", "vme"):
+            vals = await fixture.read(
+                f"{engine}_perf", dtype=np.uint64, shape=(len(_PERF_NAMES), )
+            )
+            print(
+                f"PERF,{op_index},{engine}," +
+                ",".join(str(int(v)) for v in vals),
+                flush=True
+            )
     if mismatches:
         print(f"layer {op_index}: FAILED, {mismatches} mismatches", flush=True)
         sys.exit(1)
@@ -178,7 +200,15 @@ async def run_mobilenet_conv_bench(fixture):
     )
     if not os.path.exists(elf_file):
         raise FileNotFoundError(f"ELF file not found: {elf_file}")
-    await fixture.load_elf_and_lookup_symbols(elf_file, _SYMBOLS)
+    global _perf
+    symbols = await fixture.load_elf_and_lookup_symbols(
+        elf_file,
+        _SYMBOLS,
+        optional_symbols=[
+            "perf_counters_enabled", "baseline_perf", "vme_perf"
+        ]
+    )
+    _perf = _has_perf(symbols)
 
     selected = os.environ.get("MOBILENET_CONV_LAYERS", "")
     wanted = {int(x) for x in selected.split(",") if x} if selected else None
@@ -187,6 +217,8 @@ async def run_mobilenet_conv_bench(fixture):
         "baseline_instret,vme_instret,mismatches,unsaturated,outputs",
         flush=True
     )
+    if _perf:
+        print("PERF,layer,engine," + ",".join(_PERF_NAMES), flush=True)
     for layer in _LAYERS:
         if wanted is None or layer[0] in wanted:
             await _run_layer(fixture, *layer)

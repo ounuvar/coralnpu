@@ -25,6 +25,7 @@
 
 #include "sw/opt/litert-micro/conv.h"
 #include "sw/opt/litert-micro/depthwise_conv.h"
+#include "sw/utils/perf_counters.h"
 #include "sw/utils/utils.h"
 #include "tensorflow/lite/micro/kernels/kernel_util.h"
 #include "tensorflow/lite/micro/memory_helpers.h"
@@ -88,6 +89,12 @@ uint64_t invoke_cycles[kRuns] __attribute__((section(".data"), used))           
 uint64_t invoke_instret[kRuns] __attribute__((section(".data"), used))            = {};
 int8_t model_output[kRuns][5] __attribute__((section(".data"), used))             = {};
 uint32_t arena_used[kRuns] __attribute__((section(".data"), used))                = {};
+#if CORALNPU_PERF_COUNTERS
+// #59: stall counter deltas over each Invoke().
+int32_t perf_counters_enabled __attribute__((section(".data"), used)) = 1;
+uint64_t invoke_perf[kRuns][coralnpu_v2::kPerfCounters]
+    __attribute__((section(".data"), used)) = {};
+#endif
 // Bit i set: do run i. The test may clear bits to save RTL time.
 int32_t run_mask __attribute__((section(".data"), used)) = (1 << kRuns) - 1;
 // 0x100 + run index while a run is in progress, 0x22 when all runs finished,
@@ -131,6 +138,10 @@ static int RunModel(int run, const tflite::Model *model, OpResolver &op_resolver
     input->data.int8[i] = static_cast<int8_t>(state >> 24);
   }
 
+#if CORALNPU_PERF_COUNTERS
+  uint64_t perf0[coralnpu_v2::kPerfCounters];
+  coralnpu_v2::PerfBegin(perf0);
+#endif
   const uint64_t c0 = mcycle_read();
   const uint64_t i0 = minstret_read();
   if (interpreter.Invoke() != kTfLiteOk) {
@@ -138,6 +149,9 @@ static int RunModel(int run, const tflite::Model *model, OpResolver &op_resolver
   }
   invoke_instret[run] = minstret_read() - i0;
   invoke_cycles[run]  = mcycle_read() - c0;
+#if CORALNPU_PERF_COUNTERS
+  coralnpu_v2::PerfEnd(perf0, invoke_perf[run]);
+#endif
   arena_used[run]     = interpreter.arena_used_bytes();
 
   const TfLiteTensor *output = interpreter.output(0);

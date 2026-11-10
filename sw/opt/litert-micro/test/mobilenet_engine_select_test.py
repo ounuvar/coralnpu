@@ -52,6 +52,17 @@ _SYMBOLS = [
     "run_mask",
 ]
 
+# #59: stall counters, present when built with --//sw/utils:perf_counters
+# (order as PerfCounters.names in hdl/chisel/src/coralnpu/scalar/Csr.scala).
+_PERF_NAMES = (
+    "memStall", "lsuFull", "tcmWait", "extWait", "fetchWait", "vecDataWait",
+    "noDispatch", "rvvFull"
+)
+
+
+def _has_perf(symbols):
+    return bool(symbols) and symbols.get("perf_counters_enabled") is not None
+
 
 @coralflow_test(highmem=True)
 async def run_mobilenet_engine_select(fixture):
@@ -61,7 +72,12 @@ async def run_mobilenet_engine_select(fixture):
     )
     if not os.path.exists(elf_file):
         raise FileNotFoundError(f"ELF file not found: {elf_file}")
-    await fixture.load_elf_and_lookup_symbols(elf_file, _SYMBOLS)
+    symbols = await fixture.load_elf_and_lookup_symbols(
+        elf_file,
+        _SYMBOLS,
+        optional_symbols=["perf_counters_enabled", "invoke_perf"]
+    )
+    perf = _has_perf(symbols)
 
     selected = os.environ.get("MOBILENET_ENGINE_RUNS", "")
     runs = [
@@ -112,6 +128,20 @@ async def run_mobilenet_engine_select(fixture):
             f"{instret[i]},{arena[i]},{' '.join(str(v) for v in outputs[i])}",
             flush=True
         )
+
+    if perf:
+        invoke_perf = await fixture.read(
+            "invoke_perf",
+            dtype=np.uint64,
+            shape=(len(_RUNS), len(_PERF_NAMES))
+        )
+        print("PERF,run," + ",".join(_PERF_NAMES), flush=True)
+        for i in runs:
+            print(
+                f"PERF,{_RUNS[i]}," +
+                ",".join(str(int(v)) for v in invoke_perf[i]),
+                flush=True
+            )
 
     for i in runs:
         assert conv_layers[i] == _CONV_LAYERS, (_RUNS[i], conv_layers[i])

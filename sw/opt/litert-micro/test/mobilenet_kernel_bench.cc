@@ -27,6 +27,7 @@
 
 #include "sw/opt/litert-micro/conv.h"
 #include "sw/opt/litert-micro/depthwise_conv.h"
+#include "sw/utils/perf_counters.h"
 #include "sw/utils/utils.h"
 #include "tensorflow/lite/kernels/internal/reference/integer_ops/conv.h"
 #include "tensorflow/lite/kernels/internal/reference/integer_ops/depthwise_conv.h"
@@ -72,6 +73,11 @@ uint64_t opt_cycles __attribute__((section(".data"), used))  = 0;
 uint64_t opt_instret __attribute__((section(".data"), used)) = 0;
 uint64_t ref_cycles __attribute__((section(".data"), used))  = 0;
 uint64_t ref_instret __attribute__((section(".data"), used)) = 0;
+#if CORALNPU_PERF_COUNTERS
+// #59: stall counter deltas over the timed kernel call.
+int32_t perf_counters_enabled __attribute__((section(".data"), used))                 = 1;
+uint64_t opt_perf[coralnpu_v2::kPerfCounters] __attribute__((section(".data"), used)) = {};
+#endif
 int32_t heartbeat __attribute__((section(".data"), used))    = 0xAA;
 
 static TfLiteStatus MockRequestScratchBuffer(TfLiteContext *, size_t, int *buffer_idx) {
@@ -133,6 +139,10 @@ __attribute__((used, retain)) void run_opt() {
     data.output_activation_min         = params_activation_min;
     data.output_activation_max         = params_activation_max;
 
+#if CORALNPU_PERF_COUNTERS
+    uint64_t perf0[coralnpu_v2::kPerfCounters];
+    coralnpu_v2::PerfBegin(perf0);
+#endif
     const uint64_t c0 = mcycle_read();
     const uint64_t i0 = minstret_read();
     ConvPerChannel(params, data, per_channel_multiplier, per_channel_shift, &context, input_shape,
@@ -140,8 +150,15 @@ __attribute__((used, retain)) void run_opt() {
                    output_opt);
     opt_instret = minstret_read() - i0;
     opt_cycles  = mcycle_read() - c0;
+#if CORALNPU_PERF_COUNTERS
+    coralnpu_v2::PerfEnd(perf0, opt_perf);
+#endif
   } else {
     const tflite::DepthwiseParams params = MakeDepthwiseParams();
+#if CORALNPU_PERF_COUNTERS
+    uint64_t perf0[coralnpu_v2::kPerfCounters];
+    coralnpu_v2::PerfBegin(perf0);
+#endif
     const uint64_t c0                    = mcycle_read();
     const uint64_t i0                    = minstret_read();
     DepthwiseConvPerChannel(params, per_channel_multiplier, per_channel_shift, input_shape,
@@ -149,6 +166,9 @@ __attribute__((used, retain)) void run_opt() {
                             output_shape, output_opt, accs_buf);
     opt_instret = minstret_read() - i0;
     opt_cycles  = mcycle_read() - c0;
+#if CORALNPU_PERF_COUNTERS
+    coralnpu_v2::PerfEnd(perf0, opt_perf);
+#endif
   }
   heartbeat = 0x12;
 }
