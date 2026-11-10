@@ -553,7 +553,7 @@ class Csr(p: Parameters) extends Module {
   perfCounters.foreach(_.zip(io.counters.perf.get).foreach { case (c, e) => c := c + e })
   val perfRead = perfCounters
     .map(_.zipWithIndex.flatMap { case (c, i) =>
-      val index = PerfCounters.baseIndex + i
+      val index   = PerfCounters.baseIndex + i
       val hiIndex = index + PerfCounters.highOffset
       Seq((req.bits.index === index.U) -> (if (p.xlen == 32) c(31, 0) else c)) ++
         (if (p.xlen == 32) Seq((req.bits.index === hiIndex.U) -> c(63, 32)) else Seq())
