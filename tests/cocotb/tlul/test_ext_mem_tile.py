@@ -188,6 +188,12 @@ async def run_tile(dut, elf_name):
         )
     elif "_r4" in elf_name:
         phases = f" compute={await result('compute_cycles')}"
+    if "_stats" in elf_name:
+        # (An await inside a generator expression would make it an async generator.)
+        phases = ""
+        for name in ("chunks", "tiles", "prologue", "prepare", "compute",
+                     "wait", "blocking_copy", "build"):
+            phases += f" {name}={await result('stat_' + name)}"
     if "_ref" in elf_name:
         ref_done = await result("tile_ref_done")
         assert ref_done == 0x600D, f"reference comparison did not run: 0x{ref_done:x}"
@@ -263,3 +269,476 @@ async def test_tile_db4_r4(dut):
 async def test_tile_db16_r4(dut):
     """Four rows, double buffered DMA with 16-byte beats."""
     await run_tile(dut, "ext_mem_tile_bench_db16_r4.elf")
+
+
+@cocotb.test()
+async def test_layer_l30_p49_local(dut):
+    """Pointwise layer l30 with 49 pixels, local variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l30_p49_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l30_p49_ext(dut):
+    """Pointwise layer l30 with 49 pixels, ext variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l30_p49_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l30_p49_tiled(dut):
+    """Pointwise layer l30 with 49 pixels, tiled variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l30_p49_tiled.elf")
+
+
+@cocotb.test()
+async def test_layer_l28_p49_local(dut):
+    """Pointwise layer l28 with 49 pixels, local variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l28_p49_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l28_p49_ext(dut):
+    """Pointwise layer l28 with 49 pixels, ext variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l28_p49_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l28_p49_tiled(dut):
+    """Pointwise layer l28 with 49 pixels, tiled variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l28_p49_tiled.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p33_local(dut):
+    """Pointwise layer l17 with 33 pixels, local variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p33_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p33_ext(dut):
+    """Pointwise layer l17 with 33 pixels, ext variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p33_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p33_tiled(dut):
+    """Pointwise layer l17 with 33 pixels, tiled variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p33_tiled.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p99_local(dut):
+    """Pointwise layer l17 with 99 pixels, local variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p99_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p99_ext(dut):
+    """Pointwise layer l17 with 99 pixels, ext variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p99_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p99_tiled(dut):
+    """Pointwise layer l17 with 99 pixels, tiled variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p99_tiled.elf")
+
+
+@cocotb.test()
+async def test_layer_l2_p128_local(dut):
+    """Pointwise layer l2 with 128 pixels, local variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l2_p128_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l2_p128_ext(dut):
+    """Pointwise layer l2 with 128 pixels, ext variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l2_p128_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l2_p128_tiled(dut):
+    """Pointwise layer l2 with 128 pixels, tiled variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l2_p128_tiled.elf")
+
+
+@cocotb.test()
+async def test_layer_l2_p384_local(dut):
+    """Pointwise layer l2 with 384 pixels, local variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l2_p384_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l2_p384_ext(dut):
+    """Pointwise layer l2 with 384 pixels, ext variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l2_p384_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l2_p384_tiled(dut):
+    """Pointwise layer l2 with 384 pixels, tiled variant (#11)."""
+    await run_tile(dut, "conv_layer_bench_l2_p384_tiled.elf")
+
+
+@cocotb.test()
+async def test_layer_l30_p49_tiled_pf(dut):
+    """Pointwise layer l30, 49 pixels, variant tiled_pf (#11)."""
+    await run_tile(dut, "conv_layer_bench_l30_p49_tiled_pf.elf")
+
+
+@cocotb.test()
+async def test_layer_l30_p49_tiled_stats(dut):
+    """Pointwise layer l30, 49 pixels, variant tiled_stats (#11)."""
+    await run_tile(dut, "conv_layer_bench_l30_p49_tiled_stats.elf")
+
+
+@cocotb.test()
+async def test_layer_l30_p49_tiled_pf_stats(dut):
+    """Pointwise layer l30, 49 pixels, variant tiled_pf_stats (#11)."""
+    await run_tile(dut, "conv_layer_bench_l30_p49_tiled_pf_stats.elf")
+
+
+@cocotb.test()
+async def test_layer_l28_p49_tiled_pf(dut):
+    """Pointwise layer l28, 49 pixels, variant tiled_pf (#11)."""
+    await run_tile(dut, "conv_layer_bench_l28_p49_tiled_pf.elf")
+
+
+@cocotb.test()
+async def test_layer_l28_p49_tiled_stats(dut):
+    """Pointwise layer l28, 49 pixels, variant tiled_stats (#11)."""
+    await run_tile(dut, "conv_layer_bench_l28_p49_tiled_stats.elf")
+
+
+@cocotb.test()
+async def test_layer_l28_p49_tiled_pf_stats(dut):
+    """Pointwise layer l28, 49 pixels, variant tiled_pf_stats (#11)."""
+    await run_tile(dut, "conv_layer_bench_l28_p49_tiled_pf_stats.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p33_tiled_pf(dut):
+    """Pointwise layer l17, 33 pixels, variant tiled_pf (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p33_tiled_pf.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p99_tiled_pf(dut):
+    """Pointwise layer l17, 99 pixels, variant tiled_pf (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p99_tiled_pf.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p99_tiled_stats(dut):
+    """Pointwise layer l17, 99 pixels, variant tiled_stats (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p99_tiled_stats.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p99_tiled_pf_stats(dut):
+    """Pointwise layer l17, 99 pixels, variant tiled_pf_stats (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p99_tiled_pf_stats.elf")
+
+
+@cocotb.test()
+async def test_layer_l2_p128_tiled_pf(dut):
+    """Pointwise layer l2, 128 pixels, variant tiled_pf (#11)."""
+    await run_tile(dut, "conv_layer_bench_l2_p128_tiled_pf.elf")
+
+
+@cocotb.test()
+async def test_layer_l2_p384_tiled_pf(dut):
+    """Pointwise layer l2, 384 pixels, variant tiled_pf (#11)."""
+    await run_tile(dut, "conv_layer_bench_l2_p384_tiled_pf.elf")
+
+
+@cocotb.test()
+async def test_layer_l30_p49_tiled_pf_spread_stats(dut):
+    """Pointwise layer l30, 49 pixels, variant tiled_pf_spread_stats (#11)."""
+    await run_tile(dut, "conv_layer_bench_l30_p49_tiled_pf_spread_stats.elf")
+
+
+@cocotb.test()
+async def test_layer_l28_p49_tiled_pf_spread_stats(dut):
+    """Pointwise layer l28, 49 pixels, variant tiled_pf_spread_stats (#11)."""
+    await run_tile(dut, "conv_layer_bench_l28_p49_tiled_pf_spread_stats.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p33_tiled_pf_spread_stats(dut):
+    """Pointwise layer l17, 33 pixels, variant tiled_pf_spread_stats (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p33_tiled_pf_spread_stats.elf")
+
+
+@cocotb.test()
+async def test_layer_l17_p99_tiled_pf_spread_stats(dut):
+    """Pointwise layer l17, 99 pixels, variant tiled_pf_spread_stats (#11)."""
+    await run_tile(dut, "conv_layer_bench_l17_p99_tiled_pf_spread_stats.elf")
+
+
+@cocotb.test()
+async def test_layer_l30_p49_tiled_pf_spread_merge_stats(dut):
+    """Pointwise layer l30, 49 pixels, variant tiled_pf_spread_merge_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l30_p49_tiled_pf_spread_merge_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l28_p49_tiled_pf_spread_merge_stats(dut):
+    """Pointwise layer l28, 49 pixels, variant tiled_pf_spread_merge_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l28_p49_tiled_pf_spread_merge_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l17_p33_tiled_pf_spread_merge_stats(dut):
+    """Pointwise layer l17, 33 pixels, variant tiled_pf_spread_merge_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l17_p33_tiled_pf_spread_merge_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l17_p99_tiled_pf_spread_merge_stats(dut):
+    """Pointwise layer l17, 99 pixels, variant tiled_pf_spread_merge_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l17_p99_tiled_pf_spread_merge_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_tile_local_r4_w1(dut):
+    """One-pixel smoke test of the four-row local variant (#11)."""
+    await run_tile(dut, "ext_mem_tile_bench_local_r4_w1.elf")
+
+
+@cocotb.test()
+async def test_tile_dma4_r4_w1(dut):
+    """One-pixel smoke test of the four-row dma4 variant (#11)."""
+    await run_tile(dut, "ext_mem_tile_bench_dma4_r4_w1.elf")
+
+
+@cocotb.test()
+async def test_tile_dma16_r4_w1(dut):
+    """One-pixel smoke test of the four-row dma16 variant (#11)."""
+    await run_tile(dut, "ext_mem_tile_bench_dma16_r4_w1.elf")
+
+
+@cocotb.test()
+async def test_tile_db4_r4_w1(dut):
+    """One-pixel smoke test of the four-row db4 variant (#11)."""
+    await run_tile(dut, "ext_mem_tile_bench_db4_r4_w1.elf")
+
+
+@cocotb.test()
+async def test_tile_db16_r4_w1(dut):
+    """One-pixel smoke test of the four-row db16 variant (#11)."""
+    await run_tile(dut, "ext_mem_tile_bench_db16_r4_w1.elf")
+
+
+@cocotb.test()
+async def test_layer_l30_p49_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l30, 49 pixels, variant tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l30_p49_tiled_pf_spread_merge_overlap_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l28_p49_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l28, 49 pixels, variant tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l28_p49_tiled_pf_spread_merge_overlap_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l17_p33_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l17, 33 pixels, variant tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l17_p33_tiled_pf_spread_merge_overlap_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l17_p99_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l17, 99 pixels, variant tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l17_p99_tiled_pf_spread_merge_overlap_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l0_h56_local(dut):
+    """Layer 0 (3x3 stride 2), top 56 rows, everything in DTCM (#11)."""
+    await run_tile(dut, "conv_layer_bench_l0_h56_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l0_h56_ext(dut):
+    """Layer 0 (3x3 stride 2), top 56 rows, untiled, data in external memory (#11)."""
+    await run_tile(dut, "conv_layer_bench_l0_h56_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l0_h56_tiled_stats(dut):
+    """Layer 0 (3x3 stride 2), top 56 rows, row-tiled path with counters (#11)."""
+    await run_tile(dut, "conv_layer_bench_l0_h56_tiled_stats.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw1_h28_local(dut):
+    """Depthwise layer dw1_h28_local (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw1_h28_local.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw1_h28_ext(dut):
+    """Depthwise layer dw1_h28_ext (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw1_h28_ext.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw1_h28_tiled_stats(dut):
+    """Depthwise layer dw1_h28_tiled_stats (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw1_h28_tiled_stats.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw6_h28_local(dut):
+    """Depthwise layer dw6_h28_local (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw6_h28_local.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw6_h28_ext(dut):
+    """Depthwise layer dw6_h28_ext (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw6_h28_ext.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw6_h28_tiled_stats(dut):
+    """Depthwise layer dw6_h28_tiled_stats (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw6_h28_tiled_stats.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw13_local(dut):
+    """Depthwise layer dw13_local (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw13_local.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw13_ext(dut):
+    """Depthwise layer dw13_ext (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw13_ext.elf")
+
+
+@cocotb.test()
+async def test_depthwise_dw13_tiled_stats(dut):
+    """Depthwise layer dw13_tiled_stats (#11)."""
+    await run_tile(dut, "depthwise_layer_bench_dw13_tiled_stats.elf")
+
+
+@cocotb.test()
+async def test_layer_l5_p256_local(dut):
+    """Pointwise layer l5_p256_local (#11)."""
+    await run_tile(dut, "conv_layer_bench_l5_p256_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l5_p256_ext(dut):
+    """Pointwise layer l5_p256_ext (#11)."""
+    await run_tile(dut, "conv_layer_bench_l5_p256_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l5_p256_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l5_p256_tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l5_p256_tiled_pf_spread_merge_overlap_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l7_p256_local(dut):
+    """Pointwise layer l7_p256_local (#11)."""
+    await run_tile(dut, "conv_layer_bench_l7_p256_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l7_p256_ext(dut):
+    """Pointwise layer l7_p256_ext (#11)."""
+    await run_tile(dut, "conv_layer_bench_l7_p256_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l7_p256_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l7_p256_tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut, "conv_layer_bench_l7_p256_tiled_pf_spread_merge_overlap_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l10_p196_local(dut):
+    """Pointwise layer l10_p196_local (#11)."""
+    await run_tile(dut, "conv_layer_bench_l10_p196_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l10_p196_ext(dut):
+    """Pointwise layer l10_p196_ext (#11)."""
+    await run_tile(dut, "conv_layer_bench_l10_p196_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l10_p196_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l10_p196_tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut,
+        "conv_layer_bench_l10_p196_tiled_pf_spread_merge_overlap_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l12_p196_local(dut):
+    """Pointwise layer l12_p196_local (#11)."""
+    await run_tile(dut, "conv_layer_bench_l12_p196_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l12_p196_ext(dut):
+    """Pointwise layer l12_p196_ext (#11)."""
+    await run_tile(dut, "conv_layer_bench_l12_p196_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l12_p196_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l12_p196_tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut,
+        "conv_layer_bench_l12_p196_tiled_pf_spread_merge_overlap_stats.elf"
+    )
+
+
+@cocotb.test()
+async def test_layer_l15_p196_local(dut):
+    """Pointwise layer l15_p196_local (#11)."""
+    await run_tile(dut, "conv_layer_bench_l15_p196_local.elf")
+
+
+@cocotb.test()
+async def test_layer_l15_p196_ext(dut):
+    """Pointwise layer l15_p196_ext (#11)."""
+    await run_tile(dut, "conv_layer_bench_l15_p196_ext.elf")
+
+
+@cocotb.test()
+async def test_layer_l15_p196_tiled_pf_spread_merge_overlap_stats(dut):
+    """Pointwise layer l15_p196_tiled_pf_spread_merge_overlap_stats (#11)."""
+    await run_tile(
+        dut,
+        "conv_layer_bench_l15_p196_tiled_pf_spread_merge_overlap_stats.elf"
+    )

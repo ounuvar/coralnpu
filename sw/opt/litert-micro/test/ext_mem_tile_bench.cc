@@ -36,10 +36,12 @@
 #include <cstdint>
 #include <cstring>
 
-#ifdef TILE_DMA
-#include "fpga/sw/dma.h"
-#endif
 #include "sw/opt/litert-micro/conv.h"
+#ifdef TILE_DMA
+#define CORALNPU_DMA_TILING
+#define CORALNPU_DMA_BEAT_LOG2 DMA_BEAT_LOG2
+#endif
+#include "sw/opt/litert-micro/dma_tile.h"
 #include "sw/utils/utils.h"
 #ifdef TILE_CHECK_REFERENCE
 #include "tensorflow/lite/kernels/internal/reference/integer_ops/conv.h"
@@ -141,46 +143,20 @@ constexpr bool kDoubleBuffer = false;
 // Which DTCM buffer holds row r.
 static inline int BufferOf(int r) { return kDoubleBuffer ? (r & 1) : 0; }
 
-// Descriptors live in DTCM: the DMA reads them from there. The prologue chain, one two-descriptor
-// chain per buffer parity (the DMA may still be reading one while the next is being built), and a
-// single descriptor for the blocking copies of the serial schedule.
-static struct dma_descriptor dma_prologue[3] __attribute__((section(".data"), aligned(32)));
+// Copy chains: the prologue, one chain per buffer parity (the DMA may still be reading one while
+// the next is being built), and one for the blocking copies of the serial schedule. Their
+// descriptors live in DTCM, in storage the chains are initialized with at the start of main.
+static CopyChain prologue_chain;
+static uint8_t prologue_storage[CopyChain::StorageBytes(3)]
+    __attribute__((section(".data"), aligned(32)));
 #ifdef TILE_DOUBLE_BUFFER
-static struct dma_descriptor dma_chain[2][2] __attribute__((section(".data"), aligned(32)));
+static CopyChain row_chain[2];
+static uint8_t row_storage[2][CopyChain::StorageBytes(2)]
+    __attribute__((section(".data"), aligned(32)));
 #endif
-static struct dma_descriptor dma_single __attribute__((section(".data"), aligned(32)));
-
-static uint32_t Addr(const void *p) {
-  return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(p));
-}
-
-static void SetDescriptor(struct dma_descriptor *d, const void *src, void *dst, uint32_t bytes,
-                          struct dma_descriptor *next) {
-  d->src_addr  = Addr(src);
-  d->dst_addr  = Addr(dst);
-  d->len_flags = dma_make_len_flags(bytes, DMA_BEAT_LOG2, 0, 0, 0);
-  d->next_desc = next ? Addr(next) : 0;
-  d->poll_addr = d->poll_mask = d->poll_value = d->reserved = 0;
-}
-
-#ifdef TILE_DOUBLE_BUFFER
-// Adds a copy to the end of a chain (first/last start out null).
-static void Append(struct dma_descriptor **first, struct dma_descriptor **last,
-                   struct dma_descriptor *d, const void *src, void *dst, uint32_t bytes) {
-  SetDescriptor(d, src, dst, bytes, nullptr);
-  if (*last)
-    (*last)->next_desc = Addr(d);
-  else
-    *first = d;
-  *last = d;
-}
-#endif
-
-// Returns false if the DMA reported an error or never finished.
-static bool RunDma(struct dma_descriptor *first) {
-  dma_start(Addr(first));
-  return dma_wait_done() == 0;
-}
+static CopyChain single_chain;
+static uint8_t single_storage[CopyChain::StorageBytes(1)]
+    __attribute__((section(".data"), aligned(32)));
 #else
 #define SRC_INPUT  tile_input
 #define SRC_FILTER tile_filter
@@ -189,6 +165,14 @@ static bool RunDma(struct dma_descriptor *first) {
 #endif
 
 int main(void) {
+#ifdef TILE_DMA
+  prologue_chain.Init(prologue_storage, 3);
+#ifdef TILE_DOUBLE_BUFFER
+  row_chain[0].Init(row_storage[0], 2);
+  row_chain[1].Init(row_storage[1], 2);
+#endif
+  single_chain.Init(single_storage, 1);
+#endif
   for (int i = 0; i < kRows * kRowIn; ++i)
     SRC_INPUT[i] = NextByte();
   for (int i = 0; i < kOutDepth * kInDepth; ++i)
@@ -244,64 +228,57 @@ int main(void) {
 #ifdef TILE_DMA
   // Prologue: one chain brings in the filter, the bias and input row 0.
   {
-    SetDescriptor(&dma_prologue[0], ext_filter, tile_filter, kOutDepth * kInDepth,
-                  &dma_prologue[1]);
-    SetDescriptor(&dma_prologue[1], ext_bias, tile_bias, kOutDepth * sizeof(int32_t),
-                  &dma_prologue[2]);
-    SetDescriptor(&dma_prologue[2], ext_input, tile_input[BufferOf(0)], kRowIn, nullptr);
+    prologue_chain.Add(ext_filter, tile_filter, kOutDepth * kInDepth);
+    prologue_chain.Add(ext_bias, tile_bias, kOutDepth * sizeof(int32_t));
+    prologue_chain.Add(ext_input, tile_input[BufferOf(0)], kRowIn);
     const uint64_t a = mcycle_read();
-    ok &= RunDma(&dma_prologue[0]);
+    ok &= prologue_chain.Run();
     t_in += mcycle_read() - a;
   }
   for (int r = 0; r < kRows; ++r) {
 #ifdef TILE_DOUBLE_BUFFER
     // One chain per row, moving data for the neighbouring rows while this row computes:
     // row r-1's output out to external memory, row r+1's input in.
-    struct dma_descriptor *first = nullptr, *last = nullptr;
-    struct dma_descriptor *d = dma_chain[r & 1];
-    int n                    = 0;
-    if (r > 0) {
-      Append(&first, &last, &d[n++], tile_output[BufferOf(r - 1)], ext_output + (r - 1) * kRowOut,
-             kRowOut);
-    }
-    if (r + 1 < kRows) {
-      Append(&first, &last, &d[n++], ext_input + (r + 1) * kRowIn, tile_input[BufferOf(r + 1)],
-             kRowIn);
-    }
-    if (first)
-      dma_start(Addr(first));
+    CopyChain &chain = row_chain[r & 1];
+    chain.Clear();
+    if (r > 0)
+      chain.Add(tile_output[BufferOf(r - 1)], ext_output + (r - 1) * kRowOut, kRowOut);
+    if (r + 1 < kRows)
+      chain.Add(ext_input + (r + 1) * kRowIn, tile_input[BufferOf(r + 1)], kRowIn);
+    chain.Start();
     const uint64_t b = mcycle_read();
     compute(tile_input[BufferOf(r)], tile_output[BufferOf(r)]);
     const uint64_t c = mcycle_read();
     t_compute += c - b;
-    if (first) {
-      ok &= dma_wait_done() == 0;
+    if (chain.size() > 0) {
+      ok &= chain.Wait();
       t_stall += mcycle_read() - c;
     }
 #else
     if (r > 0) {
-      SetDescriptor(&dma_single, ext_input + r * kRowIn, tile_input[BufferOf(r)], kRowIn, nullptr);
+      single_chain.Clear();
+      single_chain.Add(ext_input + r * kRowIn, tile_input[BufferOf(r)], kRowIn);
       const uint64_t a = mcycle_read();
-      ok &= RunDma(&dma_single);
+      ok &= single_chain.Run();
       t_in += mcycle_read() - a;
     }
     const uint64_t b = mcycle_read();
     compute(tile_input[BufferOf(r)], tile_output[BufferOf(r)]);
     const uint64_t c = mcycle_read();
     t_compute += c - b;
-    SetDescriptor(&dma_single, tile_output[BufferOf(r)], ext_output + r * kRowOut, kRowOut,
-                  nullptr);
-    ok &= RunDma(&dma_single);
+    single_chain.Clear();
+    single_chain.Add(tile_output[BufferOf(r)], ext_output + r * kRowOut, kRowOut);
+    ok &= single_chain.Run();
     t_out += mcycle_read() - c;
 #endif
   }
 #ifdef TILE_DOUBLE_BUFFER
   // Epilogue: the last row's output has not been copied out yet.
   {
-    SetDescriptor(&dma_single, tile_output[BufferOf(kRows - 1)], ext_output + (kRows - 1) * kRowOut,
-                  kRowOut, nullptr);
+    single_chain.Clear();
+    single_chain.Add(tile_output[BufferOf(kRows - 1)], ext_output + (kRows - 1) * kRowOut, kRowOut);
     const uint64_t a = mcycle_read();
-    ok &= RunDma(&dma_single);
+    ok &= single_chain.Run();
     t_out += mcycle_read() - a;
   }
 #endif

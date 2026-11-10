@@ -27,6 +27,8 @@ namespace vme {
 struct ConvVmeWeights;
 }  // namespace vme
 
+struct LayerTilePlan;  // conv_row_plan.h
+
 struct OpDataConvCustom : public tflite::OpDataConv {
   int accs_buffer_index;
   int16_t *repacked_weights;
@@ -37,6 +39,10 @@ struct OpDataConvCustom : public tflite::OpDataConv {
   // Set by ConvPrepare when the layer runs on the matrix engine (idea 5, #12).
   vme::ConvVmeWeights *vme_weights;
   int vme_scratch_index;
+  // Set by ConvPrepare and DepthwiseConvPrepare with --//sw/opt/litert-micro:conv_tiling (#11):
+  // the layer's tile plan, so that Eval does not plan again. Null otherwise. A pointer, not the
+  // plan, so that the struct is the same in every build whatever the flags.
+  const LayerTilePlan *tile_plan;
 };
 
 struct AlignedFree {
