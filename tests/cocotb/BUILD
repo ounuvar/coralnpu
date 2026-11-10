@@ -189,6 +189,44 @@ verilator_cocotb_model(
     ],
 )
 
+# #59: cores with the memory stall counters.
+verilator_cocotb_model(
+    name = "rvv_core_mini_perf_axi_model",
+    cflags = VERILATOR_BUILD_ARGS,
+    hdl_toplevel = "RvvCoreMiniPerfAxi",
+    trace = False,
+    verilog_source = "//hdl/chisel/src/coralnpu:RvvCoreMiniPerfAxi.sv",
+    vlt_tpl = "//coralnpu_test_utils:dispatch.vlt.tpl",
+    deps = [
+        "//hdl/verilog:sram_backdoor",
+    ],
+)
+
+verilator_cocotb_model(
+    name = "rvv_core_mini_perf_highmem_axi_model",
+    cflags = VERILATOR_BUILD_ARGS,
+    hdl_toplevel = "RvvCoreMiniPerfHighmemAxi",
+    trace = False,
+    verilog_source = "//hdl/chisel/src/coralnpu:RvvCoreMiniPerfHighmemAxi.sv",
+    deps = [
+        "//hdl/verilog:sram_backdoor",
+    ],
+)
+
+verilator_cocotb_model(
+    name = "vme_core_mini_perf_highmem_axi_model",
+    cflags = VERILATOR_BUILD_ARGS + [
+        "-DZVT_ON",
+        "-DZVTBF16FMM_ON",
+    ],
+    hdl_toplevel = "VmeCoreMiniPerfHighmemAxi",
+    trace = False,
+    verilog_source = "//hdl/chisel/src/coralnpu:VmeCoreMiniPerfHighmemAxi.sv",
+    deps = [
+        "//hdl/verilog:sram_backdoor",
+    ],
+)
+
 vcs_cocotb_model(
     name = "core_mini_axi_vcs_model",
     build_args = VCS_BUILD_ARGS,
@@ -1110,6 +1148,28 @@ coralflow_test(
         "verilator",
         "vcs",
         "nexus_fpga",
+    ],
+    deps = [
+        "@bazel_tools//tools/python/runfiles",
+    ],
+)
+
+# #59: memory stall counters.
+coralnpu_v2_binary(
+    name = "perf_counters_test",
+    srcs = [
+        "perf_counters_test.cc",
+    ],
+)
+
+coralflow_test(
+    name = "perf_counters_cocotb_test",
+    size = "medium",
+    srcs = ["perf_counters_test.py"],
+    elf = ":perf_counters_test.elf",
+    hdl_toplevel = "RvvCoreMiniPerfAxi",
+    targets = [
+        "verilator",
     ],
     deps = [
         "@bazel_tools//tools/python/runfiles",

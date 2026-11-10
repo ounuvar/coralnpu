@@ -391,7 +391,15 @@ class Dispatch(p: Parameters) extends Module {
     val debug_mode                     = Input(Bool())
     val branch                         = Output(Vec(p.instructionLanes, Bool()))
     val jump                           = Output(Vec(p.instructionLanes, Bool()))
+
+    // #59 stall events for the performance counters.
+    val perf = Option.when(p.enablePerfCounters)(Output(new DispatchPerfIO))
   })
+}
+
+class DispatchPerfIO extends Bundle {
+  val lsuFull = Bool()
+  val rvvFull = Bool()
 }
 
 class DispatchV2(p: Parameters) extends Dispatch(p) {
@@ -645,6 +653,14 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
   val isLsuCount   = isLsu.scan(0.U(4.W))(_ + _)
   val lsuInterlock =
     (0 until p.instructionLanes).map(i => isLsuCount(i) < io.lsuQueueCapacity)
+
+  // #59: lane 0 held back by a full LSU or RVV queue.
+  io.perf.foreach { perf =>
+    perf.lsuFull := io.inst(0).valid && isLsu(0) && !lsuInterlock(0)
+    perf.rvvFull := (if (p.enableRvv) {
+                       io.inst(0).valid && decodedInsts(0).rvv.get.valid && !rvvInterlock(0)
+                     } else { false.B })
+  }
 
   // ---------------------------------------------------------------------------
   // Undef
@@ -975,7 +991,11 @@ class DispatchV2(p: Parameters) extends Dispatch(p) {
       val (csr_address, csr_address_valid) = CsrAddress.safe(csr_bits_index)
       val is_csr_write     = !(csr.bits.isOneOf(CsrOp.CSRRS, CsrOp.CSRRC) && rs1Addr(0) === 0.U)
       val is_csr_read_only = csr_bits_index(11, 10) === 3.U
-      val csr_op_valid     = csr_address_valid && !(is_csr_write && is_csr_read_only)
+      val csr_index_valid  =
+        if (p.enablePerfCounters) {
+          csr_address_valid || PerfCounters.isPerfIndex(p, csr_bits_index)
+        } else { csr_address_valid }
+      val csr_op_valid = csr_index_valid && !(is_csr_write && is_csr_read_only)
       // Stall reads of vxsat (0x009), vcsr (0x00F), and (when VME is enabled)
       // mtype (0xC23) until the vector unit is idle. These CSRs can be
       // modified by in-flight vector instructions: saturating arithmetic sets

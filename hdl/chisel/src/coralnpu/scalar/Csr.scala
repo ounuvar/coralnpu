@@ -187,6 +187,46 @@ object DebugCause extends ChiselEnum {
 
 class CsrCounters(p: Parameters) extends Bundle {
   val nRetired = UInt(log2Ceil(p.retirementLanes + 1).W)
+  // One bit per PerfCounters event, high in each cycle the event happens.
+  val perf = Option.when(p.enablePerfCounters)(Vec(PerfCounters.count, Bool()))
+}
+
+// #59: 64-bit cycle counters for memory stalls, read like mcycle at
+// mhpmcounter3 + i (0xB03 + i) with high halves at mhpmcounter3h + i
+// (0xB83 + i). They count from reset; writes are ignored. Only present with
+// Parameters.enablePerfCounters. Events, in counter order (set in SCore):
+//   0 memStall:    lane 0 dispatches nothing while the LSU has work in flight
+//   1 lsuFull:     lane 0 holds a load/store that waits for LSU queue space
+//   2 tcmWait:     an LSU request to DTCM (or to ITCM) is not yet accepted
+//   3 extWait:     an LSU request on the external bus is not yet accepted
+//   4 fetchWait:   an instruction fetch is not yet accepted
+//   5 vecDataWait: the vector unit offers store data, indices or a mask that
+//                  the LSU cannot take yet
+//   6 noDispatch:  lane 0 dispatches nothing
+//   7 rvvFull:     lane 0 holds a vector instruction that waits for RVV queue space
+object PerfCounters {
+  val names: Seq[String] = Seq(
+    "memStall",
+    "lsuFull",
+    "tcmWait",
+    "extWait",
+    "fetchWait",
+    "vecDataWait",
+    "noDispatch",
+    "rvvFull"
+  )
+  def count: Int     = names.length
+  val baseIndex: Int = 0xb03
+  val highOffset     = 0x80
+
+  def isPerfIndex(p: Parameters, index: UInt): Bool = {
+    val lo = index >= baseIndex.U && index < (baseIndex + count).U
+    val hi =
+      if (p.xlen == 32) {
+        index >= (baseIndex + highOffset).U && index < (baseIndex + highOffset + count).U
+      } else { false.B }
+    lo || hi
+  }
 }
 
 class CsrBruIO(p: Parameters) extends Bundle {
@@ -361,7 +401,11 @@ class Csr(p: Parameters) extends Module {
 
   // Decode the Index.
   val (csr_address, csr_address_valid) = CsrAddress.safe(req.bits.index)
-  assert(!(req.valid && !csr_address_valid))
+  if (p.enablePerfCounters) {
+    assert(!(req.valid && !csr_address_valid && !PerfCounters.isPerfIndex(p, req.bits.index)))
+  } else {
+    assert(!(req.valid && !csr_address_valid))
+  }
   val fflagsEn   = csr_address === CsrAddress.FFLAGS
   val frmEn      = csr_address === CsrAddress.FRM
   val fcsrEn     = csr_address === CsrAddress.FCSR
@@ -503,6 +547,19 @@ class Csr(p: Parameters) extends Module {
     0.U(3.W)
   )
 
+  // #59 memory stall counters.
+  val perfCounters =
+    Option.when(p.enablePerfCounters)(Seq.fill(PerfCounters.count)(RegInit(0.U(64.W))))
+  perfCounters.foreach(_.zip(io.counters.perf.get).foreach { case (c, e) => c := c + e })
+  val perfRead = perfCounters
+    .map(_.zipWithIndex.flatMap { case (c, i) =>
+      val index = PerfCounters.baseIndex + i
+      val hiIndex = index + PerfCounters.highOffset
+      Seq((req.bits.index === index.U) -> (if (p.xlen == 32) c(31, 0) else c)) ++
+        (if (p.xlen == 32) Seq((req.bits.index === hiIndex.U) -> c(63, 32)) else Seq())
+    })
+    .getOrElse(Seq())
+
   val rdata = MuxUpTo1H(
     0.U(p.xlen.W),
     Seq(
@@ -577,7 +634,7 @@ class Csr(p: Parameters) extends Module {
         dpcEn       -> dpc,
         dscratch0En -> dscratch0,
         dscratch1En -> dscratch1
-      )
+      ) ++ perfRead
   )
 
   val wdata = MuxLookup(req.bits.op, 0.U)(

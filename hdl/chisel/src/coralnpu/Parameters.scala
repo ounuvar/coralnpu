@@ -108,6 +108,11 @@ class Parameters(var m: Seq[MemoryRegion] = Seq(), val hartId: Int = 0, var xlen
   // vrqclamp.vx in the RVV backend (REQUANT_ON). Requires enableRvv.
   var enableRequant = false
 
+  // #59: cycle counters for memory stalls at mhpmcounter3 and up (see
+  // PerfCounters in scalar/Csr.scala). Measurement only; off leaves the RTL
+  // unchanged.
+  var enablePerfCounters = false
+
   // Enable VME (Zvt) non-tile state and mset* instructions. Requires enableRvv.
   var enableVme           = false
   val vmeTeRatio          = 8
@@ -209,6 +214,7 @@ class Parameters(var m: Seq[MemoryRegion] = Seq(), val hartId: Int = 0, var xlen
     newP.enableVerification = this.enableVerification
     newP.rawExposeDebugPorts = this.rawExposeDebugPorts
     newP.enableRvv = this.enableRvv
+    newP.enablePerfCounters = this.enablePerfCounters
     newP.enableFloat = this.enableFloat
     newP.enableZfbfmin = this.enableZfbfmin
     newP.enableVectorBf16 = this.enableVectorBf16

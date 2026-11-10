@@ -205,6 +205,18 @@ class SCore(p: Parameters) extends Module {
 
   // Instruction counters
   csr.io.counters.nRetired := rob_io.nRetired
+  // #59 memory stall events, in PerfCounters order.
+  csr.io.counters.perf.foreach { ev =>
+    val noDispatch = !fetch.io.inst.lanes(0).fire
+    ev(0) := noDispatch && lsu.io.active
+    ev(1) := dispatch.io.perf.get.lsuFull
+    ev(2) := (lsu.io.dbus.valid && !lsu.io.dbus.ready) || (lsu.io.ibus.valid && !lsu.io.ibus.ready)
+    ev(3) := lsu.io.ebus.dbus.valid && !lsu.io.ebus.dbus.ready
+    ev(4) := fetch.io.ibus.valid && !fetch.io.ibus.ready
+    ev(5) := lsu.io.rvv2lsu.map(x => x(0).valid && !x(0).ready).getOrElse(false.B)
+    ev(6) := noDispatch
+    ev(7) := dispatch.io.perf.get.rvvFull
+  }
 
   // ---------------------------------------------------------------------------
   // Control Status Unit

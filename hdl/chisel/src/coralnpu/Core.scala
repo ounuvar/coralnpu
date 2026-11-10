@@ -102,6 +102,8 @@ object EmitCore extends App {
       p.enableVme = arg.split("=")(1).toBoolean
     } else if (arg.startsWith("--enableRequant")) {
       p.enableRequant = arg.split("=")(1).toBoolean
+    } else if (arg.startsWith("--enablePerfCounters")) {
+      p.enablePerfCounters = arg.split("=")(1).toBoolean
     } else if (arg.startsWith("--enableFloat")) {
       p.enableFloat = arg.split("=")(1).toBoolean
     } else if (arg.startsWith("--enableZfbfmin")) {
