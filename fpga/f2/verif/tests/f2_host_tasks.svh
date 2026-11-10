@@ -48,27 +48,55 @@ localparam logic [31:0] F2Pass = 32'h600D_F00D;  // fpga/sw/f2_smoke_test.c
 // DDR, which crosses into the DDR clock domain). The RX FIFO holds 256.
 localparam int F2SpiReadWindow = 200;
 
+// Status polls before giving up on the SPI controller (each is one OCL read).
+localparam int F2MaxPolls = 200000;
+
 task automatic f2_spi_wait_idle();
-  logic [31:0] status;
-  do `F2_OCL_READ(F2RegStatus, status); while (status[3]);
+  logic [31:0] status, free;
+  for (int polls = 0; polls < F2MaxPolls; polls++) begin
+    `F2_OCL_READ(F2RegStatus, status);
+    if (!status[3]) return;
+  end
+  `F2_OCL_READ(F2RegSpiCmdFree, free);
+  `F2_ERROR($sformatf("SPI still busy after %0d polls: STATUS 0x%08h, SPI_CMDFREE %0d", F2MaxPolls,
+                      status, free));
+endtask
+
+// Queue registers (SPI_CSB, SPI_TX1, SPI_TX4, SPI_RX, SPI_IDLE) hold the OCL write while the
+// 32-entry command queue is full, and the F2 shell can time a held write out. Wait for a free
+// entry first, as f2_loader does (sw/utils/f2_loader/f2_host.cc, F2Host::Queue).
+int f2_cmd_free = 0;
+
+task automatic f2_queue(input logic [31:0] reg_addr, input logic [31:0] value);
+  logic [31:0] free;
+  for (int polls = 0; f2_cmd_free == 0; polls++) begin
+    if (polls == F2MaxPolls) begin
+      `F2_ERROR("SPI command queue stays full");
+      return;
+    end
+    `F2_OCL_READ(F2RegSpiCmdFree, free);
+    f2_cmd_free = (free > 32) ? 0 : int'(free);
+  end
+  `F2_OCL_WRITE(reg_addr, value);
+  f2_cmd_free--;
 endtask
 
 // Upstream SPI frame (Spi2TLULV2): [op, addr (4 B, big endian), len (2 B, beats - 1)].
 task automatic f2_spi_header(input logic [7:0] op, input logic [31:0] addr, input logic [15:0] len);
-  `F2_OCL_WRITE(F2RegSpiTx4, {addr[15:8], addr[23:16], addr[31:24], op});
-  `F2_OCL_WRITE(F2RegSpiTx1, {24'd0, addr[7:0]});
-  `F2_OCL_WRITE(F2RegSpiTx1, {24'd0, len[15:8]});
-  `F2_OCL_WRITE(F2RegSpiTx1, {24'd0, len[7:0]});
+  f2_queue(F2RegSpiTx4, {addr[15:8], addr[23:16], addr[31:24], op});
+  f2_queue(F2RegSpiTx1, {24'd0, addr[7:0]});
+  f2_queue(F2RegSpiTx1, {24'd0, len[15:8]});
+  f2_queue(F2RegSpiTx1, {24'd0, len[7:0]});
 endtask
 
 // Write `beats` 16-byte beats, words[first*4 ...], to addr (16-byte aligned).
 task automatic f2_spi_write(input logic [31:0] addr, ref logic [31:0] words[$], input int first,
                             input int beats);
-  `F2_OCL_WRITE(F2RegSpiCsb, 0);
+  f2_queue(F2RegSpiCsb, 0);
   f2_spi_header(8'h02, addr, 16'(beats - 1));
-  for (int i = first * 4; i < (first + beats) * 4; i++) `F2_OCL_WRITE(F2RegSpiTx4, words[i]);
-  `F2_OCL_WRITE(F2RegSpiIdle, 16);  // drain the bridge's clock crossing
-  `F2_OCL_WRITE(F2RegSpiCsb, 1);
+  for (int i = first * 4; i < (first + beats) * 4; i++) f2_queue(F2RegSpiTx4, words[i]);
+  f2_queue(F2RegSpiIdle, 16);  // drain the bridge's clock crossing
+  f2_queue(F2RegSpiCsb, 1);
 endtask
 
 // `width` bits (at most 32) of a byte stream starting at bit `bit_off`, MSB of byte 0 first.
@@ -87,11 +115,11 @@ task automatic f2_spi_read_line(input logic [31:0] addr, output logic [127:0] li
   logic [31:0] count, v;
   byte unsigned rx[$];
   int sync;
-  `F2_OCL_WRITE(F2RegSpiCsb, 0);
+  f2_queue(F2RegSpiCsb, 0);
   f2_spi_header(8'h01, addr, 16'd0);
-  `F2_OCL_WRITE(F2RegSpiRx, F2SpiReadWindow);
-  `F2_OCL_WRITE(F2RegSpiIdle, 4);
-  `F2_OCL_WRITE(F2RegSpiCsb, 1);
+  f2_queue(F2RegSpiRx, F2SpiReadWindow);
+  f2_queue(F2RegSpiIdle, 4);
+  f2_queue(F2RegSpiCsb, 1);
   f2_spi_wait_idle();
   `F2_OCL_READ(F2RegSpiRxCount, count);
   for (int i = 0; i < count; i++) begin
@@ -165,8 +193,24 @@ task automatic f2_load_image(input string path, output logic [31:0] entry,
         words.push_back(w2);
         words.push_back(w3);
       end
+      $display("[%t] [f2] segment 0x%08h: %0d bytes", $realtime, addr, beats * 16);
       for (int b = 0; b < beats; b += 64) begin  // frames of up to 1 KB
         f2_spi_write(addr + 32'(b * 16), words, b, (beats - b > 64) ? 64 : beats - b);
+        $display("[%t] [f2]   wrote %0d of %0d bytes", $realtime,
+                 ((beats - b > 64) ? b + 64 : beats) * 16, beats * 16);
+      end
+      // Read the segment's first line back, so a load that did not land shows up here rather
+      // than as a program that never runs.
+      begin
+        logic [127:0] line;
+        f2_spi_wait_idle();
+        f2_spi_read_line(addr, line);
+        if (line != {words[3], words[2], words[1], words[0]}) begin
+          `F2_ERROR($sformatf("read-back 0x%08h: 0x%032h, wrote 0x%08h%08h%08h%08h", addr, line,
+                              words[3], words[2], words[1], words[0]));
+        end else begin
+          $display("[%t] [f2]   read-back of 0x%08h ok", $realtime, addr);
+        end
       end
       total += beats * 16;
     end else if (tag == "Y") begin
@@ -178,7 +222,7 @@ task automatic f2_load_image(input string path, output logic [31:0] entry,
   end
   $fclose(fd);
   f2_spi_wait_idle();
-  $display("[f2] loaded %s: %0d bytes, entry 0x%08h", path, total, entry);
+  $display("[%t] [f2] loaded %s: %0d bytes, entry 0x%08h", $realtime, path, total, entry);
 endtask
 
 // Set the start PC, release the clock gate, release reset (as the upstream SPI test does).

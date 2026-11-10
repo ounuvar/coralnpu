@@ -85,7 +85,23 @@ def sources_tcl(sources, include_dirs, defines, generics):
     return "\n".join(lines) + "\n"
 
 
-def sim_filelist(sources, include_dirs, defines):
+# Extra defines for xsim, the HDK's default simulator (Vivado 2025.2):
+# - SYNTHESIS drops the simulation-only blocks (OpenTitan assertions, which use `a -> b` in
+#   immediate assertions, and Chisel's sim-only code); xsim does not support those assertions.
+# - XSIM skips pulp's `default disable iff`, which xsim does not support either.
+# - xsim is 4-state: Chisel registers and memories without a reset start as X unless their
+#   initial blocks are enabled and randomized, as Chisel's simulation flows do.
+XSIM_DEFINES = [
+    "SYNTHESIS",
+    "XSIM",
+    "ENABLE_INITIAL_REG_",
+    "ENABLE_INITIAL_MEM_",
+    "RANDOMIZE_REG_INIT",
+    "RANDOMIZE_MEM_INIT",
+]
+
+
+def sim_filelist(sources, include_dirs, defines, simulator):
     """File list for the HDK simulation (top.<simulator>.f)."""
     src = "$CL_DIR/" + SRC_SUBDIR
     lines = [
@@ -93,6 +109,8 @@ def sim_filelist(sources, include_dirs, defines):
         "-define CL_NAME=cl_coralnpu",
         "-define DISABLE_VJTAG_DEBUG",
     ]
+    if simulator == "xsim":
+        lines += [f"-define {d}" for d in XSIM_DEFINES]
     lines += [f"-define {d}" for d in defines]
     lines += [f"-include {src}/{d}" for d in include_dirs]
     lines += ["-include $CL_DIR/design/", "-include $CL_DIR/verif/tests"]
@@ -175,9 +193,11 @@ def main():
             tar.add(
                 path, arcname=f"{top}/verif/scripts/{os.path.basename(path)}"
             )
-        filelist = sim_filelist(sources, include_dirs, defines).encode()
         for sim in ("xsim", "vcs", "questa"):
-            add_bytes(tar, f"{top}/verif/scripts/top.{sim}.f", filelist)
+            add_bytes(
+                tar, f"{top}/verif/scripts/top.{sim}.f",
+                sim_filelist(sources, include_dirs, defines, sim).encode()
+            )
 
     print(
         f"wrote {args.out}: {len(sources)} SoC sources, defines {' '.join(defines)}, "

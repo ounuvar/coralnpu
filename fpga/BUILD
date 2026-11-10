@@ -907,6 +907,7 @@ _CL_HDK_TESTS = [
 _CL_HDK_VERIF_SCRIPTS = [
     "f2/verif/scripts/Makefile",
     "f2/verif/scripts/Makefile.tests",
+    "f2/verif/scripts/waves.tcl",
 ]
 
 [
