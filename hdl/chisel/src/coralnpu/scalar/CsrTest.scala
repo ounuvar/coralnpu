@@ -334,4 +334,70 @@ class CsrSpec extends AnyFreeSpec with ChiselSim {
       }
     }
   }
+
+  "Perf counters (#59)" in {
+    val pPerf = new Parameters
+    pPerf.enableFloat = true
+    pPerf.enableRvv = true
+    pPerf.enableVerification = true
+    pPerf.enablePerfCounters = true
+    val n = PerfCounters.count
+
+    simulate(new Csr(pPerf)) { dut =>
+      initDut(dut)
+      dut.io.counters.perf.get.foreach(_.poke(false.B))
+      dut.clock.step(5)
+
+      def read(index: Int): BigInt = {
+        dut.io.req.valid.poke(true.B)
+        dut.io.req.bits.op.poke(CsrOp.CSRRS)
+        dut.io.req.bits.index.poke(index.U)
+        dut.io.req.bits.addr.poke(5.U)
+        dut.io.req.bits.rs1.poke(0.U)
+        dut.clock.step()
+        dut.io.req.valid.poke(false.B)
+        assert(dut.io.rd.valid.peek().litToBoolean, f"read of 0x$index%x must write rd")
+        dut.io.rd.bits.data.peek().litValue
+      }
+
+      // Counter i must start at 0 and count exactly the cycles its event is high.
+      for (i <- 0 until n) {
+        assert(read(PerfCounters.baseIndex + i) == 0, s"${PerfCounters.names(i)} must reset to 0")
+      }
+      for (i <- 0 until n) {
+        dut.io.counters.perf.get(i).poke(true.B)
+        dut.clock.step(3 * (i + 1))
+        dut.io.counters.perf.get(i).poke(false.B)
+      }
+      dut.clock.step()
+      for (i <- 0 until n) {
+        val lo = read(PerfCounters.baseIndex + i)
+        val hi = read(PerfCounters.baseIndex + PerfCounters.highOffset + i)
+        assert(lo == 3 * (i + 1), s"${PerfCounters.names(i)}: expected ${3 * (i + 1)}, got $lo")
+        assert(hi == 0, s"${PerfCounters.names(i)} high half must be 0, got $hi")
+      }
+
+      // Writes are ignored.
+      dut.io.req.valid.poke(true.B)
+      dut.io.req.bits.op.poke(CsrOp.CSRRW)
+      dut.io.req.bits.index.poke(PerfCounters.baseIndex.U)
+      dut.io.req.bits.addr.poke(0.U)
+      dut.io.req.bits.rs1.poke(5.U)
+      dut.io.rs1.data.poke(0x1234.U)
+      dut.clock.step()
+      dut.io.req.valid.poke(false.B)
+      dut.io.rs1.data.poke(0.U)
+      assert(read(PerfCounters.baseIndex) == 3, "a write must not change the counter")
+
+      // All events at once.
+      dut.io.counters.perf.get.foreach(_.poke(true.B))
+      dut.clock.step(10)
+      dut.io.counters.perf.get.foreach(_.poke(false.B))
+      for (i <- 0 until n) {
+        val v      = read(PerfCounters.baseIndex + i)
+        val expect = 3 * (i + 1) + 10
+        assert(v == expect, s"${PerfCounters.names(i)}: expected $expect, got $v")
+      }
+    }
+  }
 }

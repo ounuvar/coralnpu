@@ -929,6 +929,61 @@ chisel_cc_library(
     vopts = VME_CORE_MINI_AXI_VOPTS + ["-DREQUANT_ON"],
 )
 
+# #59: memory stall counters (mhpmcounter3 and up). Separate targets so every
+# existing core stays unchanged; enablePerfCounters is off everywhere else.
+template_rule(
+    chisel_cc_library,
+    {
+        "rvv_core_mini_perf_axi_cc_library": {
+            "verilog_file_path": "RvvCoreMiniPerfAxi.sv",
+            "extra_outs": [
+                "VRvvCoreMiniPerfAxi_parameters.h",
+                "RvvCoreMiniPerfAxi.zip",
+            ],
+            "gen_flags": [
+                "--moduleName=RvvCoreMiniPerf",
+                "--itcmSizeKBytes=8",
+                "--dtcmSizeKBytes=32",
+                "--enablePerfCounters=True",
+            ] + RVV_CORE_MINI_AXI_COMMON_GEN_FLAGS,
+            "module_name": "RvvCoreMiniPerfAxi",
+            "vopts": RVV_CORE_MINI_AXI_VOPTS,
+        },
+        "rvv_core_mini_perf_highmem_axi_cc_library": {
+            "extra_outs": [
+                "VRvvCoreMiniPerfHighmemAxi_parameters.h",
+                "RvvCoreMiniPerfHighmemAxi.zip",
+            ],
+            "gen_flags": [
+                "--moduleName=RvvCoreMiniPerf",
+                "--itcmSizeKBytes=1024",
+                "--dtcmSizeKBytes=1024",
+                "--enablePerfCounters=True",
+            ] + RVV_CORE_MINI_AXI_COMMON_GEN_FLAGS,
+            "module_name": "RvvCoreMiniPerfHighmemAxi",
+            "tags": ["manual"],
+            "vopts": RVV_CORE_MINI_AXI_VOPTS,
+        },
+        "vme_core_mini_perf_highmem_axi_cc_library": {
+            "extra_outs": [
+                "VVmeCoreMiniPerfHighmemAxi_parameters.h",
+                "VmeCoreMiniPerfHighmemAxi.zip",
+            ],
+            "gen_flags": [
+                "--moduleName=VmeCoreMiniPerf",
+                "--itcmSizeKBytes=1024",
+                "--dtcmSizeKBytes=1024",
+                "--enablePerfCounters=True",
+            ] + VME_CORE_MINI_AXI_COMMON_GEN_FLAGS,
+            "module_name": "VmeCoreMiniPerfHighmemAxi",
+            "tags": ["manual"],
+            "vopts": VME_CORE_MINI_AXI_VOPTS,
+        },
+    },
+    chisel_lib = ":coralnpu",
+    emit_class = "coralnpu.EmitCore",
+)
+
 filter_files_by_extension(
     name = "vme_core_mini_verification_requant_axi_cc_library_emit_verilog_single_sv",
     src = ":vme_core_mini_verification_requant_axi_cc_library_emit_verilog",

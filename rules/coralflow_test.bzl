@@ -59,6 +59,19 @@ _TOPLEVEL_MODELS = {
         "//tests/cocotb:vme_core_mini_requant_highmem_axi_model",
         None,
     ),
+    # #59 memory stall counters: Verilator only.
+    "RvvCoreMiniPerfAxi": (
+        "//tests/cocotb:rvv_core_mini_perf_axi_model",
+        None,
+    ),
+    "RvvCoreMiniPerfHighmemAxi": (
+        "//tests/cocotb:rvv_core_mini_perf_highmem_axi_model",
+        None,
+    ),
+    "VmeCoreMiniPerfHighmemAxi": (
+        "//tests/cocotb:vme_core_mini_perf_highmem_axi_model",
+        None,
+    ),
 }
 
 _SIZE_ORDER = {
@@ -345,6 +358,8 @@ def coralflow_test(
         "RvvCoreMini_ITCM512KB_DTCM512KBAxi",
         "VmeCoreMiniHighmemAxi",
         "VmeCoreMiniRequantHighmemAxi",
+        "RvvCoreMiniPerfHighmemAxi",
+        "VmeCoreMiniPerfHighmemAxi",
     )
     highmem_env = "1" if is_highmem_map else "0"
     main_src = main if main else (srcs[0] if len(srcs) == 1 else None)
