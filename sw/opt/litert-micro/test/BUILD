@@ -622,6 +622,7 @@ coralnpu_v2_binary(
         "//sw/opt/litert-micro:conv",
         "//sw/opt/litert-micro:depthwise_conv",
         "//sw/utils",
+        "//sw/utils:perf_counters",
         "@tflite_micro//tensorflow/lite/kernels/internal:reference_base",
     ],
 )
@@ -794,6 +795,7 @@ coralnpu_v2_binary(
         "//sw/opt/litert-micro:conv_vme",
         "//sw/opt/litert-micro:dma_tile",
         "//sw/utils",
+        "//sw/utils:perf_counters",
     ],
 )
 
@@ -828,6 +830,7 @@ coralnpu_v2_binary(
         "//sw/opt/litert-micro:conv",
         "//sw/opt/litert-micro:depthwise_conv",
         "//sw/utils",
+        "//sw/utils:perf_counters",
         "//tests/cocotb/tutorial/tfmicro:mobilenet_v1_025_224_int8_dummy_lib",
         "@tflite_micro//tensorflow/lite/micro:micro_framework",
         "@tflite_micro//tensorflow/lite/micro:op_resolvers",
@@ -855,6 +858,28 @@ coralflow_test(
         "@bazel_tools//tools/python/runfiles",
     ],
 )
+
+# #59: the same benches on cores with the memory stall counters. Without
+# --//sw/utils:read_perf_counters the ELFs are unchanged and the cycle counts must
+# equal the targets above; with it each run also prints PERF lines.
+[
+    coralflow_test(
+        name = name + "_perf",
+        srcs = [name + ".py"],
+        elf = ":" + name + ".elf",
+        hdl_toplevel = toplevel,
+        highmem = True,
+        main = name + ".py",
+        tags = ["manual"],
+        targets = ["verilator"],
+        deps = ["@bazel_tools//tools/python/runfiles"],
+    )
+    for name, toplevel in [
+        ("mobilenet_kernel_bench", "RvvCoreMiniPerfHighmemAxi"),
+        ("mobilenet_conv_bench", "VmeCoreMiniPerfHighmemAxi"),
+        ("mobilenet_engine_select_test", "VmeCoreMiniPerfHighmemAxi"),
+    ]
+]
 
 # ISS check for the fused requantization instructions (#9, step 3): the same
 # ELF runs on npusim (MPACT) and on Spike.

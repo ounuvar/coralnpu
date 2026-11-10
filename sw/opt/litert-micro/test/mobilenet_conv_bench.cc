@@ -22,6 +22,7 @@
 
 #include "sw/opt/litert-micro/conv.h"
 #include "sw/opt/litert-micro/conv_vme.h"
+#include "sw/utils/perf_counters.h"
 #include "sw/utils/utils.h"
 #include "tensorflow/lite/micro/kernels/conv.h"
 
@@ -59,6 +60,12 @@ uint64_t baseline_instret __attribute__((section(".data"), used)) = 0;
 uint64_t vme_cycles __attribute__((section(".data"), used))       = 0;
 uint64_t vme_instret __attribute__((section(".data"), used))      = 0;
 int32_t heartbeat __attribute__((section(".data"), used))         = 0xAA;
+#if CORALNPU_PERF_COUNTERS
+// #59: stall counter deltas over each timed kernel call.
+int32_t perf_counters_enabled __attribute__((section(".data"), used))                      = 1;
+uint64_t baseline_perf[coralnpu_v2::kPerfCounters] __attribute__((section(".data"), used)) = {};
+uint64_t vme_perf[coralnpu_v2::kPerfCounters] __attribute__((section(".data"), used))      = {};
+#endif
 
 int8_t persistent_buffer[81920] __attribute__((section(".data"), aligned(16))) = {0};
 int8_t scratch_buffer[32768] __attribute__((section(".data"), aligned(16)))    = {0};
@@ -100,6 +107,10 @@ __attribute__((used, retain)) void run_baseline() {
   data.output_activation_max         = params_activation_max;
   const int32_t bias_dims[1]         = {filter_dims[0]};
 
+#if CORALNPU_PERF_COUNTERS
+  uint64_t perf0[coralnpu_v2::kPerfCounters];
+  coralnpu_v2::PerfBegin(perf0);
+#endif
   const uint64_t c0 = mcycle_read();
   const uint64_t i0 = minstret_read();
   ConvPerChannel(params, data, per_channel_multiplier, per_channel_shift, &context,
@@ -109,6 +120,9 @@ __attribute__((used, retain)) void run_baseline() {
                  tflite::RuntimeShape(4, output_dims), output_baseline);
   baseline_instret = minstret_read() - i0;
   baseline_cycles  = mcycle_read() - c0;
+#if CORALNPU_PERF_COUNTERS
+  coralnpu_v2::PerfEnd(perf0, baseline_perf);
+#endif
   heartbeat        = 0x12;
 }
 
@@ -125,6 +139,10 @@ __attribute__((used, retain)) void run_vme() {
   // Prepare (weight packing) is per-layer setup and is not timed.
   const vme::ConvVmeWeights weights = vme::ConvVmePrepare(
       params, per_channel_shift, filter_shape, filter_data, bias_data, persistent_buffer);
+#if CORALNPU_PERF_COUNTERS
+  uint64_t perf0[coralnpu_v2::kPerfCounters];
+  coralnpu_v2::PerfBegin(perf0);
+#endif
   const uint64_t c0 = mcycle_read();
   const uint64_t i0 = minstret_read();
   vme::ConvPerChannelVme(params, weights, per_channel_multiplier,
@@ -132,6 +150,9 @@ __attribute__((used, retain)) void run_vme() {
                          tflite::RuntimeShape(4, output_dims), output_vme, scratch_buffer);
   vme_instret = minstret_read() - i0;
   vme_cycles  = mcycle_read() - c0;
+#if CORALNPU_PERF_COUNTERS
+  coralnpu_v2::PerfEnd(perf0, vme_perf);
+#endif
   heartbeat   = 0x22;
 }
 
