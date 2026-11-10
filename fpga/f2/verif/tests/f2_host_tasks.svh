@@ -51,15 +51,22 @@ localparam int F2SpiReadWindow = 200;
 // Status polls before giving up on the SPI controller (each is one OCL read).
 localparam int F2MaxPolls = 200000;
 
+// Plain while loops with the locals at the top: xsim 2025.2 crashed ("Vivado Simulator kernel
+// has discovered an exceptional condition") in a for loop that returned from inside the task.
 task automatic f2_spi_wait_idle();
   logic [31:0] status, free;
-  for (int polls = 0; polls < F2MaxPolls; polls++) begin
+  int polls;
+  polls  = 0;
+  status = 32'h8;
+  while (status[3] && polls < F2MaxPolls) begin
     `F2_OCL_READ(F2RegStatus, status);
-    if (!status[3]) return;
+    polls++;
   end
-  `F2_OCL_READ(F2RegSpiCmdFree, free);
-  `F2_ERROR($sformatf("SPI still busy after %0d polls: STATUS 0x%08h, SPI_CMDFREE %0d", F2MaxPolls,
-                      status, free));
+  if (status[3]) begin
+    `F2_OCL_READ(F2RegSpiCmdFree, free);
+    `F2_ERROR($sformatf("SPI still busy after %0d polls: STATUS 0x%08h, SPI_CMDFREE %0d",
+                        F2MaxPolls, status, free));
+  end
 endtask
 
 // Queue registers (SPI_CSB, SPI_TX1, SPI_TX4, SPI_RX, SPI_IDLE) hold the OCL write while the
@@ -69,16 +76,19 @@ int f2_cmd_free = 0;
 
 task automatic f2_queue(input logic [31:0] reg_addr, input logic [31:0] value);
   logic [31:0] free;
-  for (int polls = 0; f2_cmd_free == 0; polls++) begin
-    if (polls == F2MaxPolls) begin
-      `F2_ERROR("SPI command queue stays full");
-      return;
-    end
+  int polls;
+  polls = 0;
+  while (f2_cmd_free == 0 && polls < F2MaxPolls) begin
     `F2_OCL_READ(F2RegSpiCmdFree, free);
     f2_cmd_free = (free > 32) ? 0 : int'(free);
+    polls++;
   end
-  `F2_OCL_WRITE(reg_addr, value);
-  f2_cmd_free--;
+  if (f2_cmd_free == 0) begin
+    `F2_ERROR("SPI command queue stays full");
+  end else begin
+    `F2_OCL_WRITE(reg_addr, value);
+    f2_cmd_free--;
+  end
 endtask
 
 // Upstream SPI frame (Spi2TLULV2): [op, addr (4 B, big endian), len (2 B, beats - 1)].
@@ -170,6 +180,7 @@ task automatic f2_load_image(input string path, output logic [31:0] entry,
   string tag, name;
   logic [31:0] addr, w0, w1, w2, w3;
   logic [31:0] words[$];
+  logic [127:0] check;
   entry = '0;
   result_addr = '0;
   total = 0;
@@ -201,16 +212,13 @@ task automatic f2_load_image(input string path, output logic [31:0] entry,
       end
       // Read the segment's first line back, so a load that did not land shows up here rather
       // than as a program that never runs.
-      begin
-        logic [127:0] line;
-        f2_spi_wait_idle();
-        f2_spi_read_line(addr, line);
-        if (line != {words[3], words[2], words[1], words[0]}) begin
-          `F2_ERROR($sformatf("read-back 0x%08h: 0x%032h, wrote 0x%08h%08h%08h%08h", addr, line,
-                              words[3], words[2], words[1], words[0]));
-        end else begin
-          $display("[%t] [f2]   read-back of 0x%08h ok", $realtime, addr);
-        end
+      f2_spi_wait_idle();
+      f2_spi_read_line(addr, check);
+      if (check != {words[3], words[2], words[1], words[0]}) begin
+        `F2_ERROR($sformatf("read-back 0x%08h: 0x%032h, wrote 0x%08h%08h%08h%08h", addr, check,
+                            words[3], words[2], words[1], words[0]));
+      end else begin
+        $display("[%t] [f2]   read-back of 0x%08h ok", $realtime, addr);
       end
       total += beats * 16;
     end else if (tag == "Y") begin
