@@ -105,6 +105,21 @@ chisel_cc_library(
     vopts = RVV_CORE_MINI_AXI_VOPTS,
 )
 
+# #59: the subsystem with the memory stall counters, for VU47P area and timing.
+chisel_cc_library(
+    name = "coralnpu_chisel_subsystem_perf_cc_library",
+    chisel_lib = ":coralnpu_chisel_subsystem_lib",
+    emit_class = "coralnpu.soc.CoralNPUChiselSubsystemEmitter",
+    gen_flags = [
+        "--enablePerfCounters",
+        "--moduleName",
+        "CoralNPUChiselSubsystemPerf",
+    ],
+    module_name = "CoralNPUChiselSubsystemPerf",
+    tags = ["manual"],
+    vopts = RVV_CORE_MINI_AXI_VOPTS,
+)
+
 chisel_cc_library(
     name = "coralnpu_chisel_subsystem_64_cc_library",
     chisel_lib = ":coralnpu_chisel_subsystem_lib",
