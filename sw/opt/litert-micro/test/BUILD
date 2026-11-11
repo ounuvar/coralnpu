@@ -16,6 +16,7 @@ load("@coralnpu_hw//rules:coralflow_test.bzl", "coralflow_test")
 load("@coralnpu_hw//rules:coralnpu_v2.bzl", "coralnpu_v2_binary")
 load("@coralnpu_hw//third_party/python:requirements.bzl", "requirement")
 load("@rules_cc//cc:defs.bzl", "cc_test")
+load("@rules_python//python:defs.bzl", "py_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -565,8 +566,17 @@ coralnpu_v2_binary(
     ],
 )
 
+# Host copies of TFLite's int8 conv and fully connected reference kernels (#63).
+py_library(
+    name = "tflite_int8_ref",
+    srcs = ["tflite_int8_ref.py"],
+    imports = ["."],
+)
+
 # npusim (MPACT models Zvt) checks correctness quickly; the verilator target
 # runs the same ELF on the 1 MB VmeCoreMiniHighmemAxi RTL for cycle counts.
+# The verilator target compares against tflite_int8_ref instead of running the
+# scalar reference on the core (#63); npusim runs both and checks they agree.
 coralflow_test(
     name = "conv_vme_sim_test",
     srcs = ["conv_vme_test.py"],
@@ -580,6 +590,7 @@ coralflow_test(
     ],
     deps = [
         # The RTL rule adds numpy itself; npusim gets it from the fixture.
+        ":tflite_int8_ref",
         "@bazel_tools//tools/python/runfiles",
     ],
 )
@@ -609,6 +620,7 @@ coralflow_test(
     ],
     deps = [
         # The RTL rule adds numpy itself; npusim gets it from the fixture.
+        ":tflite_int8_ref",
         "@bazel_tools//tools/python/runfiles",
     ],
 )
