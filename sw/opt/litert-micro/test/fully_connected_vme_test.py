@@ -18,7 +18,10 @@ import sys
 
 import numpy as np
 from bazel_tools.tools.python.runfiles import runfiles
-from coralnpu_test_utils.coralflow.runner import coralflow_main, coralflow_test
+from coralnpu_test_utils.coralflow.runner import (
+    coralflow_main, coralflow_test, get_target_environment
+)
+import tflite_int8_ref
 
 _SYMBOLS = [
     "tflite_ties_enabled",
@@ -39,6 +42,7 @@ _SYMBOLS = [
     "ref_cycles",
     "opt_cycles",
     "heartbeat",
+    "run_reference",
 ]
 
 # (batches, accum_depth, output_depth). Covers batch 1 (one useful tile row),
@@ -61,39 +65,44 @@ async def _run_case(fixture, rng, batches, accum_depth, output_depth):
         f"output_depth {output_depth} input_offset {input_offset}",
         flush=True
     )
-    await fixture.write(
-        "input_data",
-        rng.integers(-128, 128, size=(batches * accum_depth, ), dtype=np.int8)
+    input_data = rng.integers(
+        -128, 128, size=(batches * accum_depth, ), dtype=np.int8
     )
-    await fixture.write(
-        "filter_data",
-        rng.integers(
-            -128, 128, size=(output_depth * accum_depth, ), dtype=np.int8
-        )
+    await fixture.write("input_data", input_data)
+    filter_data = rng.integers(
+        -128, 128, size=(output_depth * accum_depth, ), dtype=np.int8
     )
-    await fixture.write(
-        "bias_data",
-        rng.integers(-1000, 1000, size=(output_depth, ), dtype=np.int32)
+    await fixture.write("filter_data", filter_data)
+    bias_data = rng.integers(
+        -1000, 1000, size=(output_depth, ), dtype=np.int32
     )
+    await fixture.write("bias_data", bias_data)
     # Scale the right shift with the accumulator size so outputs do not all
     # saturate. output_offset is random with tflite_ties, so negative rounding
     # ties show, and -128 without it (#23).
     ties = await fixture.read_word("tflite_ties_enabled")
     output_offset = int(rng.integers(-128, 128)) if ties else -128
     shift = -int(np.ceil(np.log2(accum_depth))) - 7
+    multiplier = int(rng.integers(1 << 30, (1 << 31) - 1))
     for name, value in [
         ("batches", batches),
         ("accum_depth", accum_depth),
         ("output_depth", output_depth),
         ("params_input_offset", input_offset),
         ("params_output_offset", output_offset),
-        ("params_output_multiplier", int(rng.integers(1 << 30,
-                                                      (1 << 31) - 1))),
+        ("params_output_multiplier", multiplier),
         ("params_output_shift", shift),
         ("params_activation_min", -128),
         ("params_activation_max", 127),
     ]:
         await fixture.write_word(name, value)
+    host_ref = tflite_int8_ref.fully_connected(
+        input_data.reshape(batches, accum_depth),
+        filter_data.reshape(output_depth, accum_depth), bias_data, multiplier,
+        shift, input_offset, output_offset, -128, 127
+    ).reshape(-1)
+    on_core_ref = get_target_environment() == "npusim"
+    await fixture.write_word("run_reference", int(on_core_ref))
 
     await fixture.run_to_halt(timeout_cycles=500_000_000)
 
@@ -107,9 +116,21 @@ async def _run_case(fixture, rng, batches, accum_depth, output_depth):
     opt_cycles = int.from_bytes((await fixture.read("opt_cycles",
                                                     8)).tobytes(), "little")
     out_size = batches * output_depth
-    ref_out = await fixture.read(
-        "output_data_ref", dtype=np.int8, shape=(out_size, )
-    )
+    if on_core_ref:
+        # The C reference runs only here; the host copy must match it exactly.
+        ref_out = await fixture.read(
+            "output_data_ref", dtype=np.int8, shape=(out_size, )
+        )
+        host_diff = int(np.sum(host_ref != ref_out))
+        if host_diff:
+            print(
+                f"  FAILED: host reference differs from TFLite's in "
+                f"{host_diff} outputs",
+                flush=True
+            )
+            sys.exit(1)
+    else:
+        ref_out = host_ref
     vme_out = await fixture.read(
         "output_data", dtype=np.int8, shape=(out_size, )
     )

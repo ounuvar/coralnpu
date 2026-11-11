@@ -146,6 +146,11 @@ def coralnpu_v2_sim_test(
         itcm_size_kbytes = kwargs.get("itcm_size_kbytes", 1024 if highmem else 8),
         dtcm_size_kbytes = kwargs.get("dtcm_size_kbytes", 1024 if highmem else 32),
         size = size,
-        tags = tags + ["exclusive"],
+        # The simulator opens a pty for each UART, which the Linux sandbox
+        # does not provide on some machines (#63).
+        tags = tags + [
+            "exclusive",
+            "no-sandbox",
+        ],
         timeout = "long",
     )

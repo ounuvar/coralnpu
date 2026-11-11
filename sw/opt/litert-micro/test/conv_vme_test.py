@@ -18,7 +18,10 @@ import sys
 
 import numpy as np
 from bazel_tools.tools.python.runfiles import runfiles
-from coralnpu_test_utils.coralflow.runner import coralflow_main, coralflow_test
+from coralnpu_test_utils.coralflow.runner import (
+    coralflow_main, coralflow_test, get_target_environment
+)
+import tflite_int8_ref
 
 _SYMBOLS = [
     "tflite_ties_enabled",
@@ -46,6 +49,7 @@ _SYMBOLS = [
     "ref_cycles",
     "opt_cycles",
     "heartbeat",
+    "run_reference",
 ]
 
 # Shapes cover the kernel's edge cases: K not a multiple of 4, channel counts
@@ -120,18 +124,16 @@ async def _run_case(
     )
 
     await fixture.write("input_dims", np.array(input, dtype=np.int32))
-    await fixture.write(
-        "input_data", rng.integers(-128, 128, size=input, dtype=np.int8)
-    )
+    input_data = rng.integers(-128, 128, size=input, dtype=np.int8)
+    await fixture.write("input_data", input_data)
     await fixture.write("filter_dims", np.array(filter, dtype=np.int32))
-    await fixture.write(
-        "filter_data", rng.integers(-128, 128, size=filter, dtype=np.int8)
-    )
+    filter_data = rng.integers(-128, 128, size=filter, dtype=np.int8)
+    await fixture.write("filter_data", filter_data)
     await fixture.write("bias_dims", np.array([output_depth], dtype=np.int32))
-    await fixture.write(
-        "bias_data",
-        rng.integers(-1000, 1000, size=(output_depth, ), dtype=np.int32)
+    bias_data = rng.integers(
+        -1000, 1000, size=(output_depth, ), dtype=np.int32
     )
+    await fixture.write("bias_data", bias_data)
     await fixture.write("output_dims", np.array(output_shape, dtype=np.int32))
     for name, value in [
         ("params_stride_height", stride[0]),
@@ -146,16 +148,19 @@ async def _run_case(
         ("params_activation_max", 127),
     ]:
         await fixture.write_word(name, value)
-    await fixture.write(
-        "per_channel_multiplier",
-        rng.integers(
-            1 << 30, (1 << 31) - 1, size=(output_depth, ), dtype=np.int32
-        )
+    multiplier = rng.integers(
+        1 << 30, (1 << 31) - 1, size=(output_depth, ), dtype=np.int32
     )
-    await fixture.write(
-        "per_channel_shift",
-        rng.integers(-10, -1, size=(output_depth, ), dtype=np.int32)
-    )
+    await fixture.write("per_channel_multiplier", multiplier)
+    shift = rng.integers(-10, -1, size=(output_depth, ), dtype=np.int32)
+    await fixture.write("per_channel_shift", shift)
+    host_ref = tflite_int8_ref.conv_per_channel(
+        input_data, filter_data, bias_data, multiplier, shift, output_shape,
+        stride, dilation, (pad_h, pad_w), input_offset, output_offset, -128,
+        127
+    ).reshape(-1)
+    on_core_ref = get_target_environment() == "npusim"
+    await fixture.write_word("run_reference", int(on_core_ref))
 
     await fixture.run_to_halt(timeout_cycles=500_000_000)
 
@@ -169,9 +174,21 @@ async def _run_case(
     opt_cycles = int.from_bytes((await fixture.read("opt_cycles",
                                                     8)).tobytes(), "little")
     out_size = int(np.prod(output_shape))
-    ref_out = await fixture.read(
-        "output_data_ref", dtype=np.int8, shape=(out_size, )
-    )
+    if on_core_ref:
+        # The C reference runs only here; the host copy must match it exactly.
+        ref_out = await fixture.read(
+            "output_data_ref", dtype=np.int8, shape=(out_size, )
+        )
+        host_diff = int(np.sum(host_ref != ref_out))
+        if host_diff:
+            print(
+                f"  FAILED: host reference differs from TFLite's in "
+                f"{host_diff} outputs",
+                flush=True
+            )
+            sys.exit(1)
+    else:
+        ref_out = host_ref
     vme_out = await fixture.read(
         "output_data", dtype=np.int8, shape=(out_size, )
     )

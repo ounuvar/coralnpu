@@ -46,6 +46,9 @@ int32_t params_activation_max __attribute__((section(".data")))    = 0;
 uint64_t ref_cycles __attribute__((section(".data"), used)) = 0;
 uint64_t opt_cycles __attribute__((section(".data"), used)) = 0;
 int32_t heartbeat __attribute__((section(".data"), used))   = 0xAA;
+// The RTL targets clear this and check against a host copy of the reference
+// (tflite_int8_ref.py); the scalar reference is ~98% of their cycles (#63).
+int32_t run_reference __attribute__((section(".data"), used)) = 1;
 
 int8_t persistent_buffer[327680] __attribute__((section(".data"), aligned(16))) = {0};
 int8_t scratch_buffer[131072] __attribute__((section(".data"), aligned(16)))    = {0};
@@ -100,7 +103,9 @@ __attribute__((used, retain)) void run_vme() {
 }
 
 int main(void) {
-  run_ref();
+  if (run_reference) {
+    run_ref();
+  }
   run_vme();
   return 0;
 }

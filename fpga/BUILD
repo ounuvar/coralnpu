@@ -1147,7 +1147,12 @@ py_test(
         ":rom_test_vmem",
     ],
     main = "sw/rom_boot/rom_boot_sim_test.py",
-    tags = ["exclusive"],
+    # The simulator opens a pty for each UART, which the Linux sandbox does
+    # not provide on some machines (#63).
+    tags = [
+        "exclusive",
+        "no-sandbox",
+    ],
     deps = [
         "//utils/coralnpu_soc_loader:spi_driver",
         "@bazel_tools//tools/python/runfiles",
@@ -1186,7 +1191,12 @@ py_test(
         ":rom_test_highmem_vmem",
     ],
     main = "sw/rom_boot/rom_boot_sim_test.py",
-    tags = ["exclusive"],
+    # The simulator opens a pty for each UART, which the Linux sandbox does
+    # not provide on some machines (#63).
+    tags = [
+        "exclusive",
+        "no-sandbox",
+    ],
     deps = [
         "//utils/coralnpu_soc_loader:spi_driver",
         "@bazel_tools//tools/python/runfiles",
