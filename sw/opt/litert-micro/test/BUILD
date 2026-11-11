@@ -862,9 +862,11 @@ coralflow_test(
 # #59: the same benches on cores with the memory stall counters. Without
 # --//sw/utils:read_perf_counters the ELFs are unchanged and the cycle counts must
 # equal the targets above; with it each run also prints PERF lines.
+# mobilenet_engine_select_test_perf_rvv runs the full model on the RVV core
+# without the matrix engine, for baseline profiles (MOBILENET_ENGINE_RUNS=all_vector).
 [
     coralflow_test(
-        name = name + "_perf",
+        name = name + suffix,
         srcs = [name + ".py"],
         elf = ":" + name + ".elf",
         hdl_toplevel = toplevel,
@@ -874,10 +876,11 @@ coralflow_test(
         targets = ["verilator"],
         deps = ["@bazel_tools//tools/python/runfiles"],
     )
-    for name, toplevel in [
-        ("mobilenet_kernel_bench", "RvvCoreMiniPerfHighmemAxi"),
-        ("mobilenet_conv_bench", "VmeCoreMiniPerfHighmemAxi"),
-        ("mobilenet_engine_select_test", "VmeCoreMiniPerfHighmemAxi"),
+    for name, suffix, toplevel in [
+        ("mobilenet_kernel_bench", "_perf", "RvvCoreMiniPerfHighmemAxi"),
+        ("mobilenet_conv_bench", "_perf", "VmeCoreMiniPerfHighmemAxi"),
+        ("mobilenet_engine_select_test", "_perf", "VmeCoreMiniPerfHighmemAxi"),
+        ("mobilenet_engine_select_test", "_perf_rvv", "RvvCoreMiniPerfHighmemAxi"),
     ]
 ]
 
