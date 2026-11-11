@@ -579,6 +579,8 @@ py_library(
 # scalar reference on the core (#63); npusim runs both and checks they agree.
 coralflow_test(
     name = "conv_vme_sim_test",
+    # Verilator on mario takes about 250 s (#63).
+    size = "large",
     srcs = ["conv_vme_test.py"],
     elf = ":conv_vme_test.elf",
     hdl_toplevel = "VmeCoreMiniHighmemAxi",
@@ -609,6 +611,8 @@ coralnpu_v2_binary(
 
 coralflow_test(
     name = "fully_connected_vme_sim_test",
+    # Verilator on mario takes about 1,100 s, mostly weight packing for the 1024x200 case (#63).
+    size = "enormous",
     srcs = ["fully_connected_vme_test.py"],
     elf = ":fully_connected_vme_test.elf",
     hdl_toplevel = "VmeCoreMiniHighmemAxi",
